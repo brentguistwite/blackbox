@@ -64,6 +64,7 @@ fn render_summary_with_repos() {
                     timestamp: Utc::now(),
                 },
             ],
+            pr_info: None,
         }],
     };
 
@@ -123,6 +124,7 @@ fn make_test_summary() -> ActivitySummary {
                     timestamp: Utc::now(),
                 },
             ],
+            pr_info: None,
         }],
     }
 }
@@ -206,7 +208,7 @@ fn render_csv_has_header() {
     let first_line = csv_str.lines().next().unwrap();
     assert_eq!(
         first_line,
-        "period,repo_name,event_type,branch,commit_hash,message,timestamp,repo_estimated_minutes"
+        "period,repo_name,event_type,branch,commit_hash,message,timestamp,repo_estimated_minutes,pr_number,pr_title"
     );
 }
 
