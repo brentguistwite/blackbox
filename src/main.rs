@@ -66,6 +66,16 @@ fn main() -> anyhow::Result<()> {
         Commands::Month => {
             run_query("This Month", blackbox::query::month_range)?;
         }
+        Commands::Install => {
+            blackbox::service::install()?;
+        }
+        Commands::Uninstall => {
+            blackbox::service::uninstall()?;
+        }
+        Commands::RunForeground => {
+            let config = blackbox::config::load_config()?;
+            blackbox::daemon::run_foreground(config)?;
+        }
     }
 
     Ok(())

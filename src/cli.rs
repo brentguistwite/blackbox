@@ -30,4 +30,11 @@ pub enum Commands {
     Week,
     /// Show this month's git activity
     Month,
+    /// Register as OS service (launchd/systemd)
+    Install,
+    /// Remove OS service registration
+    Uninstall,
+    /// Run poll loop in foreground (used by service manager)
+    #[command(name = "run-foreground", hide = true)]
+    RunForeground,
 }
