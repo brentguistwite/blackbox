@@ -1,3 +1,4 @@
+use crate::enrichment::PrInfo;
 use crate::query::ActivitySummary;
 use chrono::Duration;
 use colored::*;
@@ -30,6 +31,8 @@ pub struct JsonRepo {
     pub branches: Vec<String>,
     pub estimated_minutes: i64,
     pub events: Vec<JsonEvent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_info: Option<Vec<PrInfo>>,
 }
 
 #[derive(Serialize)]
@@ -53,6 +56,8 @@ pub struct CsvRow {
     pub message: String,
     pub timestamp: String,
     pub repo_estimated_minutes: i64,
+    pub pr_number: String,
+    pub pr_title: String,
 }
 
 /// Render ActivitySummary as pretty-printed JSON string.
@@ -82,6 +87,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                         timestamp: e.timestamp.to_rfc3339(),
                     })
                     .collect(),
+                pr_info: r.pr_info.clone(),
             })
             .collect(),
     };
@@ -92,6 +98,13 @@ pub fn render_json(summary: &ActivitySummary) -> String {
 pub fn render_csv(summary: &ActivitySummary) -> String {
     let mut wtr = csv::Writer::from_writer(vec![]);
     for repo in &summary.repos {
+        // Collect first PR info if available
+        let (pr_num, pr_title) = repo
+            .pr_info
+            .as_ref()
+            .and_then(|prs| prs.first())
+            .map(|pr| (pr.number.to_string(), pr.title.clone()))
+            .unwrap_or_default();
         for event in &repo.events {
             let row = CsvRow {
                 period: summary.period_label.clone(),
@@ -102,6 +115,8 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 message: event.message.clone().unwrap_or_default(),
                 timestamp: event.timestamp.to_rfc3339(),
                 repo_estimated_minutes: repo.estimated_time.num_minutes(),
+                pr_number: pr_num.clone(),
+                pr_title: pr_title.clone(),
             };
             wtr.serialize(row).expect("CSV serialization should not fail");
         }
@@ -118,6 +133,8 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
             "message",
             "timestamp",
             "repo_estimated_minutes",
+            "pr_number",
+            "pr_title",
         ])
         .expect("CSV header write should not fail");
         let data = String::from_utf8(wtr.into_inner().expect("flush")).expect("utf8");
@@ -172,11 +189,27 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     // Per-repo breakdown
     for repo in &summary.repos {
         let branches_str = repo.branches.join(", ");
+        let pr_str = repo
+            .pr_info
+            .as_ref()
+            .map(|prs| {
+                prs.iter()
+                    .map(|pr| format!("[PR #{}: {}]", pr.number, pr.title))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let pr_suffix = if pr_str.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", pr_str.cyan())
+        };
         lines.push(format!(
-            "{} [{}] ({})",
+            "{} [{}] ({}){}",
             repo.repo_name.bold().green(),
             branches_str.dimmed(),
             format_duration(repo.estimated_time).yellow(),
+            pr_suffix,
         ));
 
         for event in &repo.events {
