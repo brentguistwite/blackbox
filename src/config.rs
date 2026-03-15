@@ -9,6 +9,12 @@ fn default_poll_interval() -> u64 {
 fn default_watch_dirs() -> Vec<PathBuf> {
     vec![]
 }
+fn default_session_gap() -> u64 {
+    120
+}
+fn default_first_commit() -> u64 {
+    30
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -16,6 +22,10 @@ pub struct Config {
     pub watch_dirs: Vec<PathBuf>,
     #[serde(default = "default_poll_interval")]
     pub poll_interval_secs: u64,
+    #[serde(default = "default_session_gap")]
+    pub session_gap_minutes: u64,
+    #[serde(default = "default_first_commit")]
+    pub first_commit_minutes: u64,
 }
 
 impl Default for Config {
@@ -23,6 +33,8 @@ impl Default for Config {
         Self {
             watch_dirs: default_watch_dirs(),
             poll_interval_secs: default_poll_interval(),
+            session_gap_minutes: default_session_gap(),
+            first_commit_minutes: default_first_commit(),
         }
     }
 }
@@ -90,6 +102,7 @@ pub fn run_init(watch_dirs: Option<String>, poll_interval: Option<u64>) -> anyho
         Config {
             watch_dirs,
             poll_interval_secs: interval,
+            ..Config::default()
         }
     } else {
         // Interactive mode using dialoguer
@@ -107,6 +120,7 @@ pub fn run_init(watch_dirs: Option<String>, poll_interval: Option<u64>) -> anyho
         Config {
             watch_dirs,
             poll_interval_secs: poll_interval,
+            ..Config::default()
         }
     };
 
