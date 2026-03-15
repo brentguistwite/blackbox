@@ -5,4 +5,5 @@ pub mod db;
 pub mod error;
 pub mod git_ops;
 pub mod poller;
+pub mod query;
 pub mod repo_scanner;
