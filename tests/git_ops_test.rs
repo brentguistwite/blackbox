@@ -1,7 +1,6 @@
 use blackbox::db;
 use blackbox::git_ops::{poll_repo, RepoState};
 use git2::{Repository, Signature};
-use std::path::Path;
 use tempfile::TempDir;
 
 fn create_test_repo(tmp: &TempDir) -> Repository {
