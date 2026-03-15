@@ -8,6 +8,7 @@ readme = "README.md"
 repository = "https://github.com/flosports/blackbox"
 keywords = ["git", "time-tracking", "developer-tools", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = [".claude/", ".planning/", ".gitignore"]
 
 [lib]
 name = "blackbox"
