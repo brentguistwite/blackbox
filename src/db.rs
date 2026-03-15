@@ -27,10 +27,38 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             CREATE INDEX IF NOT EXISTS idx_git_activity_repo_ts ON git_activity(repo_path, timestamp);"
         ),
         M::up("ALTER TABLE git_activity ADD COLUMN source_branch TEXT;"),
+        M::up(
+            "CREATE TABLE IF NOT EXISTS directory_presence (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                entered_at TEXT NOT NULL,
+                left_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_dir_presence_repo ON directory_presence(repo_path, entered_at);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
     Ok(conn)
+}
+
+/// Record a directory change: close previous open entry, insert new one.
+pub fn record_directory_presence(conn: &Connection, repo_path: &str) -> anyhow::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Close any open entry for this repo (set left_at)
+    conn.execute(
+        "UPDATE directory_presence SET left_at = ?1 WHERE repo_path = ?2 AND left_at IS NULL",
+        rusqlite::params![now, repo_path],
+    )?;
+
+    // Insert new entry
+    conn.execute(
+        "INSERT INTO directory_presence (repo_path, entered_at) VALUES (?1, ?2)",
+        rusqlite::params![repo_path, now],
+    )?;
+
+    Ok(())
 }
 
 pub fn insert_activity(

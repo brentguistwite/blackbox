@@ -50,4 +50,16 @@ pub enum Commands {
     /// Run poll loop in foreground (used by service manager)
     #[command(name = "run-foreground", hide = true)]
     RunForeground,
+    /// Print shell hook script for eval
+    Hook {
+        /// Shell type: zsh, bash, or fish
+        #[arg(value_parser = ["zsh", "bash", "fish"])]
+        shell: String,
+    },
+    /// Record directory presence (called by shell hook)
+    #[command(name = "_notify-dir", hide = true)]
+    NotifyDir {
+        /// Directory path
+        path: String,
+    },
 }

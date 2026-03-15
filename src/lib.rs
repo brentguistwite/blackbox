@@ -10,3 +10,4 @@ pub mod poller;
 pub mod query;
 pub mod repo_scanner;
 pub mod service;
+pub mod shell_hook;
