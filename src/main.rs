@@ -1,5 +1,44 @@
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use blackbox::cli::{Cli, Commands};
+use blackbox::query::ActivitySummary;
+
+fn run_query(
+    period_label: &str,
+    range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>),
+) -> anyhow::Result<()> {
+    let config = blackbox::config::load_config()?;
+    let data_dir = blackbox::config::data_dir()?;
+    let db_path = data_dir.join("blackbox.db");
+    let conn = blackbox::db::open_db(&db_path)
+        .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+    let (from, to) = range_fn();
+    let repos = blackbox::query::query_activity(
+        &conn,
+        from,
+        to,
+        config.session_gap_minutes,
+        config.first_commit_minutes,
+    )?;
+
+    let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    let total_time = repos
+        .iter()
+        .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+
+    let summary = ActivitySummary {
+        period_label: period_label.to_string(),
+        total_commits,
+        total_repos: repos.len(),
+        total_estimated_time: total_time,
+        repos,
+    };
+
+    blackbox::output::render_summary(&summary);
+    Ok(())
+}
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -17,6 +56,15 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Status => {
             blackbox::daemon::daemon_status()?;
+        }
+        Commands::Today => {
+            run_query("Today", blackbox::query::today_range)?;
+        }
+        Commands::Week => {
+            run_query("This Week", blackbox::query::week_range)?;
+        }
+        Commands::Month => {
+            run_query("This Month", blackbox::query::month_range)?;
         }
     }
 
