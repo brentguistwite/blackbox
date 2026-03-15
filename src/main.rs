@@ -5,8 +5,8 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init => {
-            println!("blackbox init: not yet implemented");
+        Commands::Init { watch_dirs, poll_interval } => {
+            blackbox::config::run_init(watch_dirs, poll_interval)?;
         }
     }
 

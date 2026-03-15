@@ -10,5 +10,12 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Create default config interactively
-    Init,
+    Init {
+        /// Comma-separated watch directories (skips interactive prompt)
+        #[arg(long)]
+        watch_dirs: Option<String>,
+        /// Poll interval in seconds (skips interactive prompt)
+        #[arg(long)]
+        poll_interval: Option<u64>,
+    },
 }
