@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use std::fs;
 use tempfile::TempDir;
+use blackbox::{config, db};
 
 #[test]
 fn test_cli_help() {
@@ -99,4 +100,62 @@ fn test_init_creates_parent_dirs() {
 
     let config_path = config_dir.join("blackbox/config.toml");
     assert!(config_path.exists(), "should create deeply nested parent dirs");
+}
+
+#[test]
+fn test_smoke_init_load_config_open_db() {
+    let tmp = TempDir::new().unwrap();
+    let config_home = tmp.path().join("config");
+    let data_home = tmp.path().join("data");
+
+    // Step 1: Run blackbox init
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_DATA_HOME", &data_home)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "120"])
+        .assert()
+        .success();
+
+    // Step 2: Verify config.toml exists with correct content
+    let config_path = config_home.join("blackbox/config.toml");
+    assert!(config_path.exists(), "config.toml must exist after init");
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("/tmp/repos"));
+    assert!(content.contains("120"));
+
+    // Step 3: Load config programmatically (with env override)
+    // SAFETY: single-threaded test context, no other threads reading these vars
+    unsafe {
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::env::set_var("XDG_DATA_HOME", &data_home);
+    }
+    let cfg = config::load_config().expect("load_config should succeed after init");
+    assert_eq!(cfg.poll_interval_secs, 120);
+    assert_eq!(cfg.watch_dirs.len(), 1);
+
+    // Step 4: Open DB in temp data dir
+    let db_path = data_home.join("blackbox/blackbox.db");
+    let conn = db::open_db(&db_path).expect("open_db should succeed");
+
+    // Step 5: Verify WAL mode
+    let journal: String = conn
+        .pragma_query_value(None, "journal_mode", |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal.to_lowercase(), "wal");
+
+    // Step 6: Verify git_activity table exists
+    let table_exists: bool = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='git_activity'")
+        .unwrap()
+        .exists([])
+        .unwrap();
+    assert!(table_exists, "git_activity table must exist");
+
+    // Step 7: blackbox --help returns 0
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .arg("--help")
+        .assert()
+        .success();
 }
