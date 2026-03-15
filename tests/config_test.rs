@@ -35,6 +35,7 @@ fn test_validate_poll_interval_too_low() {
     let cfg = Config {
         watch_dirs: vec![],
         poll_interval_secs: 5,
+        ..Config::default()
     };
     assert!(cfg.validate().is_err());
 }
@@ -62,6 +63,7 @@ fn test_tilde_expansion() {
     let mut cfg = Config {
         watch_dirs: vec![PathBuf::from("~/code")],
         poll_interval_secs: 300,
+        ..Config::default()
     };
     cfg.expand_paths();
     let expanded = &cfg.watch_dirs[0];
