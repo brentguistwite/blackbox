@@ -1,6 +1,8 @@
 pub mod cli;
 pub mod config;
+pub mod daemon;
 pub mod db;
 pub mod error;
 pub mod git_ops;
+pub mod poller;
 pub mod repo_scanner;
