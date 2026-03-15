@@ -9,7 +9,7 @@ Blackbox passively tracks your git activity across all your repos -- commits, br
 ## Install
 
 ```
-cargo install git-blackbox
+cargo install blackbox-cli
 ```
 
 Note: build includes bundled SQLite, so compile may take a minute.

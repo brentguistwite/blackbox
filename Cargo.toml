@@ -1,11 +1,11 @@
 [package]
-name = "git-blackbox"
+name = "blackbox-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Flight recorder for your dev day - passive git activity tracking"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/flosports/blackbox"
+repository = "https://github.com/brentguistwite/blackbox"
 keywords = ["git", "time-tracking", "developer-tools", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = [".claude/", ".planning/", ".gitignore"]
