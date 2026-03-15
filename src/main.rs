@@ -2,11 +2,13 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use blackbox::cli::{Cli, Commands};
+use blackbox::output::OutputFormat;
 use blackbox::query::ActivitySummary;
 
 fn run_query(
     period_label: &str,
     range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>),
+    format: OutputFormat,
 ) -> anyhow::Result<()> {
     let config = blackbox::config::load_config()?;
     let data_dir = blackbox::config::data_dir()?;
@@ -36,7 +38,11 @@ fn run_query(
         repos,
     };
 
-    blackbox::output::render_summary(&summary);
+    match format {
+        OutputFormat::Pretty => blackbox::output::render_summary(&summary),
+        OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
+        OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
+    }
     Ok(())
 }
 
@@ -57,14 +63,14 @@ fn main() -> anyhow::Result<()> {
         Commands::Status => {
             blackbox::daemon::daemon_status()?;
         }
-        Commands::Today => {
-            run_query("Today", blackbox::query::today_range)?;
+        Commands::Today { format } => {
+            run_query("Today", blackbox::query::today_range, format)?;
         }
-        Commands::Week => {
-            run_query("This Week", blackbox::query::week_range)?;
+        Commands::Week { format } => {
+            run_query("This Week", blackbox::query::week_range, format)?;
         }
-        Commands::Month => {
-            run_query("This Month", blackbox::query::month_range)?;
+        Commands::Month { format } => {
+            run_query("This Month", blackbox::query::month_range, format)?;
         }
         Commands::Install => {
             blackbox::service::install()?;
