@@ -74,3 +74,113 @@ fn test_migrations_idempotent() {
     // Second open should not error (no duplicate table)
     let _conn2 = db::open_db(&db_path).unwrap();
 }
+
+#[test]
+fn test_source_branch_column_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn.prepare("PRAGMA table_info(git_activity)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"source_branch".to_string()));
+}
+
+#[test]
+fn test_insert_activity_commit() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_activity(
+        &conn,
+        "/tmp/repo",
+        "commit",
+        Some("main"),
+        None,
+        Some("abc123"),
+        Some("Alice"),
+        Some("fix bug"),
+        "2026-03-14T12:00:00Z",
+    )
+    .unwrap();
+
+    let (repo, etype, branch, hash, author, msg): (String, String, String, String, String, String) = conn
+        .query_row(
+            "SELECT repo_path, event_type, branch, commit_hash, author, message FROM git_activity WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .unwrap();
+
+    assert_eq!(repo, "/tmp/repo");
+    assert_eq!(etype, "commit");
+    assert_eq!(branch, "main");
+    assert_eq!(hash, "abc123");
+    assert_eq!(author, "Alice");
+    assert_eq!(msg, "fix bug");
+}
+
+#[test]
+fn test_insert_activity_merge_with_source_branch() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_activity(
+        &conn,
+        "/tmp/repo",
+        "merge",
+        Some("main"),
+        Some("feature-x"),
+        Some("def456"),
+        Some("Bob"),
+        Some("Merge feature-x into main"),
+        "2026-03-14T13:00:00Z",
+    )
+    .unwrap();
+
+    let source: String = conn
+        .query_row(
+            "SELECT source_branch FROM git_activity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(source, "feature-x");
+}
+
+#[test]
+fn test_insert_activity_branch_switch() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_activity(
+        &conn,
+        "/tmp/repo",
+        "branch_switch",
+        Some("develop"),
+        None,
+        None,
+        None,
+        None,
+        "2026-03-14T14:00:00Z",
+    )
+    .unwrap();
+
+    let etype: String = conn
+        .query_row(
+            "SELECT event_type FROM git_activity WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(etype, "branch_switch");
+}
