@@ -80,6 +80,14 @@ pub fn stop_daemon() -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn run_foreground(config: Config) -> anyhow::Result<()> {
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .init();
+    log::info!("Running in foreground (PID {})", std::process::id());
+    poller::run_poll_loop(&config)
+}
+
 pub fn daemon_status() -> anyhow::Result<()> {
     match is_daemon_running()? {
         Some(pid) => println!("Running (PID {})", pid),
