@@ -66,6 +66,56 @@ pub fn data_dir() -> anyhow::Result<PathBuf> {
     Ok(strategy.data_dir().join("blackbox"))
 }
 
+impl Config {
+    pub fn save_to(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+}
+
+pub fn run_init(watch_dirs: Option<String>, poll_interval: Option<u64>) -> anyhow::Result<()> {
+    let config_path = config_dir()?.join("config.toml");
+
+    if config_path.exists() {
+        println!("Config already exists at {}", config_path.display());
+        return Ok(());
+    }
+
+    let config = if let (Some(dirs), Some(interval)) = (watch_dirs, poll_interval) {
+        let watch_dirs: Vec<PathBuf> = dirs.split(',').map(|s| PathBuf::from(s.trim())).collect();
+        Config {
+            watch_dirs,
+            poll_interval_secs: interval,
+        }
+    } else {
+        // Interactive mode using dialoguer
+        let dirs_input: String = dialoguer::Input::new()
+            .with_prompt("Watch directories (comma-separated)")
+            .default("~/code".to_string())
+            .interact_text()?;
+        let watch_dirs: Vec<PathBuf> = dirs_input.split(',').map(|s| PathBuf::from(s.trim())).collect();
+
+        let poll_interval: u64 = dialoguer::Input::new()
+            .with_prompt("Poll interval (seconds)")
+            .default(300u64)
+            .interact_text()?;
+
+        Config {
+            watch_dirs,
+            poll_interval_secs: poll_interval,
+        }
+    };
+
+    config.validate()?;
+    config.save_to(&config_path)?;
+    println!("Config created at {}", config_path.display());
+    Ok(())
+}
+
 pub fn load_config() -> anyhow::Result<Config> {
     let path = config_dir()?.join("config.toml");
     let content = std::fs::read_to_string(&path)
