@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use crate::output::OutputFormat;
 
 #[derive(Parser)]
 #[command(name = "blackbox", about = "Flight recorder for your dev day")]
@@ -25,11 +26,23 @@ pub enum Commands {
     /// Show daemon status (running/stopped)
     Status,
     /// Show today's git activity
-    Today,
+    Today {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show this week's git activity
-    Week,
+    Week {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show this month's git activity
-    Month,
+    Month {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Register as OS service (launchd/systemd)
     Install,
     /// Remove OS service registration
