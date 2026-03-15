@@ -24,4 +24,10 @@ pub enum Commands {
     Stop,
     /// Show daemon status (running/stopped)
     Status,
+    /// Show today's git activity
+    Today,
+    /// Show this week's git activity
+    Week,
+    /// Show this month's git activity
+    Month,
 }
