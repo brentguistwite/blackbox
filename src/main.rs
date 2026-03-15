@@ -84,6 +84,16 @@ fn main() -> anyhow::Result<()> {
             let config = blackbox::config::load_config()?;
             blackbox::daemon::run_foreground(config)?;
         }
+        Commands::Hook { shell } => {
+            let script = blackbox::shell_hook::generate_hook(&shell)?;
+            print!("{}", script);
+        }
+        Commands::NotifyDir { path } => {
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)?;
+            blackbox::db::record_directory_presence(&conn, &path)?;
+        }
     }
 
     Ok(())
