@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use crate::output::OutputFormat;
 
 #[derive(Parser)]
-#[command(name = "blackbox", about = "Flight recorder for your dev day")]
+#[command(name = "blackbox", version, about = "Flight recorder for your dev day")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
