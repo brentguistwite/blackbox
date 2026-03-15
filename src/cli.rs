@@ -18,4 +18,10 @@ pub enum Commands {
         #[arg(long)]
         poll_interval: Option<u64>,
     },
+    /// Start the background daemon
+    Start,
+    /// Stop the running daemon
+    Stop,
+    /// Show daemon status (running/stopped)
+    Status,
 }
