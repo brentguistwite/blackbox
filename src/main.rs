@@ -17,13 +17,15 @@ fn run_query(
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
 
     let (from, to) = range_fn();
-    let repos = blackbox::query::query_activity(
+    let mut repos = blackbox::query::query_activity(
         &conn,
         from,
         to,
         config.session_gap_minutes,
         config.first_commit_minutes,
     )?;
+
+    blackbox::enrichment::enrich_with_prs(&mut repos);
 
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
     let total_time = repos

@@ -1,3 +1,4 @@
+use crate::enrichment::PrInfo;
 use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
@@ -19,6 +20,7 @@ pub struct RepoSummary {
     pub branches: Vec<String>,
     pub estimated_time: Duration,
     pub events: Vec<ActivityEvent>,
+    pub pr_info: Option<Vec<PrInfo>>,
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +181,7 @@ pub fn query_activity(
             branches,
             estimated_time,
             events,
+            pr_info: None,
         });
     }
 
