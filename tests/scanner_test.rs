@@ -1,14 +1,16 @@
 use blackbox::repo_scanner::discover_repos;
-use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
+
+fn init_repo(path: &std::path::Path) {
+    git2::Repository::init(path).unwrap();
+}
 
 #[test]
 fn test_discover_finds_git_repos() {
     let tmp = TempDir::new().unwrap();
-    // Create two repos
-    fs::create_dir_all(tmp.path().join("repo_a/.git")).unwrap();
-    fs::create_dir_all(tmp.path().join("repo_b/.git")).unwrap();
+    init_repo(&tmp.path().join("repo_a"));
+    init_repo(&tmp.path().join("repo_b"));
 
     let repos = discover_repos(&[tmp.path().to_path_buf()]);
     assert_eq!(repos.len(), 2);
@@ -19,7 +21,7 @@ fn test_discover_finds_git_repos() {
 #[test]
 fn test_discover_finds_nested_repos() {
     let tmp = TempDir::new().unwrap();
-    fs::create_dir_all(tmp.path().join("deep/nested/repo/.git")).unwrap();
+    init_repo(&tmp.path().join("deep/nested/repo"));
 
     let repos = discover_repos(&[tmp.path().to_path_buf()]);
     assert_eq!(repos.len(), 1);
@@ -29,8 +31,8 @@ fn test_discover_finds_nested_repos() {
 #[test]
 fn test_discover_skips_node_modules() {
     let tmp = TempDir::new().unwrap();
-    fs::create_dir_all(tmp.path().join("node_modules/pkg/.git")).unwrap();
-    fs::create_dir_all(tmp.path().join("real_repo/.git")).unwrap();
+    init_repo(&tmp.path().join("node_modules/pkg"));
+    init_repo(&tmp.path().join("real_repo"));
 
     let repos = discover_repos(&[tmp.path().to_path_buf()]);
     assert_eq!(repos.len(), 1);
@@ -40,10 +42,10 @@ fn test_discover_skips_node_modules() {
 #[test]
 fn test_discover_skips_target_and_vendor() {
     let tmp = TempDir::new().unwrap();
-    fs::create_dir_all(tmp.path().join("target/debug/.git")).unwrap();
-    fs::create_dir_all(tmp.path().join("vendor/dep/.git")).unwrap();
-    fs::create_dir_all(tmp.path().join(".build/out/.git")).unwrap();
-    fs::create_dir_all(tmp.path().join("good/.git")).unwrap();
+    init_repo(&tmp.path().join("target/debug"));
+    init_repo(&tmp.path().join("vendor/dep"));
+    init_repo(&tmp.path().join(".build/out"));
+    init_repo(&tmp.path().join("good"));
 
     let repos = discover_repos(&[tmp.path().to_path_buf()]);
     assert_eq!(repos.len(), 1);
@@ -53,17 +55,12 @@ fn test_discover_skips_target_and_vendor() {
 #[test]
 fn test_discover_skips_bare_repos() {
     let tmp = TempDir::new().unwrap();
-    // Create a proper non-bare repo via git2
-    let repo_path = tmp.path().join("normal");
-    git2::Repository::init(&repo_path).unwrap();
-
-    // Create a bare repo
-    let bare_path = tmp.path().join("bare");
-    git2::Repository::init_bare(&bare_path).unwrap();
+    init_repo(&tmp.path().join("normal"));
+    git2::Repository::init_bare(tmp.path().join("bare")).unwrap();
 
     let repos = discover_repos(&[tmp.path().to_path_buf()]);
     assert_eq!(repos.len(), 1);
-    assert_eq!(repos[0], repo_path);
+    assert_eq!(repos[0], tmp.path().join("normal"));
 }
 
 #[test]
@@ -83,8 +80,8 @@ fn test_discover_nonexistent_dir() {
 fn test_discover_multiple_watch_dirs() {
     let tmp1 = TempDir::new().unwrap();
     let tmp2 = TempDir::new().unwrap();
-    fs::create_dir_all(tmp1.path().join("repo1/.git")).unwrap();
-    fs::create_dir_all(tmp2.path().join("repo2/.git")).unwrap();
+    init_repo(&tmp1.path().join("repo1"));
+    init_repo(&tmp2.path().join("repo2"));
 
     let repos = discover_repos(&[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()]);
     assert_eq!(repos.len(), 2);
