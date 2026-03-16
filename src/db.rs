@@ -36,6 +36,20 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE INDEX IF NOT EXISTS idx_dir_presence_repo ON directory_presence(repo_path, entered_at);"
         ),
+        M::up(
+            "CREATE TABLE IF NOT EXISTS review_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                pr_title TEXT NOT NULL,
+                pr_url TEXT NOT NULL,
+                review_action TEXT NOT NULL CHECK(review_action IN ('APPROVED','CHANGES_REQUESTED','COMMENTED')),
+                reviewed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_review_activity_repo_ts ON review_activity(repo_path, reviewed_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_review_activity_dedup ON review_activity(repo_path, pr_number, reviewed_at);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -59,6 +73,27 @@ pub fn record_directory_presence(conn: &Connection, repo_path: &str) -> anyhow::
     )?;
 
     Ok(())
+}
+
+/// Insert a review activity record. Returns Ok(false) if duplicate (already exists).
+pub fn insert_review(
+    conn: &Connection,
+    repo_path: &str,
+    pr_number: i64,
+    pr_title: &str,
+    pr_url: &str,
+    review_action: &str,
+    reviewed_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO review_activity (repo_path, pr_number, pr_title, pr_url, review_action, reviewed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![repo_path, pr_number, pr_title, pr_url, review_action, reviewed_at],
+    ) {
+        Ok(0) => Ok(false), // duplicate, ignored
+        Ok(_) => Ok(true),  // inserted
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn insert_activity(

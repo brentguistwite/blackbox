@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use crate::config::{self, Config};
 use crate::db;
+use crate::enrichment;
 use crate::git_ops::{self, RepoState};
 use crate::repo_scanner;
 
@@ -20,6 +21,10 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 log::warn!("Error polling {}: {}", repo_path.display(), e);
             }
         }
+
+        // Collect review activity from gh CLI
+        enrichment::collect_reviews(&repos, &conn);
+
         std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
     }
 }
