@@ -72,3 +72,17 @@ pub enum Commands {
     /// Run health checks and report status
     Doctor,
 }
+
+impl Commands {
+    /// Commands that don't require a config file to exist.
+    pub fn is_exempt_from_config_check(&self) -> bool {
+        matches!(
+            self,
+            Commands::Init { .. }
+                | Commands::Completions { .. }
+                | Commands::Hook { .. }
+                | Commands::RunForeground
+                | Commands::NotifyDir { .. }
+        )
+    }
+}
