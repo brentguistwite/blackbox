@@ -343,8 +343,50 @@ fn test_first_run_shows_manual_setup_hint() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     // In non-interactive (test) context, dialoguer fails, so we get the fallback message
     assert!(
-        stdout.contains("blackbox init"),
+        stdout.contains("blackbox setup"),
         "should mention manual setup option, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_first_run_setup_exempt() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .arg("setup")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("Welcome to blackbox"),
+        "setup should NOT trigger first-run, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_setup_shows_wizard_header() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("setup")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("blackbox setup wizard"),
+        "setup should show wizard header, got: {}",
         stdout
     );
 }

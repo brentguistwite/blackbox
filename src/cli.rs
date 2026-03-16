@@ -71,6 +71,8 @@ pub enum Commands {
     },
     /// Run health checks and report status
     Doctor,
+    /// Interactive setup wizard (full onboarding)
+    Setup,
 }
 
 impl Commands {
@@ -79,6 +81,7 @@ impl Commands {
         matches!(
             self,
             Commands::Init { .. }
+                | Commands::Setup
                 | Commands::Completions { .. }
                 | Commands::Hook { .. }
                 | Commands::RunForeground
