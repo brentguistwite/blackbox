@@ -101,6 +101,12 @@ fn main() -> anyhow::Result<()> {
             let mut cmd = Cli::command();
             clap_complete::aot::generate(shell, &mut cmd, "blackbox", &mut std::io::stdout());
         }
+        Commands::Doctor => {
+            let all_ok = blackbox::doctor::run_doctor()?;
+            if !all_ok {
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

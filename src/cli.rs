@@ -69,4 +69,6 @@ pub enum Commands {
         #[arg(value_parser = clap::value_parser!(Shell))]
         shell: Shell,
     },
+    /// Run health checks and report status
+    Doctor,
 }
