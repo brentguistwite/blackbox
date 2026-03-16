@@ -130,6 +130,12 @@ pub fn run_init(watch_dirs: Option<String>, poll_interval: Option<u64>) -> anyho
     Ok(())
 }
 
+pub fn config_exists() -> bool {
+    config_dir()
+        .map(|dir| dir.join("config.toml").exists())
+        .unwrap_or(false)
+}
+
 pub fn load_config() -> anyhow::Result<Config> {
     let path = config_dir()?.join("config.toml");
     let content = std::fs::read_to_string(&path)
