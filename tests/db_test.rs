@@ -251,6 +251,125 @@ fn test_insert_review_dedup() {
 }
 
 #[test]
+fn test_ai_sessions_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ai_sessions'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["ai_sessions"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(ai_sessions)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"tool".to_string()));
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"session_id".to_string()));
+    assert!(columns.contains(&"started_at".to_string()));
+    assert!(columns.contains(&"ended_at".to_string()));
+    assert!(columns.contains(&"turns".to_string()));
+    assert!(columns.contains(&"created_at".to_string()));
+}
+
+#[test]
+fn test_insert_ai_session() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_ai_session(
+        &conn,
+        "/tmp/repo",
+        "session-abc-123",
+        "2026-03-16T10:00:00Z",
+    )
+    .unwrap();
+    assert!(inserted);
+
+    let (repo, sid, tool): (String, String, String) = conn
+        .query_row(
+            "SELECT repo_path, session_id, tool FROM ai_sessions WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(repo, "/tmp/repo");
+    assert_eq!(sid, "session-abc-123");
+    assert_eq!(tool, "claude-code");
+}
+
+#[test]
+fn test_insert_ai_session_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    assert!(first);
+
+    let second = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    assert!(!second);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_update_session_ended() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_ai_session(&conn, "/tmp/repo", "end-session", "2026-03-16T10:00:00Z").unwrap();
+
+    let updated = db::update_session_ended(&conn, "end-session", "2026-03-16T11:00:00Z", Some(42)).unwrap();
+    assert!(updated);
+
+    let (ended, turns): (String, i64) = conn
+        .query_row(
+            "SELECT ended_at, turns FROM ai_sessions WHERE session_id = 'end-session'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(ended, "2026-03-16T11:00:00Z");
+    assert_eq!(turns, 42);
+
+    // Second update should be no-op (already ended)
+    let second = db::update_session_ended(&conn, "end-session", "2026-03-16T12:00:00Z", Some(50)).unwrap();
+    assert!(!second);
+}
+
+#[test]
+fn test_get_active_sessions() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_ai_session(&conn, "/tmp/repo", "active-1", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "/tmp/repo", "active-2", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "/tmp/repo", "ended-1", "2026-03-16T10:00:00Z").unwrap();
+    db::update_session_ended(&conn, "ended-1", "2026-03-16T11:00:00Z", None).unwrap();
+
+    let active = db::get_active_sessions(&conn).unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(active.contains(&"active-1".to_string()));
+    assert!(active.contains(&"active-2".to_string()));
+}
+
+#[test]
 fn test_insert_activity_branch_switch() {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("test.db");
