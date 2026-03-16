@@ -1,5 +1,6 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, OutputFormat};
+use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
 #[test]
@@ -462,4 +463,146 @@ fn render_csv_includes_ai_session_rows() {
     assert_eq!(lines.len(), 4);
     assert!(csv_str.contains("ai_session"), "should have ai_session event_type");
     assert!(csv_str.contains("Claude Code session"), "should have session description");
+}
+
+// --- Standup output tests ---
+
+#[test]
+fn standup_empty_shows_no_activity() {
+    let summary = make_empty_summary();
+    let output = render_standup(&summary);
+    assert!(output.contains("No activity recorded"), "empty standup should say no activity");
+}
+
+#[test]
+fn standup_has_markdown_bold_header() {
+    let summary = make_test_summary();
+    let output = render_standup(&summary);
+    assert!(output.starts_with("**Today"), "header should start with markdown bold");
+    assert!(output.contains(")**"), "header should close bold");
+}
+
+#[test]
+fn standup_groups_commits_by_branch() {
+    let summary = ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 5,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(60),
+        total_ai_session_time: Duration::zero(),
+        repos: vec![RepoSummary {
+            repo_path: "/code/myproject".to_string(),
+            repo_name: "myproject".to_string(),
+            commits: 5,
+            branches: vec!["feat/auth".to_string(), "main".to_string()],
+            estimated_time: Duration::minutes(60),
+            events: vec![
+                ActivityEvent { event_type: "commit".to_string(), branch: Some("feat/auth".to_string()), commit_hash: Some("a1".to_string()), message: Some("wip".to_string()), timestamp: Utc::now() },
+                ActivityEvent { event_type: "commit".to_string(), branch: Some("feat/auth".to_string()), commit_hash: Some("a2".to_string()), message: Some("wip2".to_string()), timestamp: Utc::now() },
+                ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("b1".to_string()), message: Some("merge".to_string()), timestamp: Utc::now() },
+            ],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+        }],
+    };
+    let output = render_standup(&summary);
+    assert!(output.contains("feat/auth: 2 commits"), "should group feat/auth commits");
+    assert!(output.contains("main: 1 commit"), "should show single commit for main");
+}
+
+#[test]
+fn standup_shows_repo_with_bullet() {
+    let summary = make_test_summary();
+    let output = render_standup(&summary);
+    assert!(output.contains("\u{2022} myproject"), "should use bullet for repo name");
+}
+
+#[test]
+fn standup_shows_time_estimate() {
+    let summary = make_test_summary();
+    let output = render_standup(&summary);
+    assert!(output.contains("~45m"), "should show time estimate on repo line");
+}
+
+#[test]
+fn standup_shows_total_line() {
+    let summary = make_test_summary();
+    let output = render_standup(&summary);
+    assert!(output.contains("Total:"), "should have total line");
+    assert!(output.contains("1 repo"), "should show repo count");
+}
+
+#[test]
+fn standup_no_ansi_codes() {
+    let summary = make_test_summary();
+    let output = render_standup(&summary);
+    assert!(!output.contains("\x1b["), "standup output should have no ANSI escape codes");
+}
+
+#[test]
+fn standup_includes_pr_info() {
+    let summary = ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 1,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(30),
+        total_ai_session_time: Duration::zero(),
+        repos: vec![RepoSummary {
+            repo_path: "/code/proj".to_string(),
+            repo_name: "proj".to_string(),
+            commits: 1,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(30),
+            events: vec![ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("x".to_string()), message: Some("m".to_string()), timestamp: Utc::now() }],
+            pr_info: Some(vec![PrInfo { number: 472, title: "Auth refactor".to_string(), state: "MERGED".to_string(), head_ref_name: "feat/auth".to_string() }]),
+            reviews: vec![],
+            ai_sessions: vec![],
+        }],
+    };
+    let output = render_standup(&summary);
+    assert!(output.contains("Merged PR #472"), "should show merged PR");
+}
+
+#[test]
+fn standup_includes_reviews() {
+    let summary = make_summary_with_reviews();
+    let output = render_standup(&summary);
+    assert!(output.contains("Reviewed PR #42"), "should list reviewed PRs");
+    assert!(output.contains("PR #43"), "should list all reviewed PRs");
+}
+
+#[test]
+fn standup_includes_ai_sessions() {
+    let summary = make_summary_with_ai_sessions();
+    let output = render_standup(&summary);
+    assert!(output.contains("Claude Code session"), "should show AI sessions");
+}
+
+#[test]
+fn standup_week_header() {
+    let summary = ActivitySummary {
+        period_label: "This Week".to_string(),
+        total_commits: 1,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(10),
+        total_ai_session_time: Duration::zero(),
+        repos: vec![RepoSummary {
+            repo_path: "/code/p".to_string(),
+            repo_name: "p".to_string(),
+            commits: 1,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(10),
+            events: vec![ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("z".to_string()), message: Some("x".to_string()), timestamp: Utc::now() }],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+        }],
+    };
+    let output = render_standup(&summary);
+    assert!(output.starts_with("**This Week"), "week standup should start with week header");
+    assert!(output.contains(" - "), "week header should have date range with dash");
 }
