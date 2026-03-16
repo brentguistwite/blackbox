@@ -32,6 +32,9 @@ fn run_query(
     let total_time = repos
         .iter()
         .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+    let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
+        acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
+    });
 
     let summary = ActivitySummary {
         period_label: period_label.to_string(),
@@ -39,6 +42,7 @@ fn run_query(
         total_reviews,
         total_repos: repos.len(),
         total_estimated_time: total_time,
+        total_ai_session_time,
         repos,
     };
 

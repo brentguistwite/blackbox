@@ -1,4 +1,4 @@
-use blackbox::db::{insert_activity, insert_review, open_db};
+use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{query_activity, today_range, week_range, month_range};
 use chrono::{TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -107,4 +107,44 @@ fn query_activity_reviews_only_repo() {
     assert_eq!(repo.commits, 0);
     assert_eq!(repo.reviews.len(), 1);
     assert_eq!(repo.reviews[0].action, "CHANGES_REQUESTED");
+}
+
+#[test]
+fn query_activity_includes_ai_sessions() {
+    let (conn, _tmp) = setup_db();
+
+    let ts = "2025-01-15T10:00:00+00:00";
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), ts).unwrap();
+    insert_ai_session(&conn, "/repo/alpha", "sess-001", "2025-01-15T09:00:00+00:00").unwrap();
+    update_session_ended(&conn, "sess-001", "2025-01-15T10:30:00+00:00", Some(12)).unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    assert_eq!(alpha.ai_sessions.len(), 1);
+    assert_eq!(alpha.ai_sessions[0].session_id, "sess-001");
+    assert_eq!(alpha.ai_sessions[0].turns, Some(12));
+    assert!(alpha.ai_sessions[0].ended_at.is_some());
+    assert_eq!(alpha.ai_sessions[0].duration.num_minutes(), 90);
+}
+
+#[test]
+fn query_activity_ai_sessions_only_repo() {
+    let (conn, _tmp) = setup_db();
+
+    insert_ai_session(&conn, "/repo/ai-only", "sess-100", "2025-01-15T08:00:00+00:00").unwrap();
+    update_session_ended(&conn, "sess-100", "2025-01-15T09:00:00+00:00", Some(5)).unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    assert_eq!(repos.len(), 1);
+    let repo = &repos[0];
+    assert_eq!(repo.repo_name, "ai-only");
+    assert_eq!(repo.commits, 0);
+    assert_eq!(repo.ai_sessions.len(), 1);
+    assert_eq!(repo.ai_sessions[0].duration.num_minutes(), 60);
 }
