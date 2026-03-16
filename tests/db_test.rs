@@ -156,6 +156,101 @@ fn test_insert_activity_merge_with_source_branch() {
 }
 
 #[test]
+fn test_review_activity_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='review_activity'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["review_activity"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(review_activity)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"pr_number".to_string()));
+    assert!(columns.contains(&"pr_title".to_string()));
+    assert!(columns.contains(&"pr_url".to_string()));
+    assert!(columns.contains(&"review_action".to_string()));
+    assert!(columns.contains(&"reviewed_at".to_string()));
+    assert!(columns.contains(&"created_at".to_string()));
+}
+
+#[test]
+fn test_insert_review() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_review(
+        &conn,
+        "/tmp/repo",
+        42,
+        "Add feature X",
+        "https://github.com/org/repo/pull/42",
+        "APPROVED",
+        "2026-03-15T10:00:00Z",
+    )
+    .unwrap();
+    assert!(inserted);
+
+    let (repo, pr_num, title, url, action, reviewed_at): (String, i64, String, String, String, String) = conn
+        .query_row(
+            "SELECT repo_path, pr_number, pr_title, pr_url, review_action, reviewed_at FROM review_activity WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .unwrap();
+
+    assert_eq!(repo, "/tmp/repo");
+    assert_eq!(pr_num, 42);
+    assert_eq!(title, "Add feature X");
+    assert_eq!(url, "https://github.com/org/repo/pull/42");
+    assert_eq!(action, "APPROVED");
+    assert_eq!(reviewed_at, "2026-03-15T10:00:00Z");
+}
+
+#[test]
+fn test_insert_review_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // First insert succeeds
+    let first = db::insert_review(
+        &conn, "/tmp/repo", 42, "Title", "http://url", "APPROVED", "2026-03-15T10:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Duplicate returns false (same repo_path + pr_number + reviewed_at)
+    let second = db::insert_review(
+        &conn, "/tmp/repo", 42, "Title", "http://url", "APPROVED", "2026-03-15T10:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    // Different reviewed_at = not a duplicate
+    let third = db::insert_review(
+        &conn, "/tmp/repo", 42, "Title", "http://url", "CHANGES_REQUESTED", "2026-03-15T11:00:00Z",
+    ).unwrap();
+    assert!(third);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM review_activity", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
 fn test_insert_activity_branch_switch() {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("test.db");
