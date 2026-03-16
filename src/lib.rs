@@ -15,4 +15,5 @@ pub mod repo_scanner;
 pub mod service;
 pub mod setup;
 pub mod shell_hook;
+pub mod tui;
 pub mod watcher;

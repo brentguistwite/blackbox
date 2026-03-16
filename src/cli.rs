@@ -82,6 +82,8 @@ pub enum Commands {
     Doctor,
     /// Interactive setup wizard (full onboarding)
     Setup,
+    /// Live TUI dashboard
+    Live,
     /// Output activity in Slack/Teams-friendly format
     Standup {
         /// Show this week's activity instead of today
