@@ -9,6 +9,7 @@ fn run_query(
     period_label: &str,
     range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>),
     format: OutputFormat,
+    summarize: bool,
 ) -> anyhow::Result<()> {
     let config = blackbox::config::load_config()?;
     let data_dir = blackbox::config::data_dir()?;
@@ -46,10 +47,16 @@ fn run_query(
         repos,
     };
 
-    match format {
-        OutputFormat::Pretty => blackbox::output::render_summary(&summary),
-        OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
-        OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
+    if summarize {
+        let llm_config = blackbox::llm::build_llm_config(&config)?;
+        let json = blackbox::output::render_json(&summary);
+        blackbox::llm::summarize_activity(&llm_config, &json)?;
+    } else {
+        match format {
+            OutputFormat::Pretty => blackbox::output::render_summary(&summary),
+            OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
+            OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
+        }
     }
     Ok(())
 }
@@ -89,14 +96,14 @@ fn main() -> anyhow::Result<()> {
             let data_dir = blackbox::config::data_dir()?;
             blackbox::daemon::daemon_status(&data_dir)?;
         }
-        Commands::Today { format } => {
-            run_query("Today", blackbox::query::today_range, format)?;
+        Commands::Today { format, summarize } => {
+            run_query("Today", blackbox::query::today_range, format, summarize)?;
         }
-        Commands::Week { format } => {
-            run_query("This Week", blackbox::query::week_range, format)?;
+        Commands::Week { format, summarize } => {
+            run_query("This Week", blackbox::query::week_range, format, summarize)?;
         }
-        Commands::Month { format } => {
-            run_query("This Month", blackbox::query::month_range, format)?;
+        Commands::Month { format, summarize } => {
+            run_query("This Month", blackbox::query::month_range, format, summarize)?;
         }
         Commands::Install => {
             blackbox::service::install()?;
@@ -131,7 +138,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup => {
             blackbox::setup::run_setup()?;
         }
-        Commands::Standup { week } => {
+        Commands::Standup { week, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
             if week {
@@ -166,7 +173,13 @@ fn main() -> anyhow::Result<()> {
                 total_ai_session_time,
                 repos,
             };
-            println!("{}", blackbox::output::render_standup(&summary));
+            if summarize {
+                let llm_config = blackbox::llm::build_llm_config(&config)?;
+                let json = blackbox::output::render_json(&summary);
+                blackbox::llm::summarize_activity(&llm_config, &json)?;
+            } else {
+                println!("{}", blackbox::output::render_standup(&summary));
+            }
         }
     }
 
