@@ -1,4 +1,4 @@
-use blackbox::query::{ActivityEvent, ActivitySummary, RepoSummary};
+use blackbox::query::{ActivityEvent, ActivitySummary, RepoSummary, ReviewInfo};
 use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, OutputFormat};
 use chrono::{Duration, Utc};
 
@@ -33,6 +33,7 @@ fn render_summary_with_repos() {
     let summary = ActivitySummary {
         period_label: "Today".to_string(),
         total_commits: 5,
+        total_reviews: 0,
         total_repos: 1,
         total_estimated_time: Duration::minutes(90),
         repos: vec![RepoSummary {
@@ -65,6 +66,7 @@ fn render_summary_with_repos() {
                 },
             ],
             pr_info: None,
+            reviews: vec![],
         }],
     };
 
@@ -87,6 +89,7 @@ fn render_empty_summary() {
     let summary = ActivitySummary {
         period_label: "This Week".to_string(),
         total_commits: 0,
+        total_reviews: 0,
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         repos: vec![],
@@ -100,6 +103,7 @@ fn make_test_summary() -> ActivitySummary {
     ActivitySummary {
         period_label: "Today".to_string(),
         total_commits: 3,
+        total_reviews: 0,
         total_repos: 1,
         total_estimated_time: Duration::minutes(45),
         repos: vec![RepoSummary {
@@ -125,6 +129,7 @@ fn make_test_summary() -> ActivitySummary {
                 },
             ],
             pr_info: None,
+            reviews: vec![],
         }],
     }
 }
@@ -133,6 +138,7 @@ fn make_empty_summary() -> ActivitySummary {
     ActivitySummary {
         period_label: "This Week".to_string(),
         total_commits: 0,
+        total_reviews: 0,
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         repos: vec![],
@@ -238,4 +244,103 @@ fn output_format_enum_exists() {
     let _csv = OutputFormat::Csv;
     let default = OutputFormat::default();
     assert!(matches!(default, OutputFormat::Pretty));
+}
+
+// --- Review output tests ---
+
+fn make_summary_with_reviews() -> ActivitySummary {
+    ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 2,
+        total_reviews: 3,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(30),
+        repos: vec![RepoSummary {
+            repo_path: "/home/user/code/myproject".to_string(),
+            repo_name: "myproject".to_string(),
+            commits: 2,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(30),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("abc1234".to_string()),
+                message: Some("fix bug".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: None,
+            reviews: vec![
+                ReviewInfo {
+                    pr_number: 42,
+                    pr_title: "Add auth".to_string(),
+                    action: "APPROVED".to_string(),
+                    reviewed_at: Utc::now(),
+                },
+                ReviewInfo {
+                    pr_number: 43,
+                    pr_title: "Fix typo".to_string(),
+                    action: "COMMENTED".to_string(),
+                    reviewed_at: Utc::now(),
+                },
+                ReviewInfo {
+                    pr_number: 44,
+                    pr_title: "Refactor DB".to_string(),
+                    action: "CHANGES_REQUESTED".to_string(),
+                    reviewed_at: Utc::now(),
+                },
+            ],
+        }],
+    }
+}
+
+#[test]
+fn render_pretty_shows_review_count_in_summary() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_reviews();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("3 reviews"), "should show total reviews in summary line");
+}
+
+#[test]
+fn render_pretty_shows_reviewed_prs() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_reviews();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("Reviewed 3 PRs"), "should show reviewed N PRs");
+    assert!(output.contains("PR #42: Add auth"), "should list PR titles");
+    assert!(output.contains("PR #44: Refactor DB"), "should list all reviewed PRs");
+}
+
+#[test]
+fn render_json_includes_reviews() {
+    let summary = make_summary_with_reviews();
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(v["total_reviews"], 3);
+    let reviews = v["repos"][0]["reviews"].as_array().unwrap();
+    assert_eq!(reviews.len(), 3);
+    assert_eq!(reviews[0]["pr_number"], 42);
+    assert_eq!(reviews[0]["action"], "APPROVED");
+    assert_eq!(reviews[1]["pr_title"], "Fix typo");
+}
+
+#[test]
+fn render_csv_includes_review_rows() {
+    let summary = make_summary_with_reviews();
+    let csv_str = render_csv(&summary);
+    let lines: Vec<&str> = csv_str.lines().collect();
+    // header + 1 commit event + 3 review rows = 5
+    assert_eq!(lines.len(), 5);
+    assert!(csv_str.contains("review_approved"), "should have review_approved event_type");
+    assert!(csv_str.contains("review_commented"), "should have review_commented event_type");
+    assert!(csv_str.contains("review_changes_requested"), "should have review_changes_requested");
+}
+
+#[test]
+fn render_json_no_reviews_omits_field() {
+    let summary = make_test_summary();
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    // reviews field should be absent when empty (skip_serializing_if)
+    assert!(v["repos"][0].get("reviews").is_none(), "empty reviews should be omitted from JSON");
 }
