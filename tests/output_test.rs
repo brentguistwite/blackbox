@@ -1,4 +1,4 @@
-use blackbox::query::{ActivityEvent, ActivitySummary, RepoSummary, ReviewInfo};
+use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
 use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, OutputFormat};
 use chrono::{Duration, Utc};
 
@@ -36,6 +36,7 @@ fn render_summary_with_repos() {
         total_reviews: 0,
         total_repos: 1,
         total_estimated_time: Duration::minutes(90),
+        total_ai_session_time: Duration::zero(),
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -67,6 +68,7 @@ fn render_summary_with_repos() {
             ],
             pr_info: None,
             reviews: vec![],
+            ai_sessions: vec![],
         }],
     };
 
@@ -92,6 +94,7 @@ fn render_empty_summary() {
         total_reviews: 0,
         total_repos: 0,
         total_estimated_time: Duration::zero(),
+        total_ai_session_time: Duration::zero(),
         repos: vec![],
     };
 
@@ -106,6 +109,7 @@ fn make_test_summary() -> ActivitySummary {
         total_reviews: 0,
         total_repos: 1,
         total_estimated_time: Duration::minutes(45),
+        total_ai_session_time: Duration::zero(),
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -130,6 +134,7 @@ fn make_test_summary() -> ActivitySummary {
             ],
             pr_info: None,
             reviews: vec![],
+            ai_sessions: vec![],
         }],
     }
 }
@@ -141,6 +146,7 @@ fn make_empty_summary() -> ActivitySummary {
         total_reviews: 0,
         total_repos: 0,
         total_estimated_time: Duration::zero(),
+        total_ai_session_time: Duration::zero(),
         repos: vec![],
     }
 }
@@ -255,6 +261,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
         total_reviews: 3,
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
+        total_ai_session_time: Duration::zero(),
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -289,6 +296,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
                     reviewed_at: Utc::now(),
                 },
             ],
+            ai_sessions: vec![],
         }],
     }
 }
@@ -343,4 +351,115 @@ fn render_json_no_reviews_omits_field() {
     let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     // reviews field should be absent when empty (skip_serializing_if)
     assert!(v["repos"][0].get("reviews").is_none(), "empty reviews should be omitted from JSON");
+}
+
+// --- AI Session output tests ---
+
+fn make_summary_with_ai_sessions() -> ActivitySummary {
+    let started = Utc::now() - Duration::minutes(72);
+    let ended = Utc::now() - Duration::minutes(10);
+    ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 2,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(30),
+        total_ai_session_time: Duration::minutes(62) + Duration::minutes(0), // ended session only
+        repos: vec![RepoSummary {
+            repo_path: "/home/user/code/myproject".to_string(),
+            repo_name: "myproject".to_string(),
+            commits: 2,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(30),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("abc1234".to_string()),
+                message: Some("fix bug".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![
+                AiSessionInfo {
+                    session_id: "sess-001".to_string(),
+                    started_at: started,
+                    ended_at: Some(ended),
+                    duration: ended - started,
+                    turns: Some(15),
+                },
+                AiSessionInfo {
+                    session_id: "sess-002".to_string(),
+                    started_at: Utc::now() - Duration::minutes(5),
+                    ended_at: None,
+                    duration: Duration::minutes(5),
+                    turns: None,
+                },
+            ],
+        }],
+    }
+}
+
+#[test]
+fn render_pretty_shows_ai_session_count() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_ai_sessions();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("2 Claude Code sessions"), "should show session count per repo");
+}
+
+#[test]
+fn render_pretty_shows_ai_session_summary_line() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_ai_sessions();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("AI sessions:"), "should show AI session time in summary line");
+}
+
+#[test]
+fn render_pretty_shows_active_session() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_ai_sessions();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("active"), "should show 'active' for ongoing sessions");
+}
+
+#[test]
+fn render_pretty_shows_turns() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_ai_sessions();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("15 turns"), "should show turn count for ended sessions");
+}
+
+#[test]
+fn render_json_includes_ai_sessions() {
+    let summary = make_summary_with_ai_sessions();
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert!(v["total_ai_session_minutes"].as_i64().unwrap() > 0);
+    let sessions = v["repos"][0]["ai_sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0]["session_id"], "sess-001");
+    assert!(sessions[0]["turns"].as_i64().is_some());
+    assert!(sessions[1]["ended_at"].is_null());
+}
+
+#[test]
+fn render_json_no_ai_sessions_omits_field() {
+    let summary = make_test_summary();
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert!(v["repos"][0].get("ai_sessions").is_none(), "empty ai_sessions should be omitted");
+}
+
+#[test]
+fn render_csv_includes_ai_session_rows() {
+    let summary = make_summary_with_ai_sessions();
+    let csv_str = render_csv(&summary);
+    let lines: Vec<&str> = csv_str.lines().collect();
+    // header + 1 commit event + 2 ai_session rows = 4
+    assert_eq!(lines.len(), 4);
+    assert!(csv_str.contains("ai_session"), "should have ai_session event_type");
+    assert!(csv_str.contains("Claude Code session"), "should have session description");
 }

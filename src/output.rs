@@ -21,6 +21,7 @@ pub struct JsonSummary {
     pub total_reviews: usize,
     pub total_repos: usize,
     pub total_estimated_minutes: i64,
+    pub total_ai_session_minutes: i64,
     pub repos: Vec<JsonRepo>,
 }
 
@@ -36,6 +37,8 @@ pub struct JsonRepo {
     pub pr_info: Option<Vec<PrInfo>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub reviews: Vec<JsonReview>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ai_sessions: Vec<JsonAiSession>,
 }
 
 #[derive(Serialize)]
@@ -44,6 +47,15 @@ pub struct JsonReview {
     pub pr_title: String,
     pub action: String,
     pub reviewed_at: String,
+}
+
+#[derive(Serialize)]
+pub struct JsonAiSession {
+    pub session_id: String,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub duration_minutes: i64,
+    pub turns: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -79,6 +91,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
         total_reviews: summary.total_reviews,
         total_repos: summary.total_repos,
         total_estimated_minutes: summary.total_estimated_time.num_minutes(),
+        total_ai_session_minutes: summary.total_ai_session_time.num_minutes(),
         repos: summary
             .repos
             .iter()
@@ -108,6 +121,17 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                         pr_title: rv.pr_title.clone(),
                         action: rv.action.clone(),
                         reviewed_at: rv.reviewed_at.to_rfc3339(),
+                    })
+                    .collect(),
+                ai_sessions: r
+                    .ai_sessions
+                    .iter()
+                    .map(|s| JsonAiSession {
+                        session_id: s.session_id.clone(),
+                        started_at: s.started_at.to_rfc3339(),
+                        ended_at: s.ended_at.map(|dt| dt.to_rfc3339()),
+                        duration_minutes: s.duration.num_minutes(),
+                        turns: s.turns,
                     })
                     .collect(),
             })
@@ -160,6 +184,23 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 repo_estimated_minutes: repo.estimated_time.num_minutes(),
                 pr_number: review.pr_number.to_string(),
                 pr_title: review.pr_title.clone(),
+            };
+            wtr.serialize(row).expect("CSV serialization should not fail");
+        }
+        // Add AI session rows
+        for session in &repo.ai_sessions {
+            let status = if session.ended_at.is_some() { "ended" } else { "active" };
+            let row = CsvRow {
+                period: summary.period_label.clone(),
+                repo_name: repo.repo_name.clone(),
+                event_type: "ai_session".to_string(),
+                branch: String::new(),
+                commit_hash: String::new(),
+                message: format!("Claude Code session ({}, {}m)", status, session.duration.num_minutes()),
+                timestamp: session.started_at.to_rfc3339(),
+                repo_estimated_minutes: repo.estimated_time.num_minutes(),
+                pr_number: String::new(),
+                pr_title: String::new(),
             };
             wtr.serialize(row).expect("CSV serialization should not fail");
         }
@@ -233,10 +274,16 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     } else {
         String::new()
     };
+    let ai_suffix = if summary.total_ai_session_time > Duration::zero() {
+        format!(", AI sessions: {}", format_duration(summary.total_ai_session_time))
+    } else {
+        String::new()
+    };
     lines.push(format!(
-        "{} commits{} across {} {} ({})",
+        "{} commits{}{} across {} {} ({})",
         summary.total_commits,
         review_suffix,
+        ai_suffix,
         summary.total_repos,
         repo_word,
         format_duration(summary.total_estimated_time),
@@ -308,6 +355,31 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                     icon,
                     review.pr_number,
                     review.pr_title,
+                ));
+            }
+        }
+
+        // AI Sessions
+        if !repo.ai_sessions.is_empty() {
+            let total_session_time: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+            lines.push(format!(
+                "  {} {} Claude Code sessions ({})",
+                "~".dimmed(),
+                repo.ai_sessions.len(),
+                format_duration(total_session_time).magenta(),
+            ));
+            for session in &repo.ai_sessions {
+                let status = if session.ended_at.is_none() {
+                    "active".magenta().to_string()
+                } else {
+                    format_duration(session.duration)
+                };
+                let turns_str = session.turns.map(|t| format!(", {} turns", t)).unwrap_or_default();
+                lines.push(format!(
+                    "    {} {}{}",
+                    "o".magenta(),
+                    status,
+                    turns_str,
                 ));
             }
         }
