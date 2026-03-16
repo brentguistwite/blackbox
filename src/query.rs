@@ -21,6 +21,15 @@ pub struct ReviewInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct AiSessionInfo {
+    pub session_id: String,
+    pub started_at: DateTime<Utc>,
+    pub ended_at: Option<DateTime<Utc>>,
+    pub duration: Duration,
+    pub turns: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RepoSummary {
     pub repo_path: String,
     pub repo_name: String,
@@ -30,6 +39,7 @@ pub struct RepoSummary {
     pub events: Vec<ActivityEvent>,
     pub pr_info: Option<Vec<PrInfo>>,
     pub reviews: Vec<ReviewInfo>,
+    pub ai_sessions: Vec<AiSessionInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +49,7 @@ pub struct ActivitySummary {
     pub total_reviews: usize,
     pub total_repos: usize,
     pub total_estimated_time: Duration,
+    pub total_ai_session_time: Duration,
     pub repos: Vec<RepoSummary>,
 }
 
@@ -165,10 +176,14 @@ pub fn query_activity(
     // Query reviews in the same time range
     let review_map = query_reviews(conn, from, to)?;
 
-    // Collect all repo paths from both git activity and reviews
+    // Query AI sessions in the same time range
+    let ai_session_map = query_ai_sessions(conn, from, to)?;
+
+    // Collect all repo paths from git activity, reviews, and AI sessions
     let all_repo_paths: std::collections::BTreeSet<String> = repo_map
         .keys()
         .chain(review_map.keys())
+        .chain(ai_session_map.keys())
         .cloned()
         .collect();
 
@@ -176,6 +191,7 @@ pub fn query_activity(
     for repo_path in all_repo_paths {
         let events = repo_map.remove(&repo_path).unwrap_or_default();
         let reviews = review_map.get(&repo_path).cloned().unwrap_or_default();
+        let ai_sessions = ai_session_map.get(&repo_path).cloned().unwrap_or_default();
 
         let repo_name = std::path::Path::new(&repo_path)
             .file_name()
@@ -206,6 +222,7 @@ pub fn query_activity(
             events,
             pr_info: None,
             reviews,
+            ai_sessions,
         });
     }
 
@@ -247,6 +264,56 @@ fn query_reviews(
             pr_title,
             action,
             reviewed_at,
+        });
+    }
+
+    Ok(map)
+}
+
+/// Query ai_sessions table for a given time range, grouped by repo.
+fn query_ai_sessions(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<BTreeMap<String, Vec<AiSessionInfo>>> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, session_id, started_at, ended_at, turns
+         FROM ai_sessions
+         WHERE started_at >= ?1 AND started_at <= ?2
+         ORDER BY repo_path, started_at ASC",
+    )?;
+
+    let now = Utc::now();
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(4)?,
+        ))
+    })?;
+
+    let mut map: BTreeMap<String, Vec<AiSessionInfo>> = BTreeMap::new();
+    for row in rows {
+        let (repo_path, session_id, started_at_str, ended_at_str, turns) = row?;
+        let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
+        let ended_at = ended_at_str
+            .as_deref()
+            .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
+            .transpose()?;
+        let end = ended_at.unwrap_or(now);
+        let duration = end - started_at;
+
+        map.entry(repo_path).or_default().push(AiSessionInfo {
+            session_id,
+            started_at,
+            ended_at,
+            duration,
+            turns,
         });
     }
 
