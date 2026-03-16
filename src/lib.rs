@@ -7,6 +7,7 @@ pub mod db;
 pub mod enrichment;
 pub mod error;
 pub mod git_ops;
+pub mod llm;
 pub mod output;
 pub mod poller;
 pub mod query;
