@@ -131,6 +131,43 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup => {
             blackbox::setup::run_setup()?;
         }
+        Commands::Standup { week } => {
+            let label;
+            let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
+            if week {
+                label = "This Week";
+                range_fn = blackbox::query::week_range;
+            } else {
+                label = "Today";
+                range_fn = blackbox::query::today_range;
+            }
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range_fn();
+            let mut repos = blackbox::query::query_activity(
+                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            blackbox::enrichment::enrich_with_prs(&mut repos);
+            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+            let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
+            let total_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
+                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
+            });
+            let summary = ActivitySummary {
+                period_label: label.to_string(),
+                total_commits,
+                total_reviews,
+                total_repos: repos.len(),
+                total_estimated_time: total_time,
+                total_ai_session_time,
+                repos,
+            };
+            println!("{}", blackbox::output::render_standup(&summary));
+        }
     }
 
     Ok(())

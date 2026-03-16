@@ -1,8 +1,9 @@
 use crate::enrichment::PrInfo;
 use crate::query::ActivitySummary;
-use chrono::Duration;
+use chrono::{Datelike, Duration, Local};
 use colored::*;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, clap::ValueEnum)]
 pub enum OutputFormat {
@@ -393,4 +394,87 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
+}
+
+/// Format duration without ~ prefix for standup output.
+fn format_duration_plain(d: Duration) -> String {
+    let total_minutes = d.num_minutes();
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes)
+    }
+}
+
+/// Render activity in Slack/Teams-friendly plain text (no ANSI codes).
+pub fn render_standup(summary: &ActivitySummary) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if summary.repos.is_empty() {
+        lines.push(format!("No activity recorded for {}.", summary.period_label));
+        return lines.join("\n");
+    }
+
+    // Header with date
+    let now = Local::now();
+    let header = if summary.period_label == "This Week" {
+        let weekday = now.weekday().num_days_from_monday();
+        let monday = now - Duration::days(weekday as i64);
+        format!("**{} ({} - {})**", summary.period_label, monday.format("%b %-d"), now.format("%b %-d"))
+    } else {
+        format!("**{} ({})**", summary.period_label, now.format("%b %-d"))
+    };
+    lines.push(header);
+    lines.push(String::new());
+
+    for repo in &summary.repos {
+        lines.push(format!("\u{2022} {} (~{})", repo.repo_name, format_duration_plain(repo.estimated_time)));
+
+        // Group commits by branch
+        let mut branch_commits: BTreeMap<&str, usize> = BTreeMap::new();
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let branch = event.branch.as_deref().unwrap_or("unknown");
+                *branch_commits.entry(branch).or_default() += 1;
+            }
+        }
+        for (branch, count) in &branch_commits {
+            let word = if *count == 1 { "commit" } else { "commits" };
+            lines.push(format!("  - {}: {} {}", branch, count, word));
+        }
+
+        // PR info
+        if let Some(prs) = &repo.pr_info {
+            for pr in prs {
+                let action = if pr.state == "MERGED" { "Merged" } else { "Opened" };
+                lines.push(format!("  - {} PR #{}", action, pr.number));
+            }
+        }
+
+        // Reviews — deduplicate by PR number
+        if !repo.reviews.is_empty() {
+            let mut seen = std::collections::BTreeSet::new();
+            let unique: Vec<String> = repo.reviews.iter()
+                .filter(|r| seen.insert(r.pr_number))
+                .map(|r| format!("PR #{}", r.pr_number))
+                .collect();
+            lines.push(format!("  - Reviewed {}", unique.join(", ")));
+        }
+
+        // AI Sessions
+        if !repo.ai_sessions.is_empty() {
+            let total: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+            let word = if repo.ai_sessions.len() == 1 { "session" } else { "sessions" };
+            lines.push(format!("  - {} Claude Code {} ({})", repo.ai_sessions.len(), word, format_duration_plain(total)));
+        }
+    }
+
+    // Total summary
+    lines.push(String::new());
+    let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
+    lines.push(format!("Total: ~{} across {} {}", format_duration_plain(summary.total_estimated_time), summary.total_repos, repo_word));
+
+    lines.join("\n")
 }
