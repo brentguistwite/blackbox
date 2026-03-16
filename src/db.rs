@@ -50,6 +50,20 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             CREATE INDEX IF NOT EXISTS idx_review_activity_repo_ts ON review_activity(repo_path, reviewed_at);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_review_activity_dedup ON review_activity(repo_path, pr_number, reviewed_at);"
         ),
+        M::up(
+            "CREATE TABLE IF NOT EXISTS ai_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool TEXT NOT NULL DEFAULT 'claude-code',
+                repo_path TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                turns INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_ai_sessions_repo_ts ON ai_sessions(repo_path, started_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_sessions_dedup ON ai_sessions(session_id);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -94,6 +108,57 @@ pub fn insert_review(
         Ok(_) => Ok(true),  // inserted
         Err(e) => Err(e.into()),
     }
+}
+
+/// Insert a new AI session. Returns Ok(false) if duplicate (session_id already exists).
+pub fn insert_ai_session(
+    conn: &Connection,
+    repo_path: &str,
+    session_id: &str,
+    started_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO ai_sessions (repo_path, session_id, started_at)
+         VALUES (?1, ?2, ?3)",
+        rusqlite::params![repo_path, session_id, started_at],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Mark a session as ended with ended_at timestamp and optional turn count.
+pub fn update_session_ended(
+    conn: &Connection,
+    session_id: &str,
+    ended_at: &str,
+    turns: Option<i64>,
+) -> anyhow::Result<bool> {
+    let rows = conn.execute(
+        "UPDATE ai_sessions SET ended_at = ?1, turns = ?2 WHERE session_id = ?3 AND ended_at IS NULL",
+        rusqlite::params![ended_at, turns, session_id],
+    )?;
+    Ok(rows > 0)
+}
+
+/// Check if a session already exists (by session_id).
+pub fn session_exists(conn: &Connection, session_id: &str) -> anyhow::Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ai_sessions WHERE session_id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Get session IDs that are still active (no ended_at).
+pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT session_id FROM ai_sessions WHERE ended_at IS NULL")?;
+    let ids = stmt.query_map([], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(ids)
 }
 
 pub fn insert_activity(

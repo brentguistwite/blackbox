@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::claude_tracking;
 use crate::config::{self, Config};
 use crate::db;
 use crate::enrichment;
@@ -24,6 +25,9 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
 
         // Collect review activity from gh CLI
         enrichment::collect_reviews(&repos, &conn);
+
+        // Track Claude Code sessions
+        claude_tracking::poll_claude_sessions(&conn, &repos);
 
         std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
     }
