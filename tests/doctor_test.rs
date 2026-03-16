@@ -13,7 +13,8 @@ fn test_doctor_appears_in_help() {
 }
 
 #[test]
-fn test_doctor_no_config_fails() {
+fn test_doctor_no_config_triggers_first_run() {
+    // US-004: doctor with no config should trigger first-run setup, not doctor checks
     let tmp = TempDir::new().unwrap();
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
@@ -26,9 +27,8 @@ fn test_doctor_no_config_fails() {
         .env("XDG_DATA_HOME", &data_dir)
         .arg("doctor")
         .assert()
-        .code(1)
-        .stdout(predicate::str::contains("Config file"))
-        .stdout(predicate::str::contains("Not found"))
+        .success()
+        .stdout(predicate::str::contains("Welcome to blackbox"))
         .stdout(predicate::str::contains("blackbox init"));
 }
 
