@@ -138,6 +138,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Setup => {
             blackbox::setup::run_setup()?;
         }
+        Commands::Live => {
+            blackbox::tui::run_live()?;
+        }
         Commands::Standup { week, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
