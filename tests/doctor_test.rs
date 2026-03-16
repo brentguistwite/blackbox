@@ -29,7 +29,7 @@ fn test_doctor_no_config_triggers_first_run() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Welcome to blackbox"))
-        .stdout(predicate::str::contains("blackbox init"));
+        .stdout(predicate::str::contains("blackbox setup"));
 }
 
 #[test]
