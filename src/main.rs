@@ -51,16 +51,16 @@ fn run_query(
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
-    // First-run detection: redirect to setup if no config exists
+    // First-run detection: redirect to setup wizard if no config exists
     if !blackbox::config::config_exists() && !cli.command.is_exempt_from_config_check() {
         println!("Welcome to blackbox! No config found. Let's get you set up.\n");
-        match blackbox::config::run_init(None, None) {
+        match blackbox::setup::run_setup() {
             Ok(()) => {
                 println!("\nYou're all set! Run your command again to get started.");
                 return Ok(());
             }
             Err(_) => {
-                println!("\nNo worries! Set up manually anytime with: blackbox init");
+                println!("\nNo worries! Set up manually anytime with: blackbox setup");
                 return Ok(());
             }
         }
@@ -121,6 +121,9 @@ fn main() -> anyhow::Result<()> {
             if !all_ok {
                 std::process::exit(1);
             }
+        }
+        Commands::Setup => {
+            blackbox::setup::run_setup()?;
         }
     }
 
