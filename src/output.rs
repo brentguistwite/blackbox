@@ -18,6 +18,7 @@ pub enum OutputFormat {
 pub struct JsonSummary {
     pub period_label: String,
     pub total_commits: usize,
+    pub total_reviews: usize,
     pub total_repos: usize,
     pub total_estimated_minutes: i64,
     pub repos: Vec<JsonRepo>,
@@ -33,6 +34,16 @@ pub struct JsonRepo {
     pub events: Vec<JsonEvent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pr_info: Option<Vec<PrInfo>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reviews: Vec<JsonReview>,
+}
+
+#[derive(Serialize)]
+pub struct JsonReview {
+    pub pr_number: i64,
+    pub pr_title: String,
+    pub action: String,
+    pub reviewed_at: String,
 }
 
 #[derive(Serialize)]
@@ -65,6 +76,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
     let json_summary = JsonSummary {
         period_label: summary.period_label.clone(),
         total_commits: summary.total_commits,
+        total_reviews: summary.total_reviews,
         total_repos: summary.total_repos,
         total_estimated_minutes: summary.total_estimated_time.num_minutes(),
         repos: summary
@@ -88,6 +100,16 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                     })
                     .collect(),
                 pr_info: r.pr_info.clone(),
+                reviews: r
+                    .reviews
+                    .iter()
+                    .map(|rv| JsonReview {
+                        pr_number: rv.pr_number,
+                        pr_title: rv.pr_title.clone(),
+                        action: rv.action.clone(),
+                        reviewed_at: rv.reviewed_at.to_rfc3339(),
+                    })
+                    .collect(),
             })
             .collect(),
     };
@@ -117,6 +139,27 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 repo_estimated_minutes: repo.estimated_time.num_minutes(),
                 pr_number: pr_num.clone(),
                 pr_title: pr_title.clone(),
+            };
+            wtr.serialize(row).expect("CSV serialization should not fail");
+        }
+        // Add review rows
+        for review in &repo.reviews {
+            let action_label = match review.action.as_str() {
+                "APPROVED" => "review_approved",
+                "CHANGES_REQUESTED" => "review_changes_requested",
+                _ => "review_commented",
+            };
+            let row = CsvRow {
+                period: summary.period_label.clone(),
+                repo_name: repo.repo_name.clone(),
+                event_type: action_label.to_string(),
+                branch: String::new(),
+                commit_hash: String::new(),
+                message: format!("PR #{}: {}", review.pr_number, review.pr_title),
+                timestamp: review.reviewed_at.to_rfc3339(),
+                repo_estimated_minutes: repo.estimated_time.num_minutes(),
+                pr_number: review.pr_number.to_string(),
+                pr_title: review.pr_title.clone(),
             };
             wtr.serialize(row).expect("CSV serialization should not fail");
         }
@@ -158,6 +201,14 @@ pub fn format_duration(d: Duration) -> String {
     }
 }
 
+fn review_action_icon(action: &str) -> ColoredString {
+    match action {
+        "APPROVED" => "v".green(),
+        "CHANGES_REQUESTED" => "!".yellow(),
+        _ => "c".cyan(),
+    }
+}
+
 /// Render summary to a String (for testing). No colors when colored override is false.
 pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -177,9 +228,15 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
 
     // Summary line
     let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
+    let review_suffix = if summary.total_reviews > 0 {
+        format!(", {} reviews", summary.total_reviews)
+    } else {
+        String::new()
+    };
     lines.push(format!(
-        "{} commits across {} {} ({})",
+        "{} commits{} across {} {} ({})",
         summary.total_commits,
+        review_suffix,
         summary.total_repos,
         repo_word,
         format_duration(summary.total_estimated_time),
@@ -234,6 +291,27 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                 }
             }
         }
+
+        // Reviews
+        if !repo.reviews.is_empty() {
+            let review_word = if repo.reviews.len() == 1 { "PR" } else { "PRs" };
+            lines.push(format!(
+                "  {} Reviewed {} {}",
+                "~".dimmed(),
+                repo.reviews.len(),
+                review_word,
+            ));
+            for review in &repo.reviews {
+                let icon = review_action_icon(&review.action);
+                lines.push(format!(
+                    "    {} PR #{}: {}",
+                    icon,
+                    review.pr_number,
+                    review.pr_title,
+                ));
+            }
+        }
+
         lines.push(String::new());
     }
 

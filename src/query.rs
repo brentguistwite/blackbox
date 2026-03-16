@@ -13,6 +13,14 @@ pub struct ActivityEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct ReviewInfo {
+    pub pr_number: i64,
+    pub pr_title: String,
+    pub action: String,
+    pub reviewed_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RepoSummary {
     pub repo_path: String,
     pub repo_name: String,
@@ -21,12 +29,14 @@ pub struct RepoSummary {
     pub estimated_time: Duration,
     pub events: Vec<ActivityEvent>,
     pub pr_info: Option<Vec<PrInfo>>,
+    pub reviews: Vec<ReviewInfo>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ActivitySummary {
     pub period_label: String,
     pub total_commits: usize,
+    pub total_reviews: usize,
     pub total_repos: usize,
     pub total_estimated_time: Duration,
     pub repos: Vec<RepoSummary>,
@@ -152,8 +162,21 @@ pub fn query_activity(
             });
     }
 
+    // Query reviews in the same time range
+    let review_map = query_reviews(conn, from, to)?;
+
+    // Collect all repo paths from both git activity and reviews
+    let all_repo_paths: std::collections::BTreeSet<String> = repo_map
+        .keys()
+        .chain(review_map.keys())
+        .cloned()
+        .collect();
+
     let mut repos: Vec<RepoSummary> = Vec::new();
-    for (repo_path, events) in repo_map {
+    for repo_path in all_repo_paths {
+        let events = repo_map.remove(&repo_path).unwrap_or_default();
+        let reviews = review_map.get(&repo_path).cloned().unwrap_or_default();
+
         let repo_name = std::path::Path::new(&repo_path)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -182,8 +205,50 @@ pub fn query_activity(
             estimated_time,
             events,
             pr_info: None,
+            reviews,
         });
     }
 
     Ok(repos)
+}
+
+/// Query review_activity table for a given time range, grouped by repo.
+fn query_reviews(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<BTreeMap<String, Vec<ReviewInfo>>> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, pr_number, pr_title, review_action, reviewed_at
+         FROM review_activity
+         WHERE reviewed_at >= ?1 AND reviewed_at <= ?2
+         ORDER BY repo_path, reviewed_at ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+
+    let mut map: BTreeMap<String, Vec<ReviewInfo>> = BTreeMap::new();
+    for row in rows {
+        let (repo_path, pr_number, pr_title, action, reviewed_at_str) = row?;
+        let reviewed_at = DateTime::parse_from_rfc3339(&reviewed_at_str)?.with_timezone(&Utc);
+        map.entry(repo_path).or_default().push(ReviewInfo {
+            pr_number,
+            pr_title,
+            action,
+            reviewed_at,
+        });
+    }
+
+    Ok(map)
 }

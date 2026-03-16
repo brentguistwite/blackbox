@@ -28,6 +28,7 @@ fn run_query(
     blackbox::enrichment::enrich_with_prs(&mut repos);
 
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
     let total_time = repos
         .iter()
         .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
@@ -35,6 +36,7 @@ fn run_query(
     let summary = ActivitySummary {
         period_label: period_label.to_string(),
         total_commits,
+        total_reviews,
         total_repos: repos.len(),
         total_estimated_time: total_time,
         repos,
