@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 use blackbox::{config, db};
@@ -158,4 +159,59 @@ fn test_smoke_init_load_config_open_db() {
         .arg("--help")
         .assert()
         .success();
+}
+
+#[test]
+fn test_completions_zsh() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["completions", "zsh"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("compdef"))
+        .stdout(predicate::str::contains("blackbox"));
+}
+
+#[test]
+fn test_completions_bash() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["completions", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("complete"))
+        .stdout(predicate::str::contains("blackbox"));
+}
+
+#[test]
+fn test_completions_fish() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["completions", "fish"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("complete"))
+        .stdout(predicate::str::contains("blackbox"));
+}
+
+#[test]
+fn test_completions_covers_subcommands() {
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["completions", "zsh"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for subcmd in ["today", "week", "month", "start", "stop", "status", "init", "completions"] {
+        assert!(stdout.contains(subcmd), "completions should cover '{}' subcommand", subcmd);
+    }
+}
+
+#[test]
+fn test_completions_invalid_shell() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["completions", "nushell"])
+        .assert()
+        .failure();
 }

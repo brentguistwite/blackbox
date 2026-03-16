@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 use crate::output::OutputFormat;
 
 #[derive(Parser)]
@@ -61,5 +62,11 @@ pub enum Commands {
     NotifyDir {
         /// Directory path
         path: String,
+    },
+    /// Generate shell completions
+    Completions {
+        /// Shell type
+        #[arg(value_parser = clap::value_parser!(Shell))]
+        shell: Shell,
     },
 }

@@ -1,6 +1,6 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use blackbox::cli::{Cli, Commands};
 use blackbox::output::OutputFormat;
 use blackbox::query::ActivitySummary;
@@ -57,13 +57,16 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Start => {
             let config = blackbox::config::load_config()?;
-            blackbox::daemon::start_daemon(config)?;
+            let data_dir = blackbox::config::data_dir()?;
+            blackbox::daemon::start_daemon(config, &data_dir)?;
         }
         Commands::Stop => {
-            blackbox::daemon::stop_daemon()?;
+            let data_dir = blackbox::config::data_dir()?;
+            blackbox::daemon::stop_daemon(&data_dir)?;
         }
         Commands::Status => {
-            blackbox::daemon::daemon_status()?;
+            let data_dir = blackbox::config::data_dir()?;
+            blackbox::daemon::daemon_status(&data_dir)?;
         }
         Commands::Today { format } => {
             run_query("Today", blackbox::query::today_range, format)?;
@@ -93,6 +96,10 @@ fn main() -> anyhow::Result<()> {
             let db_path = data_dir.join("blackbox.db");
             let conn = blackbox::db::open_db(&db_path)?;
             blackbox::db::record_directory_presence(&conn, &path)?;
+        }
+        Commands::Completions { shell } => {
+            let mut cmd = Cli::command();
+            clap_complete::aot::generate(shell, &mut cmd, "blackbox", &mut std::io::stdout());
         }
     }
 
