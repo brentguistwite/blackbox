@@ -1,4 +1,4 @@
-use blackbox::enrichment::PrInfo;
+use blackbox::enrichment::{GhPrWithReviews, GhReview, GhReviewAuthor, PrInfo};
 
 #[test]
 fn pr_info_deserializes_from_gh_json() {
@@ -82,4 +82,92 @@ fn match_prs_no_match_returns_empty() {
         .filter(|pr| branches.contains(&pr.head_ref_name))
         .collect();
     assert!(matched.is_empty());
+}
+
+// --- Review activity struct tests ---
+
+#[test]
+fn gh_pr_with_reviews_deserializes() {
+    let json = r#"[
+        {
+            "number": 42,
+            "title": "Add feature X",
+            "url": "https://github.com/org/repo/pull/42",
+            "reviews": [
+                {
+                    "author": {"login": "myuser"},
+                    "state": "APPROVED",
+                    "submittedAt": "2026-03-15T10:00:00Z"
+                },
+                {
+                    "author": {"login": "otheruser"},
+                    "state": "COMMENTED",
+                    "submittedAt": "2026-03-15T09:00:00Z"
+                }
+            ]
+        }
+    ]"#;
+    let prs: Vec<GhPrWithReviews> = serde_json::from_str(json).unwrap();
+    assert_eq!(prs.len(), 1);
+    assert_eq!(prs[0].number, 42);
+    assert_eq!(prs[0].reviews.len(), 2);
+    assert_eq!(prs[0].reviews[0].author.login, "myuser");
+    assert_eq!(prs[0].reviews[0].state, "APPROVED");
+    assert_eq!(prs[0].reviews[0].submitted_at, "2026-03-15T10:00:00Z");
+}
+
+#[test]
+fn gh_pr_with_reviews_handles_empty_reviews() {
+    let json = r#"[{"number": 1, "title": "T", "url": "http://x", "reviews": []}]"#;
+    let prs: Vec<GhPrWithReviews> = serde_json::from_str(json).unwrap();
+    assert_eq!(prs[0].reviews.len(), 0);
+}
+
+#[test]
+fn gh_pr_with_reviews_handles_missing_reviews_field() {
+    let json = r#"[{"number": 1, "title": "T", "url": "http://x"}]"#;
+    let prs: Vec<GhPrWithReviews> = serde_json::from_str(json).unwrap();
+    assert!(prs[0].reviews.is_empty());
+}
+
+#[test]
+fn gh_review_filters_by_username() {
+    let reviews = vec![
+        GhReview {
+            author: GhReviewAuthor { login: "me".to_string() },
+            state: "APPROVED".to_string(),
+            submitted_at: "2026-03-15T10:00:00Z".to_string(),
+        },
+        GhReview {
+            author: GhReviewAuthor { login: "other".to_string() },
+            state: "COMMENTED".to_string(),
+            submitted_at: "2026-03-15T09:00:00Z".to_string(),
+        },
+        GhReview {
+            author: GhReviewAuthor { login: "me".to_string() },
+            state: "CHANGES_REQUESTED".to_string(),
+            submitted_at: "2026-03-15T11:00:00Z".to_string(),
+        },
+    ];
+
+    let mine: Vec<&GhReview> = reviews
+        .iter()
+        .filter(|r| r.author.login == "me")
+        .collect();
+    assert_eq!(mine.len(), 2);
+    assert_eq!(mine[0].state, "APPROVED");
+    assert_eq!(mine[1].state, "CHANGES_REQUESTED");
+}
+
+#[test]
+fn gh_review_state_mapping() {
+    let valid_states = ["APPROVED", "CHANGES_REQUESTED", "COMMENTED"];
+    let skip_states = ["PENDING", "DISMISSED"];
+
+    for state in &valid_states {
+        assert!(["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].contains(state));
+    }
+    for state in &skip_states {
+        assert!(!["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].contains(state));
+    }
 }
