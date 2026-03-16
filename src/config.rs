@@ -26,6 +26,14 @@ pub struct Config {
     pub session_gap_minutes: u64,
     #[serde(default = "default_first_commit")]
     pub first_commit_minutes: u64,
+    #[serde(default)]
+    pub llm_provider: Option<String>,
+    #[serde(default)]
+    pub llm_api_key: Option<String>,
+    #[serde(default)]
+    pub llm_model: Option<String>,
+    #[serde(default)]
+    pub llm_base_url: Option<String>,
 }
 
 impl Default for Config {
@@ -35,6 +43,10 @@ impl Default for Config {
             poll_interval_secs: default_poll_interval(),
             session_gap_minutes: default_session_gap(),
             first_commit_minutes: default_first_commit(),
+            llm_provider: None,
+            llm_api_key: None,
+            llm_model: None,
+            llm_base_url: None,
         }
     }
 }

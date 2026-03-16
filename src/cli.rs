@@ -31,18 +31,27 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
     },
     /// Show this week's git activity
     Week {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
     },
     /// Show this month's git activity
     Month {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
     },
     /// Register as OS service (launchd/systemd)
     Install,
@@ -78,6 +87,9 @@ pub enum Commands {
         /// Show this week's activity instead of today
         #[arg(long)]
         week: bool,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
     },
 }
 

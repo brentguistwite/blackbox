@@ -70,3 +70,42 @@ fn test_tilde_expansion() {
     assert!(!expanded.starts_with("~"), "Path should not start with ~");
     assert!(expanded.is_absolute(), "Path should be absolute after expansion");
 }
+
+#[test]
+fn test_parse_llm_fields() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+        llm_provider = "anthropic"
+        llm_api_key = "sk-test-123"
+        llm_model = "claude-sonnet-4-20250514"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.llm_provider.as_deref(), Some("anthropic"));
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("sk-test-123"));
+    assert_eq!(cfg.llm_model.as_deref(), Some("claude-sonnet-4-20250514"));
+    assert!(cfg.llm_base_url.is_none());
+}
+
+#[test]
+fn test_parse_llm_fields_defaults_to_none() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.llm_provider.is_none());
+    assert!(cfg.llm_api_key.is_none());
+    assert!(cfg.llm_model.is_none());
+    assert!(cfg.llm_base_url.is_none());
+}
+
+#[test]
+fn test_parse_llm_base_url() {
+    let toml_str = r#"
+        watch_dirs = []
+        llm_provider = "openai"
+        llm_api_key = "key"
+        llm_base_url = "http://localhost:11434"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.llm_base_url.as_deref(), Some("http://localhost:11434"));
+}
