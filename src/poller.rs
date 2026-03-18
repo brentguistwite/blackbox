@@ -48,6 +48,25 @@ fn poll_all_repos(
     }
 }
 
+/// Remove stale worktree entries from repo_states.
+/// A worktree is stale if is_worktree() returns None (deleted .git file) or
+/// the resolved gitdir HEAD no longer exists.
+pub fn remove_stale_worktrees(repo_states: &mut HashMap<PathBuf, RepoState>) -> Vec<PathBuf> {
+    let stale: Vec<PathBuf> = repo_states
+        .iter()
+        .filter(|(path, state)| {
+            // Only check worktrees (main_repo_path != scanned path)
+            state.main_repo_path != **path && repo_scanner::is_worktree(path).is_none()
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in &stale {
+        log::warn!("Stale worktree removed: {}", path.display());
+        repo_states.remove(path);
+    }
+    stale
+}
+
 /// Full scan: re-discover repos, poll all, collect reviews, track sessions.
 fn full_scan(
     config: &Config,
@@ -93,6 +112,9 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                     log::warn!("Error polling {}: {}", repo_path.display(), e);
                 }
             }
+
+            // Clean up stale worktrees
+            remove_stale_worktrees(&mut repo_states);
 
             // Periodic full scan for missed events + new repos
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
