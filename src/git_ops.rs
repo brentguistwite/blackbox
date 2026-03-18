@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use rusqlite::Connection;
@@ -9,15 +9,20 @@ use crate::db;
 pub struct RepoState {
     pub last_commit_oid: Option<git2::Oid>,
     pub last_head_branch: Option<String>,
+    /// For regular repos, equals the scanned path. For worktrees, equals the main repo root.
+    pub main_repo_path: PathBuf,
 }
 
+/// Poll a repo for git activity.
+/// `repo_path` = filesystem path for git2 to open (worktree or regular).
+/// `db_repo_path` = path string for DB writes (always main repo path).
 pub fn poll_repo(
     repo_path: &Path,
+    db_repo_path: &str,
     state: &mut RepoState,
     conn: &Connection,
 ) -> anyhow::Result<()> {
     let repo = Repository::open(repo_path)?;
-    let repo_path_str = repo_path.to_string_lossy();
 
     // Get current HEAD info
     let head = repo.head()?;
@@ -35,7 +40,7 @@ pub fn poll_repo(
             let ts = chrono::Utc::now().to_rfc3339();
             db::insert_activity(
                 conn,
-                &repo_path_str,
+                db_repo_path,
                 "branch_switch",
                 current_branch.as_deref(),
                 None,
@@ -79,7 +84,7 @@ pub fn poll_repo(
                 let source_branch = resolve_source_branch(&repo, &commit);
                 db::insert_activity(
                     conn,
-                    &repo_path_str,
+                    db_repo_path,
                     "merge",
                     current_branch.as_deref(),
                     Some(&source_branch),
@@ -91,7 +96,7 @@ pub fn poll_repo(
             } else {
                 db::insert_activity(
                     conn,
-                    &repo_path_str,
+                    db_repo_path,
                     "commit",
                     current_branch.as_deref(),
                     None,
