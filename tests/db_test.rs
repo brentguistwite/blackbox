@@ -1,4 +1,5 @@
 use blackbox::db;
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
@@ -367,6 +368,200 @@ fn test_get_active_sessions() {
     assert_eq!(active.len(), 2);
     assert!(active.contains(&"active-1".to_string()));
     assert!(active.contains(&"active-2".to_string()));
+}
+
+#[test]
+fn test_activity_dedup_unique_index_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let idx: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_activity_repo_commit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(idx.contains("UNIQUE"));
+    assert!(idx.contains("commit_hash IS NOT NULL"));
+}
+
+#[test]
+fn test_insert_activity_commit_dedup_same_repo() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_activity(
+        &conn, "/tmp/repo", "commit", Some("main"), None,
+        Some("abc123"), Some("Alice"), Some("fix bug"), "2026-03-18T10:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Same repo + same commit_hash → ignored
+    let second = db::insert_activity(
+        &conn, "/tmp/repo", "commit", Some("main"), None,
+        Some("abc123"), Some("Alice"), Some("fix bug"), "2026-03-18T10:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_insert_activity_commit_different_repos_both_kept() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_activity(
+        &conn, "/repo/a", "commit", Some("main"), None,
+        Some("abc123"), Some("Alice"), Some("fix"), "2026-03-18T10:00:00Z",
+    ).unwrap();
+
+    db::insert_activity(
+        &conn, "/repo/b", "commit", Some("main"), None,
+        Some("abc123"), Some("Alice"), Some("fix"), "2026-03-18T10:00:00Z",
+    ).unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn test_branch_switch_never_blocked() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Multiple branch_switch events (NULL commit_hash) should all insert
+    for _ in 0..3 {
+        let inserted = db::insert_activity(
+            &conn, "/tmp/repo", "branch_switch", Some("develop"), None,
+            None, None, None, "2026-03-18T10:00:00Z",
+        ).unwrap();
+        assert!(inserted);
+    }
+
+    let count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE event_type = 'branch_switch'",
+            [], |r| r.get(0),
+        ).unwrap();
+    assert_eq!(count, 3);
+}
+
+#[test]
+fn test_migration_dedup_existing_rows() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+
+    // Create DB with only the first 5 migrations (before dedup migration)
+    {
+        let mut conn = Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        let migrations = rusqlite_migration::Migrations::new(vec![
+            rusqlite_migration::M::up(
+                "CREATE TABLE IF NOT EXISTS git_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_path TEXT NOT NULL,
+                    event_type TEXT NOT NULL CHECK(event_type IN ('commit','branch_switch','merge')),
+                    branch TEXT,
+                    commit_hash TEXT,
+                    author TEXT,
+                    message TEXT,
+                    timestamp TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_git_activity_repo_ts ON git_activity(repo_path, timestamp);"
+            ),
+            rusqlite_migration::M::up("ALTER TABLE git_activity ADD COLUMN source_branch TEXT;"),
+            rusqlite_migration::M::up(
+                "CREATE TABLE IF NOT EXISTS directory_presence (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_path TEXT NOT NULL,
+                    entered_at TEXT NOT NULL,
+                    left_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_dir_presence_repo ON directory_presence(repo_path, entered_at);"
+            ),
+            rusqlite_migration::M::up(
+                "CREATE TABLE IF NOT EXISTS review_activity (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo_path TEXT NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    pr_title TEXT NOT NULL,
+                    pr_url TEXT NOT NULL,
+                    review_action TEXT NOT NULL CHECK(review_action IN ('APPROVED','CHANGES_REQUESTED','COMMENTED')),
+                    reviewed_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_review_activity_repo_ts ON review_activity(repo_path, reviewed_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_review_activity_dedup ON review_activity(repo_path, pr_number, reviewed_at);"
+            ),
+            rusqlite_migration::M::up(
+                "CREATE TABLE IF NOT EXISTS ai_sessions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool TEXT NOT NULL DEFAULT 'claude-code',
+                    repo_path TEXT NOT NULL,
+                    session_id TEXT NOT NULL UNIQUE,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    turns INTEGER,
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+                CREATE INDEX IF NOT EXISTS idx_ai_sessions_repo_ts ON ai_sessions(repo_path, started_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_sessions_dedup ON ai_sessions(session_id);"
+            ),
+        ]);
+        migrations.to_latest(&mut conn).unwrap();
+
+        // Insert duplicate rows (same repo_path + commit_hash)
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('/repo', 'commit', 'main', 'aaa', 'dev', 'msg', '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('/repo', 'commit', 'main', 'aaa', 'dev', 'msg', '2026-01-01T00:00:00Z')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('/repo', 'commit', 'main', 'bbb', 'dev', 'msg2', '2026-01-01T01:00:00Z')",
+            [],
+        ).unwrap();
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM git_activity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 3); // 2 dupes of aaa + 1 bbb
+    }
+
+    // Now open with full migrations (includes dedup)
+    let conn = db::open_db(&db_path).unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM git_activity", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2); // dedup removed 1 duplicate aaa, kept bbb
+}
+
+#[test]
+fn test_migration_idempotent_with_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let _conn1 = db::open_db(&db_path).unwrap();
+    drop(_conn1);
+    // Second open should not error (dedup migration + index creation are safe)
+    let _conn2 = db::open_db(&db_path).unwrap();
 }
 
 #[test]
