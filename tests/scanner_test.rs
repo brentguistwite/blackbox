@@ -1,4 +1,6 @@
-use blackbox::repo_scanner::{auto_scan_repos_from, discover_repos, is_valid_gitdir_file};
+use blackbox::repo_scanner::{
+    auto_scan_repos_from, discover_repos, is_valid_gitdir_file, is_worktree, resolve_main_repo,
+};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -313,4 +315,130 @@ fn test_fast_path_discover_repos_limited_via_auto_scan() {
     assert!(code_entry.is_some(), "should find code dir");
     assert_eq!(code_entry.unwrap().1.len(), 1);
     assert_eq!(code_entry.unwrap().1[0], repo_path);
+}
+
+// --- US-018a: resolve_main_repo + is_worktree ---
+
+/// Helper: create a main repo with an initial commit and a manually-crafted worktree.
+/// Returns (main_repo_path, worktree_path).
+fn create_repo_with_worktree(tmp: &std::path::Path, wt_name: &str) -> (PathBuf, PathBuf) {
+    let main_path = tmp.join("main_repo");
+    let repo = git2::Repository::init(&main_path).unwrap();
+    let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+    let tree_id = repo.index().unwrap().write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
+
+    let wt_path = tmp.join(wt_name);
+    std::fs::create_dir_all(&wt_path).unwrap();
+    let wt_gitdir = main_path.join(format!(".git/worktrees/{}", wt_name));
+    std::fs::create_dir_all(&wt_gitdir).unwrap();
+    std::fs::write(wt_gitdir.join("HEAD"), "ref: refs/heads/feat\n").unwrap();
+    std::fs::write(wt_gitdir.join("commondir"), "../..\n").unwrap();
+    // Absolute gitdir pointer
+    std::fs::write(
+        wt_path.join(".git"),
+        format!("gitdir: {}\n", wt_gitdir.display()),
+    )
+    .unwrap();
+
+    (main_path, wt_path)
+}
+
+#[test]
+fn test_resolve_main_repo_absolute_gitdir() {
+    let tmp = TempDir::new().unwrap();
+    let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
+    let resolved = resolve_main_repo(&wt_path).unwrap();
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        main_path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn test_resolve_main_repo_relative_gitdir() {
+    let tmp = TempDir::new().unwrap();
+    let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
+    // Overwrite .git file with relative path (wt is sibling of main_repo)
+    std::fs::write(
+        wt_path.join(".git"),
+        "gitdir: ../main_repo/.git/worktrees/feat\n",
+    )
+    .unwrap();
+    let resolved = resolve_main_repo(&wt_path).unwrap();
+    assert_eq!(
+        resolved.canonicalize().unwrap(),
+        main_path.canonicalize().unwrap()
+    );
+}
+
+#[test]
+fn test_resolve_main_repo_nonexistent_gitdir() {
+    let tmp = TempDir::new().unwrap();
+    let wt_path = tmp.path().join("bad_wt");
+    std::fs::create_dir_all(&wt_path).unwrap();
+    std::fs::write(
+        wt_path.join(".git"),
+        "gitdir: /nonexistent/path/.git/worktrees/x\n",
+    )
+    .unwrap();
+    assert!(resolve_main_repo(&wt_path).is_err());
+}
+
+#[test]
+fn test_resolve_main_repo_malformed_git_file() {
+    let tmp = TempDir::new().unwrap();
+    let wt_path = tmp.path().join("bad_wt");
+    std::fs::create_dir_all(&wt_path).unwrap();
+    std::fs::write(wt_path.join(".git"), "garbage content\n").unwrap();
+    assert!(resolve_main_repo(&wt_path).is_err());
+}
+
+#[test]
+fn test_resolve_main_repo_validation_failure() {
+    let tmp = TempDir::new().unwrap();
+    // Create a gitdir structure but no .git dir at the resolved "main repo" root
+    let fake_root = tmp.path().join("not_a_repo");
+    let wt_gitdir = fake_root.join(".git/worktrees/feat");
+    std::fs::create_dir_all(&wt_gitdir).unwrap();
+    // Create a .git FILE (not dir) at fake_root so canonicalize succeeds but validation fails
+    // Actually .git is already a dir since we created .git/worktrees/feat... so this validates.
+    // Instead, put the worktree gitdir somewhere that doesn't resolve to a real repo.
+    let dangling_gitdir = tmp.path().join("dangling/nested/deep");
+    std::fs::create_dir_all(&dangling_gitdir).unwrap();
+    let wt_path = tmp.path().join("wt");
+    std::fs::create_dir_all(&wt_path).unwrap();
+    std::fs::write(
+        wt_path.join(".git"),
+        format!("gitdir: {}\n", dangling_gitdir.display()),
+    )
+    .unwrap();
+    // 3x .parent() from dangling/nested/deep → tmp root, which has no .git dir
+    assert!(resolve_main_repo(&wt_path).is_err());
+}
+
+#[test]
+fn test_is_worktree_regular_repo() {
+    let tmp = TempDir::new().unwrap();
+    init_repo(tmp.path());
+    assert!(is_worktree(tmp.path()).is_none());
+}
+
+#[test]
+fn test_is_worktree_actual_worktree() {
+    let tmp = TempDir::new().unwrap();
+    let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
+    let resolved = is_worktree(&wt_path);
+    assert!(resolved.is_some());
+    let gitdir = resolved.unwrap();
+    // Should point to main_repo/.git/worktrees/feat
+    assert_eq!(
+        gitdir.canonicalize().unwrap(),
+        main_path
+            .join(".git/worktrees/feat")
+            .canonicalize()
+            .unwrap()
+    );
 }
