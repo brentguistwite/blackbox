@@ -15,6 +15,23 @@ use crate::watcher::RepoWatcher;
 /// Full-scan interval when watcher is active (30 min).
 const FULL_SCAN_SECS: u64 = 30 * 60;
 
+/// Ensure a RepoState entry exists for a repo path, resolving worktrees.
+/// For worktrees, main_repo_path = resolved main repo root.
+/// For regular repos, main_repo_path = repo_path.
+fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoState>) {
+    repo_states.entry(repo_path.clone()).or_insert_with(|| {
+        let main_repo_path = if repo_scanner::is_worktree(repo_path).is_some() {
+            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.clone())
+        } else {
+            repo_path.clone()
+        };
+        RepoState {
+            main_repo_path,
+            ..Default::default()
+        }
+    });
+}
+
 /// Poll all repos for git activity.
 fn poll_all_repos(
     repos: &[PathBuf],
@@ -22,8 +39,10 @@ fn poll_all_repos(
     conn: &Connection,
 ) {
     for repo_path in repos {
-        let state = repo_states.entry(repo_path.clone()).or_default();
-        if let Err(e) = git_ops::poll_repo(repo_path, state, conn) {
+        ensure_state(repo_path, repo_states);
+        let state = repo_states.get_mut(repo_path).unwrap();
+        let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
+        if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn) {
             log::warn!("Error polling {}: {}", repo_path.display(), e);
         }
     }
@@ -67,8 +86,10 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
             let changed = watcher.recv_events(&mut debounce_map, Duration::from_secs(1));
             for repo_path in &changed {
                 log::info!("Detected change in {}", repo_path.display());
-                let state = repo_states.entry(repo_path.clone()).or_default();
-                if let Err(e) = git_ops::poll_repo(repo_path, state, &conn) {
+                ensure_state(repo_path, &mut repo_states);
+                let state = repo_states.get_mut(repo_path).unwrap();
+                let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
+                if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn) {
                     log::warn!("Error polling {}: {}", repo_path.display(), e);
                 }
             }
