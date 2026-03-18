@@ -5,7 +5,7 @@ use std::path::PathBuf;
 fn test_default_config() {
     let cfg = Config::default();
     assert!(cfg.watch_dirs.is_empty());
-    assert_eq!(cfg.poll_interval_secs, 300);
+    assert_eq!(cfg.poll_interval_secs, 1800);
 }
 
 #[test]
@@ -26,7 +26,7 @@ fn test_parse_missing_fields_uses_defaults() {
         watch_dirs = ["/tmp/code"]
     "#;
     let cfg: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.poll_interval_secs, 300);
+    assert_eq!(cfg.poll_interval_secs, 1800);
     assert_eq!(cfg.watch_dirs.len(), 1);
 }
 

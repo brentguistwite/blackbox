@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 fn default_poll_interval() -> u64 {
-    300
+    1800
 }
 fn default_watch_dirs() -> Vec<PathBuf> {
     vec![]

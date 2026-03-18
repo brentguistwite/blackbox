@@ -5,14 +5,6 @@ use crate::db;
 use crate::repo_scanner;
 use crate::shell_hook;
 
-const POLL_INTERVAL_OPTIONS: &[(u64, &str)] = &[
-    (60, "1 minute"),
-    (120, "2 minutes"),
-    (300, "5 minutes (recommended)"),
-    (600, "10 minutes"),
-    (900, "15 minutes"),
-];
-
 /// Detect the user's current shell from $SHELL env var.
 fn detect_shell() -> Option<String> {
     std::env::var("SHELL").ok().and_then(|s| {
@@ -105,22 +97,7 @@ pub fn run_setup() -> anyhow::Result<()> {
         println!("No directories selected — you can edit config.toml later.");
     }
 
-    // === Step 2: Poll interval ===
-    let interval_labels: Vec<&str> = POLL_INTERVAL_OPTIONS.iter().map(|(_, l)| *l).collect();
-    let default_idx = POLL_INTERVAL_OPTIONS
-        .iter()
-        .position(|(v, _)| *v == 300)
-        .unwrap_or(2);
-
-    let interval_idx = dialoguer::Select::new()
-        .with_prompt("Poll interval")
-        .items(&interval_labels)
-        .default(default_idx)
-        .interact()?;
-
-    let poll_interval = POLL_INTERVAL_OPTIONS[interval_idx].0;
-
-    // === Step 3: Shell hook ===
+    // === Step 2: Shell hook ===
     let mut hook_installed = false;
     if let Some(shell) = detect_shell()
         && let Some(rc_path) = rc_file_for_shell(&shell)
@@ -197,7 +174,6 @@ pub fn run_setup() -> anyhow::Result<()> {
     // === Write config ===
     let config = Config {
         watch_dirs: selected_dirs.clone(),
-        poll_interval_secs: poll_interval,
         ..Config::default()
     };
 
@@ -241,10 +217,6 @@ pub fn run_setup() -> anyhow::Result<()> {
         } else {
             format!("{}", selected_dirs.len())
         }
-    );
-    println!(
-        "  Poll interval: {}",
-        POLL_INTERVAL_OPTIONS[interval_idx].1
     );
     println!(
         "  Shell hook: {}",
