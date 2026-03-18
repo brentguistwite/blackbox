@@ -8,33 +8,29 @@ const WELL_KNOWN_DIRS: &[&str] = &[
     "Documents", "code", "projects", "src", "dev", "repos", "work", "github",
 ];
 
+/// Check if a .git file is a valid worktree pointer (first line starts with 'gitdir:')
+pub fn is_valid_gitdir_file(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|c| c.lines().next().map(|l| l.starts_with("gitdir:")))
+        .unwrap_or(false)
+}
+
 pub fn discover_repos(watch_dirs: &[PathBuf]) -> Vec<PathBuf> {
     let mut repos = Vec::new();
     for dir in watch_dirs {
-        for entry in WalkDir::new(dir)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_string_lossy();
-                !SKIP_DIRS.contains(&name.as_ref())
-            })
-        {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if entry.file_type().is_dir() && entry.file_name() == ".git" {
-                if let Some(parent) = entry.path().parent() {
-                    // Skip bare repos
-                    match git2::Repository::open(parent) {
-                        Ok(repo) if !repo.is_bare() => {
-                            repos.push(parent.to_path_buf());
-                        }
-                        _ => {}
-                    }
-                }
-            }
+        // Fast path: dir is itself a repo root
+        let git_path = dir.join(".git");
+        if git_path.is_dir() {
+            repos.push(dir.clone());
+            continue;
         }
+        if git_path.is_file() && is_valid_gitdir_file(&git_path) {
+            repos.push(dir.clone());
+            continue;
+        }
+        // Recursive WalkDir scan
+        scan_repos_walkdir(dir, None, &mut repos);
     }
     repos
 }
@@ -101,10 +97,26 @@ pub fn auto_scan_repos_from(home: &Path) -> Vec<(PathBuf, Vec<PathBuf>)> {
 }
 
 fn discover_repos_limited(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
+    // Fast path: dir is itself a repo root
+    let git_path = dir.join(".git");
+    if git_path.is_dir() {
+        return vec![dir.to_path_buf()];
+    }
+    if git_path.is_file() && is_valid_gitdir_file(&git_path) {
+        return vec![dir.to_path_buf()];
+    }
+    // Recursive WalkDir scan
     let mut repos = Vec::new();
-    for entry in WalkDir::new(dir)
-        .max_depth(max_depth)
-        .follow_links(false)
+    scan_repos_walkdir(dir, Some(max_depth), &mut repos);
+    repos
+}
+
+fn scan_repos_walkdir(dir: &Path, max_depth: Option<usize>, repos: &mut Vec<PathBuf>) {
+    let mut walker = WalkDir::new(dir).follow_links(false);
+    if let Some(depth) = max_depth {
+        walker = walker.max_depth(depth);
+    }
+    for entry in walker
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
@@ -115,8 +127,12 @@ fn discover_repos_limited(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
             Ok(e) => e,
             Err(_) => continue,
         };
-        if entry.file_type().is_dir() && entry.file_name() == ".git" {
-            if let Some(parent) = entry.path().parent() {
+        if entry.file_name() == ".git" {
+            let is_repo = entry.file_type().is_dir()
+                || (entry.file_type().is_file() && is_valid_gitdir_file(entry.path()));
+            if is_repo
+                && let Some(parent) = entry.path().parent()
+            {
                 match git2::Repository::open(parent) {
                     Ok(repo) if !repo.is_bare() => {
                         repos.push(parent.to_path_buf());
@@ -126,5 +142,4 @@ fn discover_repos_limited(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
             }
         }
     }
-    repos
 }
