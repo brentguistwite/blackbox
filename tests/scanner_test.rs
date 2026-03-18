@@ -1,5 +1,6 @@
 use blackbox::repo_scanner::{
     auto_scan_repos_from, discover_repos, is_valid_gitdir_file, is_worktree, resolve_main_repo,
+    scan_directory,
 };
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -441,4 +442,39 @@ fn test_is_worktree_actual_worktree() {
             .canonicalize()
             .unwrap()
     );
+}
+
+// --- US-015b: scan_directory ---
+
+#[test]
+fn test_scan_directory_finds_repos() {
+    let tmp = TempDir::new().unwrap();
+    init_repo(&tmp.path().join("repo_a"));
+    init_repo(&tmp.path().join("repo_b"));
+    let repos = scan_directory(tmp.path());
+    assert_eq!(repos.len(), 2);
+}
+
+#[test]
+fn test_scan_directory_finds_nested_repos() {
+    let tmp = TempDir::new().unwrap();
+    init_repo(&tmp.path().join("deep/nested/repo"));
+    let repos = scan_directory(tmp.path());
+    assert_eq!(repos.len(), 1);
+}
+
+#[test]
+fn test_scan_directory_empty() {
+    let tmp = TempDir::new().unwrap();
+    let repos = scan_directory(tmp.path());
+    assert!(repos.is_empty());
+}
+
+#[test]
+fn test_scan_directory_is_repo_root() {
+    let tmp = TempDir::new().unwrap();
+    init_repo(tmp.path());
+    let repos = scan_directory(tmp.path());
+    assert_eq!(repos.len(), 1);
+    assert_eq!(repos[0], tmp.path().to_path_buf());
 }

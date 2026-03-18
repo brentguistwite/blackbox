@@ -109,3 +109,72 @@ fn test_parse_llm_base_url() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.llm_base_url.as_deref(), Some("http://localhost:11434"));
 }
+
+// --- US-015b: scan_dirs ---
+
+#[test]
+fn test_parse_scan_dirs() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/repo1"]
+        scan_dirs = ["/home/user/code", "/home/user/projects"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    let dirs = cfg.scan_dirs.unwrap();
+    assert_eq!(dirs.len(), 2);
+    assert_eq!(dirs[0], PathBuf::from("/home/user/code"));
+    assert_eq!(dirs[1], PathBuf::from("/home/user/projects"));
+}
+
+#[test]
+fn test_parse_scan_dirs_defaults_to_none() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.scan_dirs.is_none());
+}
+
+#[test]
+fn test_parse_scan_dirs_empty_array() {
+    let toml_str = r#"
+        watch_dirs = []
+        scan_dirs = []
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.scan_dirs.unwrap().len(), 0);
+}
+
+#[test]
+fn test_expand_paths_scan_dirs_tilde() {
+    let mut cfg = Config {
+        watch_dirs: vec![],
+        scan_dirs: Some(vec![PathBuf::from("~/code"), PathBuf::from("~/projects")]),
+        ..Config::default()
+    };
+    cfg.expand_paths();
+    let dirs = cfg.scan_dirs.unwrap();
+    for d in &dirs {
+        assert!(!d.starts_with("~"), "scan_dir should not start with ~");
+        assert!(d.is_absolute(), "scan_dir should be absolute after expansion");
+    }
+}
+
+#[test]
+fn test_expand_paths_scan_dirs_none() {
+    let mut cfg = Config {
+        watch_dirs: vec![PathBuf::from("~/code")],
+        scan_dirs: None,
+        ..Config::default()
+    };
+    cfg.expand_paths();
+    // Should not panic; scan_dirs stays None
+    assert!(cfg.scan_dirs.is_none());
+    // watch_dirs still expanded
+    assert!(!cfg.watch_dirs[0].starts_with("~"));
+}
+
+#[test]
+fn test_default_config_scan_dirs_none() {
+    let cfg = Config::default();
+    assert!(cfg.scan_dirs.is_none());
+}
