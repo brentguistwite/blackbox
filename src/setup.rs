@@ -5,15 +5,33 @@ use crate::db;
 use crate::repo_scanner;
 use crate::shell_hook;
 
-/// Detect the user's current shell from $SHELL env var.
-fn detect_shell() -> Option<String> {
-    std::env::var("SHELL").ok().and_then(|s| {
-        let name = s.rsplit('/').next()?.to_string();
-        match name.as_str() {
-            "zsh" | "bash" | "fish" => Some(name),
-            _ => None,
+/// Shell detection result for setup wizard.
+#[derive(Debug)]
+pub enum ShellDetection {
+    Supported { name: String, rc_path: PathBuf },
+    Unsupported(String),
+    NotSet,
+}
+
+/// Detect the user's shell from $SHELL and classify it.
+pub fn detect_shell_type() -> ShellDetection {
+    let shell_var = std::env::var("SHELL").ok();
+    detect_shell_type_from(shell_var.as_deref())
+}
+
+/// Testable core: classify a shell variable value.
+pub fn detect_shell_type_from(shell_var: Option<&str>) -> ShellDetection {
+    match shell_var {
+        None => ShellDetection::NotSet,
+        Some("") => ShellDetection::NotSet,
+        Some(s) => {
+            let name = s.rsplit('/').next().unwrap_or(s).to_string();
+            match rc_file_for_shell(&name) {
+                Some(rc_path) => ShellDetection::Supported { name, rc_path },
+                None => ShellDetection::Unsupported(name),
+            }
         }
-    })
+    }
 }
 
 /// Get the rc file path for a given shell.
@@ -30,6 +48,35 @@ fn rc_file_for_shell(shell: &str) -> Option<PathBuf> {
 /// The hook eval line to add to the rc file.
 fn hook_eval_line(shell: &str) -> String {
     format!("eval \"$(blackbox hook {})\"", shell)
+}
+
+/// Descriptive comment block for rc file.
+pub fn hook_comment_block(shell: &str) -> String {
+    format!(
+        "# blackbox — tracks which repos you're working in for time estimation\n\
+         # remove this line to disable, or run: blackbox setup\n\
+         {}",
+        hook_eval_line(shell)
+    )
+}
+
+/// Message for unsupported shell detection.
+pub fn unsupported_shell_message(shell_name: &str) -> String {
+    format!(
+        "Detected shell: {}\n\
+         Auto-install only supports zsh, bash, and fish.\n\
+         To set up manually, add this to your shell config:\n  \
+         eval \"$(blackbox hook {})\"",
+        shell_name, shell_name
+    )
+}
+
+/// Message when $SHELL is not set.
+pub fn notset_shell_message() -> String {
+    "Could not detect your shell ($SHELL is not set).\n\
+     Set $SHELL or manually add the hook to your shell config:\n  \
+     eval \"$(blackbox hook <your-shell>)\""
+        .to_string()
 }
 
 /// Run the full interactive setup wizard.
@@ -99,51 +146,57 @@ pub fn run_setup() -> anyhow::Result<()> {
 
     // === Step 2: Shell hook ===
     let mut hook_installed = false;
-    if let Some(shell) = detect_shell()
-        && let Some(rc_path) = rc_file_for_shell(&shell)
-    {
-        let line = hook_eval_line(&shell);
+    match detect_shell_type() {
+        ShellDetection::Supported { name, rc_path } => {
+            let line = hook_eval_line(&name);
 
-        // Check if already present
-        let already = rc_path
-            .exists()
-            .then(|| std::fs::read_to_string(&rc_path).unwrap_or_default())
-            .map(|c| c.contains("blackbox hook"))
-            .unwrap_or(false);
+            // Check if already present
+            let already = rc_path
+                .exists()
+                .then(|| std::fs::read_to_string(&rc_path).unwrap_or_default())
+                .map(|c| c.contains("blackbox hook"))
+                .unwrap_or(false);
 
-        if already {
-            println!("\nShell hook already in {}", rc_path.display());
-            hook_installed = true;
-        } else {
-            println!("\nThis line will be added to {}:", rc_path.display());
-            println!("  {}", line);
-
-            let install_hook = dialoguer::Confirm::new()
-                .with_prompt("Install shell hook?")
-                .default(true)
-                .interact()?;
-
-            if install_hook {
-                let hook_script = shell_hook::generate_hook(&shell)?;
-                let mut contents = if rc_path.exists() {
-                    std::fs::read_to_string(&rc_path)?
-                } else {
-                    String::new()
-                };
-                if !contents.ends_with('\n') && !contents.is_empty() {
-                    contents.push('\n');
-                }
-                contents.push_str(&format!("\n# blackbox directory tracking\n{}\n", line));
-                // We don't inline the hook script — eval loads it at shell startup
-                let _ = hook_script; // just validated it generates ok
-                std::fs::write(&rc_path, contents)?;
-                println!("  Added to {}", rc_path.display());
+            if already {
+                println!("\nShell hook already in {}", rc_path.display());
                 hook_installed = true;
+            } else {
+                println!("\nThis line will be added to {}:", rc_path.display());
+                println!("  {}", line);
+
+                let install_hook = dialoguer::Confirm::new()
+                    .with_prompt("Install shell hook?")
+                    .default(true)
+                    .interact()?;
+
+                if install_hook {
+                    let hook_script = shell_hook::generate_hook(&name)?;
+                    let mut contents = if rc_path.exists() {
+                        std::fs::read_to_string(&rc_path)?
+                    } else {
+                        String::new()
+                    };
+                    if !contents.ends_with('\n') && !contents.is_empty() {
+                        contents.push('\n');
+                    }
+                    contents.push_str(&format!("\n{}\n", hook_comment_block(&name)));
+                    // We don't inline the hook script — eval loads it at shell startup
+                    let _ = hook_script; // just validated it generates ok
+                    std::fs::write(&rc_path, contents)?;
+                    println!("  Added to {}", rc_path.display());
+                    hook_installed = true;
+                }
             }
+        }
+        ShellDetection::Unsupported(shell_name) => {
+            println!("\n{}", unsupported_shell_message(&shell_name));
+        }
+        ShellDetection::NotSet => {
+            println!("\n{}", notset_shell_message());
         }
     }
 
-    // === Step 4: OS service ===
+    // === Step 3: OS service ===
     let mut service_registered = false;
     let os_name = if cfg!(target_os = "macos") {
         "launchd"
