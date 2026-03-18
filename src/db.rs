@@ -64,6 +64,13 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             CREATE INDEX IF NOT EXISTS idx_ai_sessions_repo_ts ON ai_sessions(repo_path, started_at);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_sessions_dedup ON ai_sessions(session_id);"
         ),
+        // US-018b: dedup existing rows, add partial unique index on (repo_path, commit_hash)
+        M::up(
+            "DELETE FROM git_activity WHERE commit_hash IS NOT NULL AND id NOT IN (
+                SELECT MIN(id) FROM git_activity WHERE commit_hash IS NOT NULL GROUP BY repo_path, commit_hash
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -161,6 +168,9 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
+/// (commits, merges) to leverage the partial unique index. Branch switch events
+/// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
 pub fn insert_activity(
     conn: &Connection,
     repo_path: &str,
@@ -171,11 +181,17 @@ pub fn insert_activity(
     author: Option<&str>,
     message: Option<&str>,
     timestamp: &str,
-) -> anyhow::Result<()> {
-    conn.execute(
+) -> anyhow::Result<bool> {
+    let sql = if commit_hash.is_some() {
+        "INSERT OR IGNORE INTO git_activity (repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+    } else {
         "INSERT INTO git_activity (repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"
+    };
+    let rows = conn.execute(
+        sql,
         rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
     )?;
-    Ok(())
+    Ok(rows > 0)
 }
