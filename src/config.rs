@@ -1,7 +1,7 @@
 use anyhow::Context;
 use etcetera::{choose_base_strategy, BaseStrategy};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn default_poll_interval() -> u64 {
     1800
@@ -34,6 +34,8 @@ pub struct Config {
     pub llm_model: Option<String>,
     #[serde(default)]
     pub llm_base_url: Option<String>,
+    #[serde(default)]
+    pub scan_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Default for Config {
@@ -47,6 +49,7 @@ impl Default for Config {
             llm_api_key: None,
             llm_model: None,
             llm_base_url: None,
+            scan_dirs: None,
         }
     }
 }
@@ -61,23 +64,21 @@ impl Config {
 
     pub fn expand_paths(&mut self) {
         let home = etcetera::home_dir().ok();
-        self.watch_dirs = self
-            .watch_dirs
-            .iter()
-            .map(|p| {
-                let s = p.to_string_lossy();
-                if s.starts_with("~/") || s == "~" {
-                    if let Some(ref h) = home {
-                        h.join(s.strip_prefix("~/").unwrap_or(""))
-                    } else {
-                        p.clone()
-                    }
-                } else {
-                    p.clone()
-                }
-            })
-            .collect();
+        self.watch_dirs = self.watch_dirs.iter().map(|p| expand_tilde_path(p, &home)).collect();
+        if let Some(ref dirs) = self.scan_dirs {
+            self.scan_dirs = Some(dirs.iter().map(|p| expand_tilde_path(p, &home)).collect());
+        }
     }
+}
+
+fn expand_tilde_path(p: &Path, home: &Option<PathBuf>) -> PathBuf {
+    let s = p.to_string_lossy();
+    if (s.starts_with("~/") || s == "~")
+        && let Some(h) = home
+    {
+        return h.join(s.strip_prefix("~/").unwrap_or(""));
+    }
+    p.to_path_buf()
 }
 
 pub fn config_dir() -> anyhow::Result<PathBuf> {

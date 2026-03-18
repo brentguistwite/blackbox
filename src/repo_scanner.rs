@@ -154,6 +154,12 @@ pub fn auto_scan_repos_from(home: &Path) -> Vec<(PathBuf, Vec<PathBuf>)> {
     results
 }
 
+/// Scan a single directory for git repos (depth limit 4).
+/// Used by setup wizard to scan user-specified directories.
+pub fn scan_directory(dir: &Path) -> Vec<PathBuf> {
+    discover_repos_limited(dir, 4)
+}
+
 fn discover_repos_limited(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
     // Fast path: dir is itself a repo root
     let git_path = dir.join(".git");

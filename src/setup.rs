@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config};
 use crate::db;
@@ -79,48 +79,54 @@ pub fn notset_shell_message() -> String {
         .to_string()
 }
 
+/// Contract an absolute path with ~ for display.
+fn contract_tilde(path: &Path) -> String {
+    if let Ok(home) = etcetera::home_dir()
+        && let Ok(suffix) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", suffix.display());
+    }
+    path.display().to_string()
+}
+
 /// Run the full interactive setup wizard.
 pub fn run_setup() -> anyhow::Result<()> {
     println!("blackbox setup wizard\n");
 
-    // === Step 1: Scan and select directories ===
-    println!("Scanning for git repos...");
-    let scan_results = repo_scanner::auto_scan_repos();
+    // Try loading existing config for scan_dirs
+    let existing_config = config::load_config().ok();
 
-    let mut selected_dirs: Vec<PathBuf> = Vec::new();
+    // === Step 1: Collect scan dirs and accumulate repos ===
+    let mut scan_dirs: Vec<PathBuf> = Vec::new();
+    let mut all_repos: Vec<PathBuf> = Vec::new();
 
-    if scan_results.is_empty() {
-        println!("No git repos found in common directories.");
-    } else {
-        let items: Vec<String> = scan_results
-            .iter()
-            .map(|(dir, repos)| {
-                format!(
-                    "{} ({} repo{})",
-                    dir.display(),
-                    repos.len(),
-                    if repos.len() == 1 { "" } else { "s" }
-                )
-            })
-            .collect();
-
-        let defaults: Vec<bool> = vec![true; items.len()];
-
-        let selections = dialoguer::MultiSelect::new()
-            .with_prompt("Select directories to watch")
-            .items(&items)
-            .defaults(&defaults)
-            .interact()?;
-
-        for idx in selections {
-            selected_dirs.push(scan_results[idx].0.clone());
+    match existing_config.as_ref().and_then(|c| c.scan_dirs.as_ref()) {
+        Some(dirs) if !dirs.is_empty() => {
+            println!("Scanning previously configured directories...");
+            scan_dirs = dirs.clone();
+            for dir in &scan_dirs {
+                all_repos.extend(repo_scanner::scan_directory(dir));
+            }
+        }
+        Some(_) => {
+            // scan_dirs is Some([]) — skip auto-scan
+            println!("No scan directories configured.");
+        }
+        None => {
+            // Fresh setup or legacy config — auto-scan
+            println!("Scanning for git repos...");
+            let scan_results = repo_scanner::auto_scan_repos();
+            for (parent, repos) in &scan_results {
+                scan_dirs.push(parent.clone());
+                all_repos.extend(repos.iter().cloned());
+            }
         }
     }
 
-    // Step 1b: Add more directories
+    // "Scan another directory?" loop — BEFORE MultiSelect
     loop {
         let add_more = dialoguer::Confirm::new()
-            .with_prompt("Add another directory?")
+            .with_prompt("Scan another directory?")
             .default(false)
             .interact()?;
 
@@ -134,17 +140,45 @@ pub fn run_setup() -> anyhow::Result<()> {
 
         let expanded = expand_tilde(&path_input);
         if expanded.is_dir() {
-            selected_dirs.push(expanded);
+            let repos = repo_scanner::scan_directory(&expanded);
+            println!(
+                "  Found {} repo{}",
+                repos.len(),
+                if repos.len() == 1 { "" } else { "s" }
+            );
+            all_repos.extend(repos);
+            scan_dirs.push(expanded);
         } else {
             println!("  Not a valid directory: {}", path_input);
         }
     }
 
-    if selected_dirs.is_empty() {
-        println!("No directories selected — you can edit config.toml later.");
+    // Dedup repos
+    all_repos.sort();
+    all_repos.dedup();
+
+    // === Step 2: Select individual repos ===
+    let selected_repos: Vec<PathBuf> = if all_repos.is_empty() {
+        println!("No git repos found in scanned directories.");
+        Vec::new()
+    } else {
+        let items: Vec<String> = all_repos.iter().map(|p| contract_tilde(p)).collect();
+        let defaults: Vec<bool> = vec![true; items.len()];
+
+        let selections = dialoguer::MultiSelect::new()
+            .with_prompt("Select repos to watch")
+            .items(&items)
+            .defaults(&defaults)
+            .interact()?;
+
+        selections.iter().map(|&idx| all_repos[idx].clone()).collect()
+    };
+
+    if selected_repos.is_empty() {
+        println!("No repos selected — you can edit config.toml later.");
     }
 
-    // === Step 2: Shell hook ===
+    // === Step 3: Shell hook ===
     let mut hook_installed = false;
     match detect_shell_type() {
         ShellDetection::Supported { name, rc_path } => {
@@ -226,7 +260,8 @@ pub fn run_setup() -> anyhow::Result<()> {
 
     // === Write config ===
     let config = Config {
-        watch_dirs: selected_dirs.clone(),
+        watch_dirs: selected_repos.clone(),
+        scan_dirs: Some(scan_dirs),
         ..Config::default()
     };
 
@@ -264,11 +299,11 @@ pub fn run_setup() -> anyhow::Result<()> {
     // === Summary ===
     println!("\n--- Setup complete ---");
     println!(
-        "  Watch dirs: {}",
-        if selected_dirs.is_empty() {
+        "  Repos: {}",
+        if selected_repos.is_empty() {
             "none (edit config.toml)".to_string()
         } else {
-            format!("{}", selected_dirs.len())
+            format!("{}", selected_repos.len())
         }
     );
     println!(
