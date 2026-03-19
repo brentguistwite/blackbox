@@ -245,9 +245,9 @@ pub fn format_duration(d: Duration) -> String {
 
 fn review_action_icon(action: &str) -> ColoredString {
     match action {
-        "APPROVED" => "v".green(),
-        "CHANGES_REQUESTED" => "!".yellow(),
-        _ => "c".cyan(),
+        "APPROVED" => "✓".green(),
+        "CHANGES_REQUESTED" => "✗".yellow(),
+        _ => "💬".cyan(),
     }
 }
 
