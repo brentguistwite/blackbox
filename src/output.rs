@@ -251,6 +251,14 @@ fn review_action_icon(action: &str) -> ColoredString {
     }
 }
 
+fn review_priority(action: &str) -> u8 {
+    match action {
+        "APPROVED" => 3,
+        "CHANGES_REQUESTED" => 2,
+        _ => 1,
+    }
+}
+
 /// Render summary to a String (for testing). No colors when colored override is false.
 pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -340,16 +348,24 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
             }
         }
 
-        // Reviews
+        // Reviews — deduplicate by PR number, keep most significant action
         if !repo.reviews.is_empty() {
-            let review_word = if repo.reviews.len() == 1 { "PR" } else { "PRs" };
+            let mut pr_map: BTreeMap<i64, &crate::query::ReviewInfo> = BTreeMap::new();
+            for review in &repo.reviews {
+                let entry = pr_map.entry(review.pr_number).or_insert(review);
+                if review_priority(&review.action) > review_priority(&entry.action) {
+                    *entry = review;
+                }
+            }
+            let unique: Vec<_> = pr_map.values().collect();
+            let review_word = if unique.len() == 1 { "PR" } else { "PRs" };
             lines.push(format!(
                 "  {} Reviewed {} {}",
                 "~".dimmed(),
-                repo.reviews.len(),
+                unique.len(),
                 review_word,
             ));
-            for review in &repo.reviews {
+            for review in unique {
                 let icon = review_action_icon(&review.action);
                 lines.push(format!(
                     "    {} PR #{}: {}",
