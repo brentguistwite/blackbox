@@ -5,6 +5,17 @@ use crate::daemon;
 
 const LABEL: &str = "com.blackbox.agent";
 
+/// Format an error message for a failed service command, including stderr.
+fn format_command_error(cmd_desc: &str, stderr: &[u8]) -> String {
+    let stderr_str = String::from_utf8_lossy(stderr);
+    let stderr_trimmed = stderr_str.trim();
+    if stderr_trimmed.is_empty() {
+        format!("{cmd_desc} failed (no stderr)")
+    } else {
+        format!("{cmd_desc} failed: {stderr_trimmed}")
+    }
+}
+
 pub fn generate_plist(exe_path: &str, data_dir: &str) -> String {
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -23,6 +34,11 @@ pub fn generate_plist(exe_path: &str, data_dir: &str) -> String {
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{path}</string>
+    </dict>
     <key>StandardOutPath</key>
     <string>{data}/blackbox.log</string>
     <key>StandardErrorPath</key>
@@ -32,6 +48,7 @@ pub fn generate_plist(exe_path: &str, data_dir: &str) -> String {
         label = LABEL,
         exe = exe_path,
         data = data_dir,
+        path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".to_string()),
     )
 }
 
@@ -65,17 +82,18 @@ pub fn unit_path() -> PathBuf {
 
 #[cfg(target_os = "macos")]
 pub fn install() -> anyhow::Result<()> {
+    let data_dir = config::data_dir()?;
+    std::fs::create_dir_all(&data_dir)?;
+
     // Stop any manually-started daemon first
-    if daemon::is_daemon_running()?.is_some() {
-        daemon::stop_daemon()?;
+    if daemon::is_daemon_running(&data_dir)?.is_some() {
+        daemon::stop_daemon(&data_dir)?;
     }
 
     let exe = std::env::current_exe()?
         .canonicalize()?
         .to_string_lossy()
         .to_string();
-    let data_dir = config::data_dir()?;
-    std::fs::create_dir_all(&data_dir)?;
 
     let plist_content = generate_plist(&exe, &data_dir.to_string_lossy());
     let path = plist_path();
@@ -89,14 +107,17 @@ pub fn install() -> anyhow::Result<()> {
     let path_str = path.to_string_lossy().to_string();
 
     // Try modern bootstrap, fallback to legacy load
-    let status = std::process::Command::new("launchctl")
+    let output = std::process::Command::new("launchctl")
         .args(["bootstrap", &format!("gui/{}", uid), &path_str])
-        .status()?;
+        .output()?;
 
-    if !status.success() {
-        std::process::Command::new("launchctl")
+    if !output.status.success() {
+        let fallback = std::process::Command::new("launchctl")
             .args(["load", &path_str])
-            .status()?;
+            .output()?;
+        if !fallback.status.success() {
+            anyhow::bail!("{}", format_command_error("launchctl load", &fallback.stderr));
+        }
     }
 
     println!("Service installed and loaded (launchd)");
@@ -106,8 +127,9 @@ pub fn install() -> anyhow::Result<()> {
 
 #[cfg(target_os = "linux")]
 pub fn install() -> anyhow::Result<()> {
-    if daemon::is_daemon_running()?.is_some() {
-        daemon::stop_daemon()?;
+    let data_dir = config::data_dir()?;
+    if daemon::is_daemon_running(&data_dir)?.is_some() {
+        daemon::stop_daemon(&data_dir)?;
     }
 
     let exe = std::env::current_exe()?
@@ -123,13 +145,19 @@ pub fn install() -> anyhow::Result<()> {
     }
     std::fs::write(&path, &unit_content)?;
 
-    std::process::Command::new("systemctl")
+    let reload = std::process::Command::new("systemctl")
         .args(["--user", "daemon-reload"])
-        .status()?;
+        .output()?;
+    if !reload.status.success() {
+        anyhow::bail!("{}", format_command_error("systemctl daemon-reload", &reload.stderr));
+    }
 
-    std::process::Command::new("systemctl")
+    let enable = std::process::Command::new("systemctl")
         .args(["--user", "enable", "--now", "blackbox.service"])
-        .status()?;
+        .output()?;
+    if !enable.status.success() {
+        anyhow::bail!("{}", format_command_error("systemctl enable", &enable.stderr));
+    }
 
     println!("Service installed and enabled (systemd)");
     println!("Unit: {}", path.display());
@@ -153,14 +181,17 @@ pub fn uninstall() -> anyhow::Result<()> {
     let path_str = path.to_string_lossy().to_string();
 
     // Try modern bootout, fallback to legacy unload
-    let status = std::process::Command::new("launchctl")
+    let output = std::process::Command::new("launchctl")
         .args(["bootout", &format!("gui/{}", uid), &path_str])
-        .status()?;
+        .output()?;
 
-    if !status.success() {
-        std::process::Command::new("launchctl")
+    if !output.status.success() {
+        let fallback = std::process::Command::new("launchctl")
             .args(["unload", &path_str])
-            .status()?;
+            .output()?;
+        if !fallback.status.success() {
+            anyhow::bail!("{}", format_command_error("launchctl unload", &fallback.stderr));
+        }
     }
 
     std::fs::remove_file(&path)?;
@@ -176,9 +207,12 @@ pub fn uninstall() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    std::process::Command::new("systemctl")
+    let disable = std::process::Command::new("systemctl")
         .args(["--user", "disable", "--now", "blackbox.service"])
-        .status()?;
+        .output()?;
+    if !disable.status.success() {
+        anyhow::bail!("{}", format_command_error("systemctl disable", &disable.stderr));
+    }
 
     std::fs::remove_file(&path)?;
     println!("Service uninstalled (systemd)");
@@ -228,5 +262,19 @@ mod tests {
     fn test_unit_path_correct() {
         let path = unit_path();
         assert!(path.ends_with(".config/systemd/user/blackbox.service"));
+    }
+
+    #[test]
+    fn format_command_error_includes_stderr() {
+        let err = format_command_error("launchctl bootstrap", b"Permission denied\n");
+        assert!(err.contains("launchctl bootstrap"));
+        assert!(err.contains("Permission denied"));
+    }
+
+    #[test]
+    fn format_command_error_empty_stderr() {
+        let err = format_command_error("launchctl load", b"");
+        assert!(err.contains("launchctl load"));
+        assert!(err.contains("no stderr"));
     }
 }

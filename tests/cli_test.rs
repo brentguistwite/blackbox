@@ -385,7 +385,7 @@ fn test_setup_shows_wizard_header() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("blackbox setup wizard"),
+        stdout.contains("blackbox setup"),
         "setup should show wizard header, got: {}",
         stdout
     );

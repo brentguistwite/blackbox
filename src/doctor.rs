@@ -151,12 +151,32 @@ pub fn check_daemon() -> CheckResult {
             detail: format!("Running (PID {pid})"),
             suggestion: None,
         },
-        Ok(None) => CheckResult {
-            name: "Daemon".into(),
-            passed: false,
-            detail: "Not running".into(),
-            suggestion: Some("Run `blackbox start` to start daemon".into()),
-        },
+        Ok(None) => {
+            // Fallback: check if launchd is managing the service
+            if let Some(pid) = is_launchd_running() {
+                if pid > 0 {
+                    return CheckResult {
+                        name: "Daemon".into(),
+                        passed: true,
+                        detail: format!("Running via launchd (PID {pid})"),
+                        suggestion: None,
+                    };
+                } else {
+                    return CheckResult {
+                        name: "Daemon".into(),
+                        passed: true,
+                        detail: "Loaded in launchd (not yet started)".into(),
+                        suggestion: None,
+                    };
+                }
+            }
+            CheckResult {
+                name: "Daemon".into(),
+                passed: false,
+                detail: "Not running".into(),
+                suggestion: Some("Run `blackbox start` to start daemon".into()),
+            }
+        }
         Err(e) => CheckResult {
             name: "Daemon".into(),
             passed: false,
@@ -247,6 +267,47 @@ pub fn check_shell_hook() -> CheckResult {
     }
 }
 
+/// Parse launchctl list output to determine if service is loaded.
+/// Returns Some(pid) if running with a PID, Some(0) if loaded but no PID, None if not found.
+#[cfg(target_os = "macos")]
+pub fn parse_launchctl_output(success: bool, stdout: &str) -> Option<u32> {
+    if !success {
+        return None;
+    }
+    // launchctl list <label> output contains "PID" = <number>; if running
+    for line in stdout.lines() {
+        let trimmed = line.trim().trim_end_matches(';');
+        if trimmed.starts_with("\"PID\"") {
+            if let Some(val) = trimmed.split('=').nth(1) {
+                let val = val.trim().trim_matches('"');
+                if let Ok(pid) = val.parse::<u32>() {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    // Service is loaded but no PID found (not currently running process)
+    Some(0)
+}
+
+/// Check if blackbox is managed by launchd.
+#[cfg(target_os = "macos")]
+pub fn is_launchd_running() -> Option<u32> {
+    let output = Command::new("launchctl")
+        .args(["list", "com.blackbox.agent"])
+        .output()
+        .ok()?;
+    parse_launchctl_output(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_launchd_running() -> Option<u32> {
+    None
+}
+
 /// Run all doctor checks. Returns true if all passed.
 pub fn run_doctor() -> anyhow::Result<bool> {
     let mut results = Vec::new();
@@ -291,4 +352,47 @@ pub fn run_doctor() -> anyhow::Result<bool> {
     }
 
     Ok(all_passed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_launchctl_output_with_pid() {
+        let stdout = r#"{
+    "LimitLoadToSessionType" = "Aqua";
+    "Label" = "com.blackbox.agent";
+    "LastExitStatus" = 0;
+    "PID" = 12345;
+    "Program" = "/usr/local/bin/blackbox";
+};"#;
+        assert_eq!(parse_launchctl_output(true, stdout), Some(12345));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_launchctl_output_loaded_no_pid() {
+        let stdout = r#"{
+    "LimitLoadToSessionType" = "Aqua";
+    "Label" = "com.blackbox.agent";
+    "LastExitStatus" = 0;
+    "Program" = "/usr/local/bin/blackbox";
+};"#;
+        assert_eq!(parse_launchctl_output(true, stdout), Some(0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_launchctl_output_not_found() {
+        assert_eq!(parse_launchctl_output(false, ""), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn parse_launchctl_output_empty_success() {
+        // Edge case: success but empty output
+        assert_eq!(parse_launchctl_output(true, ""), Some(0));
+    }
 }

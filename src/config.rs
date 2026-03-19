@@ -15,6 +15,9 @@ fn default_session_gap() -> u64 {
 fn default_first_commit() -> u64 {
     30
 }
+fn default_worktree_dir_name() -> Option<String> {
+    Some(".worktrees".to_string())
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -36,6 +39,8 @@ pub struct Config {
     pub llm_base_url: Option<String>,
     #[serde(default)]
     pub scan_dirs: Option<Vec<PathBuf>>,
+    #[serde(default = "default_worktree_dir_name")]
+    pub worktree_dir_name: Option<String>,
 }
 
 impl Default for Config {
@@ -50,6 +55,7 @@ impl Default for Config {
             llm_model: None,
             llm_base_url: None,
             scan_dirs: None,
+            worktree_dir_name: default_worktree_dir_name(),
         }
     }
 }

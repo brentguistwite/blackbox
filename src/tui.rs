@@ -22,6 +22,7 @@ pub struct FeedEvent {
     pub event_type: String,
     pub branch: Option<String>,
     pub message: Option<String>,
+    pub count: usize,
 }
 
 impl FeedEvent {
@@ -33,6 +34,31 @@ impl FeedEvent {
             "review" => Color::Cyan,
             "ai_session" => Color::Magenta,
             _ => Color::White,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SortMode {
+    Recent,
+    Time,
+    Commits,
+}
+
+impl SortMode {
+    fn next(self) -> Self {
+        match self {
+            SortMode::Recent => SortMode::Time,
+            SortMode::Time => SortMode::Commits,
+            SortMode::Commits => SortMode::Recent,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            SortMode::Recent => "recent",
+            SortMode::Time => "time",
+            SortMode::Commits => "commits",
         }
     }
 }
@@ -49,6 +75,8 @@ pub struct App {
     pub total_time_mins: i64,
     pub active_repo: Option<String>,
     pub sparkline_data: Vec<u64>,
+    // Sort
+    pub sort_mode: SortMode,
     // Scroll
     pub events_state: ListState,
     // DB path for refresh
@@ -69,6 +97,7 @@ impl Default for App {
             total_time_mins: 0,
             active_repo: None,
             sparkline_data: vec![0; 16],
+            sort_mode: SortMode::Commits,
             events_state: ListState::default(),
             db_path: None,
             session_gap_minutes: 120,
@@ -82,7 +111,7 @@ impl App {
         Self::default()
     }
 
-    /// Check if daemon is running via PID file.
+    /// Check if daemon is running via PID file, falling back to launchd.
     pub fn refresh_daemon_status(&mut self) {
         self.daemon_running = match crate::config::data_dir() {
             Ok(data_dir) => crate::daemon::is_daemon_running(&data_dir)
@@ -90,7 +119,7 @@ impl App {
                 .flatten()
                 .is_some(),
             Err(_) => false,
-        };
+        } || crate::doctor::is_launchd_running().is_some();
         self.last_refresh = Instant::now();
     }
 
@@ -113,12 +142,20 @@ impl App {
             return;
         };
 
-        // Sort repos by most recent activity
-        repos.sort_by(|a, b| {
-            let a_latest = latest_timestamp(a);
-            let b_latest = latest_timestamp(b);
-            b_latest.cmp(&a_latest)
-        });
+        // Active repo = repo with most recent event (always by time, regardless of sort mode)
+        self.active_repo = repos
+            .iter()
+            .max_by_key(|r| latest_timestamp(r))
+            .map(|r| r.repo_name.clone());
+
+        // Sort repos by selected mode
+        match self.sort_mode {
+            SortMode::Recent => repos.sort_by(|a, b| {
+                latest_timestamp(b).cmp(&latest_timestamp(a))
+            }),
+            SortMode::Time => repos.sort_by(|a, b| b.estimated_time.cmp(&a.estimated_time)),
+            SortMode::Commits => repos.sort_by(|a, b| b.commits.cmp(&a.commits)),
+        };
 
         // Build feed events (latest 50 across all repos)
         let mut feed: Vec<FeedEvent> = Vec::new();
@@ -130,6 +167,7 @@ impl App {
                     event_type: ev.event_type.clone(),
                     branch: ev.branch.clone(),
                     message: ev.message.clone(),
+                    count: 1,
                 });
             }
             for rev in &repo.reviews {
@@ -139,6 +177,7 @@ impl App {
                     event_type: "review".into(),
                     branch: None,
                     message: Some(format!("{} PR #{}", rev.action, rev.pr_number)),
+                    count: 1,
                 });
             }
             for ses in &repo.ai_sessions {
@@ -148,10 +187,12 @@ impl App {
                     event_type: "ai_session".into(),
                     branch: None,
                     message: Some(format_session_msg(ses)),
+                    count: 1,
                 });
             }
         }
         feed.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        feed = collapse_similar_events(feed);
         feed.truncate(50);
 
         // Total time
@@ -159,9 +200,6 @@ impl App {
             .iter()
             .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
         self.total_time_mins = total_time.num_minutes();
-
-        // Active repo = repo with most recent event
-        self.active_repo = repos.first().map(|r| r.repo_name.clone());
 
         // Sparkline: 8 hours in 30-min buckets = 16 buckets
         self.sparkline_data = build_sparkline(&repos, from);
@@ -177,6 +215,10 @@ impl App {
             (KeyCode::Char('r'), _) => {
                 self.refresh_data();
                 self.refresh_daemon_status();
+            }
+            (KeyCode::Char('s'), _) => {
+                self.sort_mode = self.sort_mode.next();
+                self.refresh_data();
             }
             (KeyCode::Char('j') | KeyCode::Down, _) => self.scroll_down(),
             (KeyCode::Char('k') | KeyCode::Up, _) => self.scroll_up(),
@@ -220,6 +262,34 @@ fn format_session_msg(ses: &AiSessionInfo) -> String {
     } else {
         "session (active)".into()
     }
+}
+
+/// Collapse consecutive events with same repo+type+message within 5 min.
+/// Different event types or targets stay separate. Preserves sorted order (newest first).
+fn collapse_similar_events(mut events: Vec<FeedEvent>) -> Vec<FeedEvent> {
+    if events.len() < 2 {
+        return events;
+    }
+    let collapse_window = chrono::Duration::minutes(5);
+    let mut collapsed: Vec<FeedEvent> = Vec::with_capacity(events.len());
+    collapsed.push(events.remove(0));
+
+    for ev in events {
+        let last = collapsed.last_mut().unwrap();
+        let same_key = last.repo_name == ev.repo_name
+            && last.event_type == ev.event_type
+            && last.message == ev.message;
+        // Events sorted newest-first, so last.timestamp >= ev.timestamp
+        let within_window = last.timestamp - ev.timestamp <= collapse_window;
+
+        if same_key && within_window {
+            last.count += 1;
+            // Keep the newest timestamp (already there since sorted desc)
+        } else {
+            collapsed.push(ev);
+        }
+    }
+    collapsed
 }
 
 /// Build sparkline data: 16 buckets of 30min over the past 8 hours.
@@ -322,11 +392,11 @@ fn render(frame: &mut Frame, app: &mut App) {
 
     render_header(frame, header_area, app);
     render_body(frame, body_area, app);
-    render_footer(frame, footer_area);
+    render_footer(frame, footer_area, app.sort_mode);
 }
 
 fn render_header(frame: &mut Frame, area: Rect, app: &App) {
-    let now = Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+    let now = Local::now().format("%Y-%m-%d %I:%M:%S %p");
     let daemon_status = if app.daemon_running {
         Span::styled(" daemon: running ", Style::default().fg(Color::Green))
     } else {
@@ -486,7 +556,7 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
         .iter()
         .map(|ev| {
             let local_ts = ev.timestamp.with_timezone(&Local);
-            let ts = local_ts.format("%H:%M:%S");
+            let ts = local_ts.format("%I:%M %p");
             let branch_str = ev
                 .branch
                 .as_deref()
@@ -496,10 +566,17 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
                 .message
                 .as_deref()
                 .map(|m| {
-                    let truncated = if m.len() > 40 { &m[..40] } else { m };
-                    format!(" {truncated}")
+                    let truncated: String = m.chars().take(40).collect();
+                    let ellipsis = if m.chars().count() > 40 { "…" } else { "" };
+                    format!(" {truncated}{ellipsis}")
                 })
                 .unwrap_or_default();
+
+            let count_str = if ev.count > 1 {
+                format!(" (x{})", ev.count)
+            } else {
+                String::new()
+            };
 
             let line = Line::from(vec![
                 Span::styled(format!("{ts} "), Style::default().fg(Color::DarkGray)),
@@ -513,6 +590,7 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
                 ),
                 Span::styled(branch_str, Style::default().fg(Color::Yellow)),
                 Span::raw(msg),
+                Span::styled(count_str, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
         })
@@ -543,12 +621,14 @@ fn render_sparkline(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(sparkline, area);
 }
 
-fn render_footer(frame: &mut Frame, area: Rect) {
+fn render_footer(frame: &mut Frame, area: Rect, sort_mode: SortMode) {
     let line = Line::from(vec![
         Span::styled(" q", Style::default().fg(Color::Yellow)),
         Span::raw(" quit  "),
         Span::styled("r", Style::default().fg(Color::Yellow)),
         Span::raw(" refresh  "),
+        Span::styled("s", Style::default().fg(Color::Yellow)),
+        Span::raw(format!(" sort: {}  ", sort_mode.label())),
         Span::styled("j/k", Style::default().fg(Color::Yellow)),
         Span::raw(" scroll  "),
         Span::styled("\u{2191}/\u{2193}", Style::default().fg(Color::Yellow)),
@@ -614,6 +694,7 @@ mod tests {
                 event_type: "commit".into(),
                 branch: None,
                 message: None,
+                count: 1,
             },
             FeedEvent {
                 timestamp: Utc::now(),
@@ -621,6 +702,7 @@ mod tests {
                 event_type: "commit".into(),
                 branch: None,
                 message: None,
+                count: 1,
             },
         ];
         app.handle_key(KeyCode::Char('j'), KeyModifiers::NONE);
@@ -642,6 +724,7 @@ mod tests {
                 event_type: "commit".into(),
                 branch: None,
                 message: None,
+                count: 1,
             },
             FeedEvent {
                 timestamp: Utc::now(),
@@ -649,6 +732,7 @@ mod tests {
                 event_type: "commit".into(),
                 branch: None,
                 message: None,
+                count: 1,
             },
         ];
         app.events_state.select(Some(1));
@@ -668,6 +752,7 @@ mod tests {
             event_type: "commit".into(),
             branch: None,
             message: None,
+            count: 1,
         }];
         app.handle_key(KeyCode::Down, KeyModifiers::NONE);
         assert_eq!(app.events_state.selected(), Some(0));
@@ -683,7 +768,8 @@ mod tests {
                 repo_name: "".into(),
                 event_type: "commit".into(),
                 branch: None,
-                message: None
+                message: None,
+                count: 1,
             }
             .color(),
             Color::Green
@@ -694,7 +780,8 @@ mod tests {
                 repo_name: "".into(),
                 event_type: "branch_switch".into(),
                 branch: None,
-                message: None
+                message: None,
+                count: 1,
             }
             .color(),
             Color::Yellow
@@ -705,7 +792,8 @@ mod tests {
                 repo_name: "".into(),
                 event_type: "merge".into(),
                 branch: None,
-                message: None
+                message: None,
+                count: 1,
             }
             .color(),
             Color::Blue
@@ -716,7 +804,8 @@ mod tests {
                 repo_name: "".into(),
                 event_type: "review".into(),
                 branch: None,
-                message: None
+                message: None,
+                count: 1,
             }
             .color(),
             Color::Cyan
@@ -727,7 +816,8 @@ mod tests {
                 repo_name: "".into(),
                 event_type: "ai_session".into(),
                 branch: None,
-                message: None
+                message: None,
+                count: 1,
             }
             .color(),
             Color::Magenta
@@ -794,6 +884,7 @@ mod tests {
             event_type: "commit".into(),
             branch: Some("main".into()),
             message: Some("test commit".into()),
+            count: 1,
         }];
         app.total_time_mins = 90;
         app.active_repo = Some("test".into());

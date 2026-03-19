@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use colored::Colorize;
+use dialoguer::theme::ColorfulTheme;
+
 use crate::config::{self, Config};
 use crate::db;
 use crate::repo_scanner;
@@ -79,6 +82,11 @@ pub fn notset_shell_message() -> String {
         .to_string()
 }
 
+/// Format "N repo(s)" label.
+fn repo_count_label(n: usize) -> String {
+    format!("{} repo{}", n, if n == 1 { "" } else { "s" })
+}
+
 /// Contract an absolute path with ~ for display.
 fn contract_tilde(path: &Path) -> String {
     if let Ok(home) = etcetera::home_dir()
@@ -89,52 +97,97 @@ fn contract_tilde(path: &Path) -> String {
     path.display().to_string()
 }
 
+/// Format a step indicator string: "[n/total] label"
+pub fn format_step(n: u8, total: u8, label: &str) -> String {
+    format!(
+        "\n{} {}",
+        format!("[{}/{}]", n, total).cyan().bold(),
+        label.bold()
+    )
+}
+
+/// Calculate total setup steps based on platform.
+/// Steps: 1=scan, 2=select, 3=worktree dir, 4=shell hook, 5=service (macOS/Linux only)
+pub fn total_setup_steps() -> u8 {
+    let has_service = cfg!(target_os = "macos") || cfg!(target_os = "linux");
+    if has_service { 5 } else { 4 }
+}
+
 /// Run the full interactive setup wizard.
 pub fn run_setup() -> anyhow::Result<()> {
-    println!("blackbox setup wizard\n");
+    // Styled header
+    println!();
+    println!(
+        "{}",
+        "  blackbox setup  ".bold().on_bright_black().white()
+    );
+    println!("{}", "  flight recorder for your dev day".dimmed());
+    println!();
+
+    let total = total_setup_steps();
 
     // Try loading existing config for scan_dirs
     let existing_config = config::load_config().ok();
 
-    // === Step 1: Collect scan dirs and accumulate repos ===
+    // === Step 1: Scan for repositories ===
+    println!("{}", format_step(1, total, "Scan for repositories"));
+
     let mut scan_dirs: Vec<PathBuf> = Vec::new();
     let mut all_repos: Vec<PathBuf> = Vec::new();
 
     match existing_config.as_ref().and_then(|c| c.scan_dirs.as_ref()) {
         Some(dirs) if !dirs.is_empty() => {
-            println!("Scanning previously configured directories...");
+            println!("  Scanning previously configured directories...");
             scan_dirs = dirs.clone();
             for dir in &scan_dirs {
-                all_repos.extend(repo_scanner::scan_directory(dir));
+                let repos = repo_scanner::scan_directory(dir);
+                let count_label = repo_count_label(repos.len());
+                println!(
+                    "  {} {count_label} in {}",
+                    "found".green(),
+                    contract_tilde(dir).dimmed()
+                );
+                all_repos.extend(repos);
             }
         }
         Some(_) => {
-            // scan_dirs is Some([]) — skip auto-scan
-            println!("No scan directories configured.");
+            println!("  {}", "No scan directories configured.".dimmed());
         }
         None => {
-            // Fresh setup or legacy config — auto-scan
-            println!("Scanning for git repos...");
+            // Fresh setup or legacy config -- auto-scan
             let scan_results = repo_scanner::auto_scan_repos();
             for (parent, repos) in &scan_results {
+                let count_label = repo_count_label(repos.len());
+                println!(
+                    "  {} {count_label} in {}",
+                    "found".green(),
+                    contract_tilde(parent).dimmed()
+                );
                 scan_dirs.push(parent.clone());
                 all_repos.extend(repos.iter().cloned());
+            }
+            if all_repos.is_empty() {
+                println!("  {}", "No repos found in common directories.".dimmed());
+            } else {
+                println!(
+                    "  {} total repos found.",
+                    all_repos.len().to_string().green().bold()
+                );
             }
         }
     }
 
-    // "Scan another directory?" loop — BEFORE MultiSelect
+    // "Scan another directory?" loop -- BEFORE MultiSelect
     loop {
-        let add_more = dialoguer::Confirm::new()
+        let add_more = dialoguer::Confirm::with_theme(&ColorfulTheme::default())
             .with_prompt("Scan another directory?")
-            .default(false)
             .interact()?;
 
         if !add_more {
             break;
         }
 
-        let path_input: String = dialoguer::Input::new()
+        let path_input: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
             .with_prompt("Directory path")
             .interact_text()?;
 
@@ -142,7 +195,8 @@ pub fn run_setup() -> anyhow::Result<()> {
         if expanded.is_dir() {
             let repos = repo_scanner::scan_directory(&expanded);
             println!(
-                "  Found {} repo{}",
+                "  {} {} repo{}",
+                "found".green(),
                 repos.len(),
                 if repos.len() == 1 { "" } else { "s" }
             );
@@ -157,32 +211,74 @@ pub fn run_setup() -> anyhow::Result<()> {
     all_repos.sort();
     all_repos.dedup();
 
-    // === Step 2: Select individual repos ===
+    // === Step 2: Select repos to watch ===
+    println!("{}", format_step(2, total, "Select repos to watch"));
+
     let selected_repos: Vec<PathBuf> = if all_repos.is_empty() {
-        println!("No git repos found in scanned directories.");
+        println!("  {}", "No git repos found in scanned directories.".dimmed());
         Vec::new()
     } else {
         let items: Vec<String> = all_repos.iter().map(|p| contract_tilde(p)).collect();
         let defaults: Vec<bool> = vec![true; items.len()];
 
-        let selections = dialoguer::MultiSelect::new()
+        println!(
+            "  {}",
+            "\u{2191}/\u{2193} navigate  \u{00b7}  space select  \u{00b7}  enter confirm".dimmed()
+        );
+
+        let selections = dialoguer::MultiSelect::with_theme(&ColorfulTheme::default())
             .with_prompt("Select repos to watch")
             .items(&items)
             .defaults(&defaults)
             .interact()?;
 
-        selections.iter().map(|&idx| all_repos[idx].clone()).collect()
+        selections
+            .iter()
+            .map(|&idx| all_repos[idx].clone())
+            .collect()
     };
 
     if selected_repos.is_empty() {
-        println!("No repos selected — you can edit config.toml later.");
+        println!(
+            "  {}",
+            "No repos selected -- you can edit config.toml later.".dimmed()
+        );
     }
 
-    // === Step 3: Shell hook ===
+    // === Step 3: Worktree directory ===
+    println!("{}", format_step(3, total, "Worktree directory"));
+    println!(
+        "  {}",
+        "Directory name inside repos where worktrees are created".dimmed()
+    );
+
+    let worktree_input: String = dialoguer::Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Worktree dir name")
+        .default(".worktrees".to_string())
+        .allow_empty(true)
+        .interact_text()?;
+
+    let worktree_dir_name = if worktree_input.is_empty() {
+        println!("  {}", "Worktree watching disabled".dimmed());
+        None
+    } else {
+        println!("  Worktree dir: {}", worktree_input.bold());
+        Some(worktree_input)
+    };
+
+    // === Step 4: Shell hook ===
+    println!("{}", format_step(4, total, "Shell hook"));
+
     let mut hook_installed = false;
     match detect_shell_type() {
         ShellDetection::Supported { name, rc_path } => {
             let line = hook_eval_line(&name);
+
+            println!("  Detected shell: {}", name.bold());
+            println!(
+                "  {}",
+                "Tracks cd into watched repos via shell hook".dimmed()
+            );
 
             // Check if already present
             let already = rc_path
@@ -192,15 +288,20 @@ pub fn run_setup() -> anyhow::Result<()> {
                 .unwrap_or(false);
 
             if already {
-                println!("\nShell hook already in {}", rc_path.display());
+                println!(
+                    "  Shell hook already in {}",
+                    contract_tilde(&rc_path).dimmed()
+                );
                 hook_installed = true;
             } else {
-                println!("\nThis line will be added to {}:", rc_path.display());
-                println!("  {}", line);
+                println!(
+                    "  This line will be added to {}:",
+                    contract_tilde(&rc_path)
+                );
+                println!("    {}", line.dimmed());
 
-                let install_hook = dialoguer::Confirm::new()
+                let install_hook = dialoguer::Confirm::with_theme(&ColorfulTheme::default())
                     .with_prompt("Install shell hook?")
-                    .default(true)
                     .interact()?;
 
                 if install_hook {
@@ -214,23 +315,27 @@ pub fn run_setup() -> anyhow::Result<()> {
                         contents.push('\n');
                     }
                     contents.push_str(&format!("\n{}\n", hook_comment_block(&name)));
-                    // We don't inline the hook script — eval loads it at shell startup
+                    // We don't inline the hook script -- eval loads it at shell startup
                     let _ = hook_script; // just validated it generates ok
                     std::fs::write(&rc_path, contents)?;
-                    println!("  Added to {}", rc_path.display());
+                    println!(
+                        "  {} Added to {}",
+                        "\u{2713}".green(),
+                        contract_tilde(&rc_path)
+                    );
                     hook_installed = true;
                 }
             }
         }
         ShellDetection::Unsupported(shell_name) => {
-            println!("\n{}", unsupported_shell_message(&shell_name));
+            println!("  {}", unsupported_shell_message(&shell_name));
         }
         ShellDetection::NotSet => {
-            println!("\n{}", notset_shell_message());
+            println!("  {}", notset_shell_message());
         }
     }
 
-    // === Step 3: OS service ===
+    // === Step 4: OS service (macOS/Linux only) ===
     let mut service_registered = false;
     let os_name = if cfg!(target_os = "macos") {
         "launchd"
@@ -241,19 +346,19 @@ pub fn run_setup() -> anyhow::Result<()> {
     };
 
     if !os_name.is_empty() {
-        println!();
+        println!("{}", format_step(5, total, "Background service"));
         println!(
-            "Register as {} service? This starts blackbox automatically on login.",
-            os_name
+            "  {}",
+            "Starts blackbox on login, runs in background".dimmed()
         );
-        let install_service = dialoguer::Confirm::new()
-            .with_prompt("Register service?")
-            .default(false)
+
+        let install_service = dialoguer::Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(format!("Register {} service?", os_name))
             .interact()?;
 
         if install_service {
             // Config must exist before install since service runs run-foreground
-            // which loads config — we'll write config first, then install
+            // which loads config -- we'll write config first, then install
             service_registered = true;
         }
     }
@@ -262,12 +367,12 @@ pub fn run_setup() -> anyhow::Result<()> {
     let config = Config {
         watch_dirs: selected_repos.clone(),
         scan_dirs: Some(scan_dirs),
+        worktree_dir_name,
         ..Config::default()
     };
 
     let config_path = config::config_dir()?.join("config.toml");
     config.save_to(&config_path)?;
-    println!("\nConfig saved to {}", config_path.display());
 
     // === Create DB ===
     let data_dir = config::data_dir()?;
@@ -280,54 +385,86 @@ pub fn run_setup() -> anyhow::Result<()> {
         match crate::service::install() {
             Ok(()) => {}
             Err(e) => {
-                println!("Service registration failed: {}. You can try `blackbox install` later.", e);
+                println!(
+                    "  Service registration failed: {}. You can try `blackbox install` later.",
+                    e
+                );
                 service_registered = false;
             }
         }
     }
 
-    // === Start daemon (if no service — service auto-starts) ===
+    // === Start daemon (if no service -- service auto-starts) ===
     if !service_registered {
         let mut loaded_config = config::load_config()?;
         loaded_config.expand_paths();
         match crate::daemon::start_daemon(loaded_config, &data_dir) {
             Ok(()) => {} // daemon forks and parent returns
-            Err(e) => println!("Could not start daemon: {}. Run `blackbox start` later.", e),
+            Err(e) => println!(
+                "  Could not start daemon: {}. Run `blackbox start` later.",
+                e
+            ),
         }
     }
 
     // === Summary ===
-    println!("\n--- Setup complete ---");
+    println!();
     println!(
-        "  Repos: {}",
-        if selected_repos.is_empty() {
-            "none (edit config.toml)".to_string()
-        } else {
-            format!("{}", selected_repos.len())
-        }
+        "{}",
+        "  Setup complete  ".bold().on_green().black()
     );
+    println!();
+
+    // Checkmark/cross for each component
+    let (repo_icon, repo_text) = if selected_repos.is_empty() {
+        (
+            "\u{2717}".red().to_string(),
+            "none (edit config.toml)".to_string(),
+        )
+    } else {
+        (
+            "\u{2713}".green().to_string(),
+            format!("{} repos", selected_repos.len()),
+        )
+    };
+    println!("  {} Repos: {}", repo_icon, repo_text);
+
+    let (wt_icon, wt_text) = match &config.worktree_dir_name {
+        Some(d) if !d.is_empty() => ("\u{2713}".green().to_string(), d.clone()),
+        _ => ("\u{2717}".red().to_string(), "disabled".to_string()),
+    };
+    println!("  {} Worktree dir: {}", wt_icon, wt_text);
+
+    let (hook_icon, hook_text) = if hook_installed {
+        ("\u{2713}".green().to_string(), "installed")
+    } else {
+        ("\u{2717}".red().to_string(), "skipped")
+    };
+    println!("  {} Shell hook: {}", hook_icon, hook_text);
+
+    let (svc_icon, svc_text) = if service_registered {
+        ("\u{2713}".green().to_string(), "registered")
+    } else if os_name.is_empty() {
+        ("\u{2014}".dimmed().to_string(), "n/a")
+    } else {
+        ("\u{2717}".red().to_string(), "not registered")
+    };
+    println!("  {} Service: {}", svc_icon, svc_text);
+
     println!(
-        "  Shell hook: {}",
-        if hook_installed {
-            "installed"
-        } else {
-            "skipped"
-        }
+        "\n  Config: {}",
+        contract_tilde(&config_path).dimmed()
     );
-    println!(
-        "  Service: {}",
-        if service_registered {
-            "registered"
-        } else {
-            "not registered"
-        }
-    );
-    println!("\nNext steps:");
+
+    println!("\n  {}:", "Next steps".bold());
     if !hook_installed {
-        println!("  - Install shell hook: eval \"$(blackbox hook zsh)\"");
+        println!(
+            "    {}",
+            "blackbox hook zsh  # install shell hook manually".dimmed()
+        );
     }
-    println!("  - Check health: blackbox doctor");
-    println!("  - View activity: blackbox today");
+    println!("    {}", "blackbox doctor     # check health".dimmed());
+    println!("    {}", "blackbox today      # view activity".dimmed());
 
     Ok(())
 }

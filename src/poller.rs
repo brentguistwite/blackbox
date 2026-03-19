@@ -73,7 +73,7 @@ fn full_scan(
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
 ) -> Vec<PathBuf> {
-    let repos = repo_scanner::discover_repos(&config.watch_dirs);
+    let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
     poll_all_repos(&repos, repo_states, conn);
     enrichment::collect_reviews(&repos, conn);
     claude_tracking::poll_claude_sessions(conn, &repos);
@@ -85,12 +85,13 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
     let conn = db::open_db(&db_path)?;
     let mut repo_states: HashMap<PathBuf, RepoState> = HashMap::new();
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
+    let wt_dir_name = config.worktree_dir_name.as_deref();
 
     // Initial full scan
     let mut repos = full_scan(config, &mut repo_states, &conn);
 
     // Try to set up filesystem watcher
-    let mut watcher_opt = RepoWatcher::new(&repos).ok();
+    let mut watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
     if watcher_opt.is_some() {
         log::info!("Watching {} repos for changes", repos.len());
     } else {
@@ -100,10 +101,11 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
     let mut last_full_scan = Instant::now();
 
     loop {
-        if let Some(ref watcher) = watcher_opt {
+        if let Some(ref mut watcher) = watcher_opt {
             // Hybrid mode: block until event or 1s timeout
-            let changed = watcher.recv_events(&mut debounce_map, Duration::from_secs(1));
-            for repo_path in &changed {
+            let events = watcher.recv_events(&mut debounce_map, Duration::from_secs(1));
+
+            for repo_path in &events.changed_repos {
                 log::info!("Detected change in {}", repo_path.display());
                 ensure_state(repo_path, &mut repo_states);
                 let state = repo_states.get_mut(repo_path).unwrap();
@@ -111,6 +113,18 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn) {
                     log::warn!("Error polling {}: {}", repo_path.display(), e);
                 }
+            }
+
+            // Handle newly-discovered worktrees
+            for wt_path in &events.new_worktrees {
+                log::info!("New worktree detected: {}", wt_path.display());
+                ensure_state(wt_path, &mut repo_states);
+                let state = repo_states.get_mut(wt_path).unwrap();
+                let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
+                if let Err(e) = git_ops::poll_repo(wt_path, &db_repo_path, state, &conn) {
+                    log::warn!("Error polling new worktree {}: {}", wt_path.display(), e);
+                }
+                watcher.watch_repo(wt_path);
             }
 
             // Clean up stale worktrees
@@ -121,7 +135,7 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 repos = full_scan(config, &mut repo_states, &conn);
 
                 // Recreate watcher with updated repo list
-                watcher_opt = RepoWatcher::new(&repos).ok();
+                watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
                 if let Some(ref _w) = watcher_opt {
                     log::info!("Watching {} repos for changes", repos.len());
                 }
@@ -134,7 +148,7 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
             repos = full_scan(config, &mut repo_states, &conn);
 
             // Retry watcher setup on each full scan
-            watcher_opt = RepoWatcher::new(&repos).ok();
+            watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
             if watcher_opt.is_some() {
                 log::info!(
                     "File watcher now available, watching {} repos",
