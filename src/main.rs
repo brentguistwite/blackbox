@@ -30,9 +30,7 @@ fn run_query(
 
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
     let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
-    let total_time = repos
-        .iter()
-        .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
     let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
         acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
     });
@@ -164,7 +162,7 @@ fn main() -> anyhow::Result<()> {
             blackbox::enrichment::enrich_with_prs(&mut repos);
             let total_commits: usize = repos.iter().map(|r| r.commits).sum();
             let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
-            let total_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
             let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
                 acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
             });
