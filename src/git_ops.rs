@@ -2,10 +2,41 @@ use std::path::{Path, PathBuf};
 
 use chrono::TimeZone;
 use git2::Repository;
-use log::info;
+use log::{info, warn};
 use rusqlite::Connection;
 
 use crate::db;
+
+/// Resolve the local user's git identity (email, name) for commit filtering.
+fn get_user_identity(repo: &Repository) -> Option<(Option<String>, Option<String>)> {
+    let config = repo.config().ok()?;
+    let email = config.get_string("user.email").ok();
+    let name = config.get_string("user.name").ok();
+    if email.is_none() && name.is_none() {
+        return None;
+    }
+    Some((email, name))
+}
+
+/// Check if a commit was authored by the local git user.
+fn is_own_commit(commit: &git2::Commit, identity: &(Option<String>, Option<String>)) -> bool {
+    let author = commit.author();
+    if let Some(ref email) = identity.0 {
+        if let Some(author_email) = author.email() {
+            if author_email.eq_ignore_ascii_case(email) {
+                return true;
+            }
+        }
+    }
+    if let Some(ref name) = identity.1 {
+        if let Some(author_name) = author.name() {
+            if author_name == name {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 #[derive(Debug, Default)]
 pub struct RepoState {
@@ -25,6 +56,14 @@ pub fn poll_repo(
     conn: &Connection,
 ) -> anyhow::Result<()> {
     let repo = Repository::open(repo_path)?;
+
+    let identity = get_user_identity(&repo);
+    if identity.is_none() {
+        warn!(
+            "No user.email/user.name in git config for {} — recording all commits",
+            repo_path.display()
+        );
+    }
 
     // Get current HEAD info
     let head = repo.head()?;
@@ -94,6 +133,13 @@ pub fn poll_repo(
             }
             count += 1;
 
+            // Skip commits not authored by the local user
+            if let Some(ref id) = identity {
+                if !is_own_commit(&commit, id) {
+                    continue;
+                }
+            }
+
             let author_name = commit.author().name().unwrap_or("unknown").to_string();
             let message = commit.message().unwrap_or("").to_string();
             let time = commit.time();
@@ -145,6 +191,14 @@ pub fn poll_repo(
         for oid_result in revwalk {
             let oid = oid_result?;
             let commit = repo.find_commit(oid)?;
+
+            // Skip commits not authored by the local user
+            if let Some(ref id) = identity {
+                if !is_own_commit(&commit, id) {
+                    continue;
+                }
+            }
+
             let author_name = commit.author().name().unwrap_or("unknown").to_string();
             let message = commit.message().unwrap_or("").to_string();
             let time = commit.time();
