@@ -1,48 +1,43 @@
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-/// Helper: set XDG env vars to isolate test from real config/data
-fn setup_xdg(tmp: &TempDir) -> (PathBuf, PathBuf) {
-    let config_dir = tmp.path().join("config");
-    let data_dir = tmp.path().join("data");
+/// Helper: create isolated config + data dirs (no env var mutation)
+fn setup_dirs(tmp: &TempDir) -> (PathBuf, PathBuf) {
+    let config_dir = tmp.path().join("config").join("blackbox");
+    let data_dir = tmp.path().join("data").join("blackbox");
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::create_dir_all(&data_dir).unwrap();
-    unsafe { std::env::set_var("XDG_CONFIG_HOME", &config_dir) };
-    unsafe { std::env::set_var("XDG_DATA_HOME", &data_dir) };
     (config_dir, data_dir)
 }
 
 #[test]
 fn test_pid_file_path() {
     let tmp = TempDir::new().unwrap();
-    let (_config_dir, _data_dir) = setup_xdg(&tmp);
+    let (_config_dir, data_dir) = setup_dirs(&tmp);
 
-    let path = blackbox::daemon::pid_file_path().unwrap();
+    let path = blackbox::daemon::pid_file_path(&data_dir);
     assert!(path.to_string_lossy().ends_with("blackbox.pid"));
-    assert!(path.to_string_lossy().contains("blackbox"));
 }
 
 #[test]
 fn test_is_daemon_running_no_file() {
     let tmp = TempDir::new().unwrap();
-    let (_config_dir, _data_dir) = setup_xdg(&tmp);
+    let (_config_dir, data_dir) = setup_dirs(&tmp);
 
-    let result = blackbox::daemon::is_daemon_running().unwrap();
+    let result = blackbox::daemon::is_daemon_running(&data_dir).unwrap();
     assert!(result.is_none());
 }
 
 #[test]
 fn test_is_daemon_running_stale_pid() {
     let tmp = TempDir::new().unwrap();
-    let (_config_dir, data_dir) = setup_xdg(&tmp);
+    let (_config_dir, data_dir) = setup_dirs(&tmp);
 
     // Write a PID file with a non-existent PID
-    let pid_dir = data_dir.join("blackbox");
-    std::fs::create_dir_all(&pid_dir).unwrap();
-    let pid_file = pid_dir.join("blackbox.pid");
+    let pid_file = data_dir.join("blackbox.pid");
     std::fs::write(&pid_file, "999999").unwrap();
 
-    let result = blackbox::daemon::is_daemon_running().unwrap();
+    let result = blackbox::daemon::is_daemon_running(&data_dir).unwrap();
     assert!(result.is_none(), "Stale PID should return None");
     assert!(!pid_file.exists(), "Stale PID file should be cleaned up");
 }
@@ -50,17 +45,20 @@ fn test_is_daemon_running_stale_pid() {
 #[test]
 fn test_stop_when_not_running() {
     let tmp = TempDir::new().unwrap();
-    let (_config_dir, _data_dir) = setup_xdg(&tmp);
+    let (_config_dir, data_dir) = setup_dirs(&tmp);
 
-    // stop_daemon when not running should not error
-    let result = blackbox::daemon::stop_daemon();
+    let result = blackbox::daemon::stop_daemon(&data_dir);
     assert!(result.is_ok());
 }
 
+/// Integration test using CLI binary — needs env vars for subprocess
 #[test]
 fn test_start_stop_integration() {
     let tmp = TempDir::new().unwrap();
-    let (config_dir, data_dir) = setup_xdg(&tmp);
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
 
     // Create a config with empty watch_dirs and short poll interval
     let bb_config = config_dir.join("blackbox");
@@ -134,14 +132,17 @@ fn create_test_repo(path: &Path) -> git2::Repository {
 #[ignore] // slow -- run with --ignored
 fn test_e2e_daemon_records_commit() {
     let tmp = TempDir::new().unwrap();
-    let (config_dir, data_dir) = setup_xdg(&tmp);
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
 
     // Create a test git repo
     let repo_dir = tmp.path().join("repos").join("myproject");
     std::fs::create_dir_all(&repo_dir).unwrap();
     let repo = create_test_repo(&repo_dir);
 
-    // Write config pointing at the repos dir with 1s poll interval
+    // Write config pointing at the repos dir with 10s poll interval
     let bb_config = config_dir.join("blackbox");
     std::fs::create_dir_all(&bb_config).unwrap();
     let config_content = format!(

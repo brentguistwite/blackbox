@@ -74,13 +74,31 @@ pub fn resolve_main_repo(worktree_path: &Path) -> anyhow::Result<PathBuf> {
     Ok(main_root.to_path_buf())
 }
 
-pub fn discover_repos(watch_dirs: &[PathBuf]) -> Vec<PathBuf> {
+/// Find worktree parent directories (e.g. `.worktrees/`) for main repos.
+/// Skips worktrees themselves — only returns dirs for non-worktree repos.
+pub fn find_worktree_parent_dirs(repos: &[PathBuf], worktree_dir_name: &str) -> Vec<PathBuf> {
+    repos
+        .iter()
+        .filter(|r| is_worktree(r).is_none()) // only main repos
+        .map(|r| r.join(worktree_dir_name))
+        .filter(|p| p.is_dir())
+        .collect()
+}
+
+pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -> Vec<PathBuf> {
     let mut repos = Vec::new();
     for dir in watch_dirs {
         // Fast path: dir is itself a repo root
         let git_path = dir.join(".git");
         if git_path.is_dir() {
             repos.push(dir.clone());
+            // Scan only the worktree subdir (not the entire repo tree)
+            if let Some(wt_name) = worktree_dir_name {
+                let wt_dir = dir.join(wt_name);
+                if wt_dir.is_dir() {
+                    scan_repos_walkdir(&wt_dir, Some(2), &mut repos);
+                }
+            }
             continue;
         }
         if git_path.is_file() && is_valid_gitdir_file(&git_path) {
@@ -90,6 +108,8 @@ pub fn discover_repos(watch_dirs: &[PathBuf]) -> Vec<PathBuf> {
         // Recursive WalkDir scan
         scan_repos_walkdir(dir, None, &mut repos);
     }
+    repos.sort();
+    repos.dedup();
     repos
 }
 

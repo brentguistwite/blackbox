@@ -178,3 +178,41 @@ fn test_default_config_scan_dirs_none() {
     let cfg = Config::default();
     assert!(cfg.scan_dirs.is_none());
 }
+
+// --- worktree_dir_name ---
+
+#[test]
+fn test_worktree_dir_name_backward_compat() {
+    // Old TOML without worktree_dir_name should default to Some(".worktrees")
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
+}
+
+#[test]
+fn test_worktree_dir_name_empty_string() {
+    let toml_str = r#"
+        watch_dirs = []
+        worktree_dir_name = ""
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.worktree_dir_name, Some(String::new()));
+}
+
+#[test]
+fn test_worktree_dir_name_custom_value() {
+    let toml_str = r#"
+        watch_dirs = []
+        worktree_dir_name = "worktrees"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.worktree_dir_name, Some("worktrees".to_string()));
+}
+
+#[test]
+fn test_default_config_worktree_dir_name() {
+    let cfg = Config::default();
+    assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
+}

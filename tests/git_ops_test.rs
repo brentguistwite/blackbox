@@ -1,5 +1,6 @@
 use blackbox::db;
 use blackbox::git_ops::{poll_repo, RepoState};
+use chrono::TimeZone;
 use git2::{Repository, Signature};
 use tempfile::TempDir;
 
@@ -47,9 +48,10 @@ fn count_events(conn: &rusqlite::Connection, event_type: &str) -> i64 {
 }
 
 #[test]
-fn test_first_poll_seeds_state_no_records() {
+fn test_first_poll_backfills_todays_commits() {
     let repo_tmp = TempDir::new().unwrap();
     let db_tmp = TempDir::new().unwrap();
+    // create_test_repo uses Signature::now() → today's timestamp → should be backfilled
     let _repo = create_test_repo(&repo_tmp);
     let conn = open_test_db(&db_tmp);
 
@@ -61,11 +63,11 @@ fn test_first_poll_seeds_state_no_records() {
     assert!(state.last_commit_oid.is_some());
     assert!(state.last_head_branch.is_some());
 
-    // No records should be inserted on first poll
+    // Backfill should have inserted the initial commit (today's timestamp)
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM git_activity", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(total, 0);
+    assert_eq!(total, 1);
 }
 
 #[test]
@@ -86,11 +88,12 @@ fn test_new_commit_detected() {
     // Second poll: should detect new commit
     poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
 
-    assert_eq!(count_events(&conn, "commit"), 1);
+    // 2 commits: backfilled initial + new "second commit"
+    assert_eq!(count_events(&conn, "commit"), 2);
 
     let msg: String = conn
         .query_row(
-            "SELECT message FROM git_activity WHERE event_type = 'commit'",
+            "SELECT message FROM git_activity WHERE event_type = 'commit' ORDER BY id DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -383,12 +386,12 @@ fn test_two_worktrees_tracked_independently() {
     poll_repo(&wt_a, &db_path, &mut state_a, &conn).unwrap();
     poll_repo(&wt_b, &db_path, &mut state_b, &conn).unwrap();
 
-    // Only one commit should be recorded (from wt-a)
-    assert_eq!(count_events(&conn, "commit"), 1);
+    // 2 commits: backfilled initial (deduped across worktrees) + "commit in a"
+    assert_eq!(count_events(&conn, "commit"), 2);
 
     let msg: String = conn
         .query_row(
-            "SELECT message FROM git_activity WHERE event_type = 'commit'",
+            "SELECT message FROM git_activity WHERE event_type = 'commit' ORDER BY id DESC LIMIT 1",
             [],
             |row| row.get(0),
         )
@@ -425,4 +428,137 @@ fn test_regular_repo_main_repo_path_equals_key() {
         )
         .unwrap();
     assert_eq!(recorded, path_str);
+}
+
+/// Create a repo whose initial commit has a specific epoch timestamp.
+fn create_test_repo_at(tmp: &TempDir, epoch: i64) -> Repository {
+    let repo = Repository::init(tmp.path()).unwrap();
+    let sig = Signature::new("Test", "test@test.com", &git2::Time::new(epoch, 0)).unwrap();
+    let tree_id = {
+        let mut index = repo.index().unwrap();
+        index.write_tree().unwrap()
+    };
+    {
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+    }
+    repo
+}
+
+/// Add a commit with a specific epoch timestamp.
+fn add_commit_at(repo: &Repository, message: &str, epoch: i64) -> git2::Oid {
+    let sig = Signature::new("Test", "test@test.com", &git2::Time::new(epoch, 0)).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let tree = repo.find_tree(head.tree_id()).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head])
+        .unwrap()
+}
+
+#[test]
+fn test_first_poll_skips_old_commits() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+
+    // Yesterday at noon
+    let yesterday = chrono::Local::now().date_naive().pred_opt().unwrap();
+    let yesterday_noon = yesterday.and_hms_opt(12, 0, 0).unwrap();
+    let yesterday_epoch = chrono::Local
+        .from_local_datetime(&yesterday_noon)
+        .earliest()
+        .unwrap()
+        .timestamp();
+
+    let _repo = create_test_repo_at(&repo_tmp, yesterday_epoch);
+    let conn = open_test_db(&db_tmp);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    // Old commit should NOT be backfilled
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 0);
+}
+
+#[test]
+fn test_first_poll_cap_at_50() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+
+    // Use a timestamp firmly today
+    let today_noon = chrono::Local::now()
+        .date_naive()
+        .and_hms_opt(12, 0, 0)
+        .unwrap();
+    let today_epoch = chrono::Local
+        .from_local_datetime(&today_noon)
+        .earliest()
+        .unwrap()
+        .timestamp();
+
+    let repo = create_test_repo_at(&repo_tmp, today_epoch);
+    // Add 54 more commits (55 total with initial)
+    for i in 1..=54 {
+        add_commit_at(&repo, &format!("commit {}", i), today_epoch + i);
+    }
+
+    let conn = open_test_db(&db_tmp);
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 50);
+}
+
+#[test]
+fn test_first_poll_dedup_existing() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let _repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    // Manually pre-insert the commit that will be backfilled
+    let repo = Repository::open(repo_tmp.path()).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    let hash = head.id().to_string();
+    let path_str = repo_tmp.path().to_string_lossy();
+    db::insert_activity(
+        &conn,
+        &path_str,
+        "commit",
+        Some("main"),
+        None,
+        Some(&hash),
+        Some("Test"),
+        Some("initial commit"),
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .unwrap();
+
+    let mut state = RepoState::default();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    // Should still be only 1 record (INSERT OR IGNORE dedup)
+    let total: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 1);
 }

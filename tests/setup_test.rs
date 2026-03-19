@@ -1,6 +1,6 @@
 use blackbox::setup::{
-    detect_shell_type_from, hook_comment_block, notset_shell_message, unsupported_shell_message,
-    ShellDetection,
+    detect_shell_type_from, format_step, hook_comment_block, notset_shell_message,
+    total_setup_steps, unsupported_shell_message, ShellDetection,
 };
 
 // --- detect_shell_type_from tests ---
@@ -105,6 +105,46 @@ fn unsupported_message_contains_manual_instructions() {
         "message should list supported shells");
 }
 
+// --- step indicator tests ---
+
+#[test]
+fn format_step_contains_step_numbers() {
+    // Disable colors for predictable output
+    colored::control::set_override(false);
+    let result = format_step(1, 4, "Scan for repositories");
+    assert!(result.contains("[1/4]"), "should contain [1/4], got: {}", result);
+    assert!(
+        result.contains("Scan for repositories"),
+        "should contain label"
+    );
+}
+
+#[test]
+fn format_step_renders_different_numbers() {
+    colored::control::set_override(false);
+    let result = format_step(3, 3, "Shell hook");
+    assert!(result.contains("[3/3]"), "should contain [3/3], got: {}", result);
+}
+
+// --- total_setup_steps tests ---
+
+#[test]
+fn total_steps_is_at_least_4() {
+    // Always have scan + select + worktree + shell hook = 4 minimum
+    let total = total_setup_steps();
+    assert!(total >= 4, "should be >= 4, got {}", total);
+}
+
+#[test]
+fn total_steps_is_5_on_macos_or_linux() {
+    let total = total_setup_steps();
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+        assert_eq!(total, 5, "should be 5 on macOS/Linux");
+    } else {
+        assert_eq!(total, 4, "should be 4 on other platforms");
+    }
+}
+
 // --- notset shell message tests ---
 
 #[test]
@@ -117,4 +157,16 @@ fn notset_message_mentions_shell_var() {
 fn notset_message_contains_manual_instructions() {
     let msg = notset_shell_message();
     assert!(msg.contains("eval"), "message should contain manual eval instruction");
+}
+
+// --- total_setup_steps updated for worktree step ---
+
+#[test]
+fn total_steps_includes_worktree_step() {
+    let total = total_setup_steps();
+    if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
+        assert_eq!(total, 5, "should be 5 on macOS/Linux (scan+select+worktree+hook+service)");
+    } else {
+        assert_eq!(total, 4, "should be 4 on other platforms (scan+select+worktree+hook)");
+    }
 }
