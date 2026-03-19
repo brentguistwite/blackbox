@@ -62,7 +62,7 @@ fn test_watcher_creation_with_real_repos() {
     std::fs::create_dir_all(&repo_path).unwrap();
     git2::Repository::init(&repo_path).unwrap();
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()]);
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None);
     assert!(watcher.is_ok(), "Watcher should be created for valid repos");
     let w = watcher.unwrap();
     assert_eq!(w.repos(), &[repo_path]);
@@ -70,7 +70,7 @@ fn test_watcher_creation_with_real_repos() {
 
 #[test]
 fn test_watcher_creation_empty_repos() {
-    let watcher = blackbox::watcher::RepoWatcher::new(&[]);
+    let watcher = blackbox::watcher::RepoWatcher::new(&[], None);
     assert!(watcher.is_ok(), "Watcher should work with empty repo list");
     assert!(watcher.unwrap().repos().is_empty());
 }
@@ -78,7 +78,7 @@ fn test_watcher_creation_empty_repos() {
 #[test]
 fn test_watcher_creation_nonexistent_repo() {
     let repos = vec![PathBuf::from("/nonexistent/repo")];
-    let watcher = blackbox::watcher::RepoWatcher::new(&repos);
+    let watcher = blackbox::watcher::RepoWatcher::new(&repos, None);
     // Should still create watcher, just skip watches for missing paths
     assert!(watcher.is_ok());
 }
@@ -90,12 +90,13 @@ fn test_watcher_recv_timeout_returns_empty() {
     std::fs::create_dir_all(&repo_path).unwrap();
     git2::Repository::init(&repo_path).unwrap();
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path], None).unwrap();
     let mut debounce = HashMap::new();
 
     // Short timeout — should return empty (no events)
-    let changed = watcher.recv_events(&mut debounce, Duration::from_millis(50));
-    assert!(changed.is_empty());
+    let events = watcher.recv_events(&mut debounce, Duration::from_millis(50));
+    assert!(events.changed_repos.is_empty());
+    assert!(events.new_worktrees.is_empty());
 }
 
 #[test]
@@ -118,7 +119,7 @@ fn test_watcher_detects_head_change() {
     repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
         .unwrap();
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None).unwrap();
     let mut debounce = HashMap::new();
 
     // Make a new commit (changes .git/refs/heads/main or .git/HEAD)
@@ -137,11 +138,11 @@ fn test_watcher_detects_head_change() {
     // Give FS events time to propagate (FSEvents on macOS can batch with delay)
     std::thread::sleep(Duration::from_secs(2));
 
-    let changed = watcher.recv_events(&mut debounce, Duration::from_secs(1));
+    let events = watcher.recv_events(&mut debounce, Duration::from_secs(1));
     assert!(
-        changed.contains(&repo_path),
+        events.changed_repos.contains(&repo_path),
         "Should detect repo change after commit, got: {:?}",
-        changed
+        events.changed_repos
     );
 }
 
@@ -165,7 +166,7 @@ fn test_watcher_debounce() {
     repo.commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
         .unwrap();
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None).unwrap();
     let mut debounce = HashMap::new();
 
     // Set debounce entry to "just now" — simulates recent poll
@@ -187,11 +188,11 @@ fn test_watcher_debounce() {
     std::thread::sleep(Duration::from_millis(500));
 
     // Should be debounced (last poll was < 1s ago)
-    let changed = watcher.recv_events(&mut debounce, Duration::from_millis(200));
+    let events = watcher.recv_events(&mut debounce, Duration::from_millis(200));
     assert!(
-        changed.is_empty(),
+        events.changed_repos.is_empty(),
         "Should debounce events within 1s, got: {:?}",
-        changed
+        events.changed_repos
     );
 }
 
@@ -230,7 +231,7 @@ fn test_watcher_regular_repo_watches_git_and_refs() {
     std::fs::create_dir_all(&repo_path).unwrap();
     git2::Repository::init(&repo_path).unwrap();
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None).unwrap();
     let dirs = watcher.watched_dirs();
     let canon = std::fs::canonicalize(&repo_path).unwrap();
 
@@ -246,7 +247,7 @@ fn test_watcher_worktree_watches_head_only() {
     let tmp = TempDir::new().unwrap();
     let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
 
-    let watcher = blackbox::watcher::RepoWatcher::new(&[wt_path.clone()]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[wt_path.clone()], None).unwrap();
     let dirs = watcher.watched_dirs();
 
     // Worktree: should watch resolved_gitdir/ only (the .git/worktrees/<name> dir)
@@ -265,7 +266,7 @@ fn test_watcher_mixed_regular_and_worktree() {
     let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
 
     // Watch both main repo and worktree
-    let watcher = blackbox::watcher::RepoWatcher::new(&[main_path.clone(), wt_path.clone()]).unwrap();
+    let watcher = blackbox::watcher::RepoWatcher::new(&[main_path.clone(), wt_path.clone()], None).unwrap();
     let dirs = watcher.watched_dirs();
 
     // Main repo: .git/ + .git/refs/heads/ = 2 entries
@@ -313,6 +314,122 @@ fn test_stale_worktree_removed_from_repo_states() {
     assert_eq!(stale[0], wt_path);
     assert_eq!(repo_states.len(), 1);
     assert!(repo_states.contains_key(&main_path));
+}
+
+// --- US-018d: Dynamic worktree watching ---
+
+#[test]
+fn test_watcher_watches_worktree_dir_when_exists() {
+    let tmp = TempDir::new().unwrap();
+    let repo_path = tmp.path().join("myrepo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    git2::Repository::init(&repo_path).unwrap();
+    // Create .worktrees/ dir
+    std::fs::create_dir_all(repo_path.join(".worktrees")).unwrap();
+
+    let watcher =
+        blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], Some(".worktrees")).unwrap();
+    let dirs = watcher.watched_dirs();
+    let canon = std::fs::canonicalize(&repo_path).unwrap();
+
+    // Should watch .git/, .git/refs/heads/, AND .worktrees/
+    let has_worktree_dir = dirs
+        .iter()
+        .any(|d| *d == canon.join(".worktrees"));
+    assert!(
+        has_worktree_dir,
+        "Should watch .worktrees/ dir, got: {:?}",
+        dirs
+    );
+}
+
+#[test]
+fn test_watcher_no_extra_watches_when_worktree_dir_name_none() {
+    let tmp = TempDir::new().unwrap();
+    let repo_path = tmp.path().join("myrepo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    git2::Repository::init(&repo_path).unwrap();
+    // Create .worktrees/ dir (should be ignored since worktree_dir_name is None)
+    std::fs::create_dir_all(repo_path.join(".worktrees")).unwrap();
+
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None).unwrap();
+    let dirs = watcher.watched_dirs();
+
+    // Should only watch .git/ and .git/refs/heads/ — NOT .worktrees/
+    let has_worktree_dir = dirs
+        .iter()
+        .any(|d| d.to_string_lossy().contains(".worktrees"));
+    assert!(
+        !has_worktree_dir,
+        "Should NOT watch .worktrees/ when worktree_dir_name is None, got: {:?}",
+        dirs
+    );
+    assert_eq!(dirs.len(), 2, "Only .git/ and .git/refs/heads/");
+}
+
+#[test]
+fn test_watch_repo_adds_new_repo_dynamically() {
+    let tmp = TempDir::new().unwrap();
+    let repo1 = tmp.path().join("repo1");
+    std::fs::create_dir_all(&repo1).unwrap();
+    git2::Repository::init(&repo1).unwrap();
+
+    let mut watcher = blackbox::watcher::RepoWatcher::new(&[repo1.clone()], None).unwrap();
+    assert_eq!(watcher.repos().len(), 1);
+
+    // Dynamically add second repo
+    let repo2 = tmp.path().join("repo2");
+    std::fs::create_dir_all(&repo2).unwrap();
+    git2::Repository::init(&repo2).unwrap();
+
+    watcher.watch_repo(&repo2);
+    assert_eq!(watcher.repos().len(), 2);
+    assert!(watcher.repos().contains(&repo2));
+
+    // Should have watches for both repos
+    let dirs = watcher.watched_dirs();
+    let canon2 = std::fs::canonicalize(&repo2).unwrap();
+    let has_repo2_git = dirs.iter().any(|d| *d == canon2.join(".git"));
+    assert!(has_repo2_git, "Should watch new repo's .git/, got: {:?}", dirs);
+}
+
+#[test]
+fn test_recv_events_returns_watcher_events_struct() {
+    let tmp = TempDir::new().unwrap();
+    let repo_path = tmp.path().join("myrepo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    git2::Repository::init(&repo_path).unwrap();
+
+    let watcher = blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], None).unwrap();
+    let mut debounce = HashMap::new();
+
+    // Short timeout — should return empty WatcherEvents
+    let events = watcher.recv_events(&mut debounce, Duration::from_millis(50));
+    assert!(events.changed_repos.is_empty());
+    assert!(events.new_worktrees.is_empty());
+}
+
+#[test]
+fn test_watcher_worktree_dir_not_watched_when_missing() {
+    let tmp = TempDir::new().unwrap();
+    let repo_path = tmp.path().join("myrepo");
+    std::fs::create_dir_all(&repo_path).unwrap();
+    git2::Repository::init(&repo_path).unwrap();
+    // No .worktrees/ dir exists
+
+    let watcher =
+        blackbox::watcher::RepoWatcher::new(&[repo_path.clone()], Some(".worktrees")).unwrap();
+    let dirs = watcher.watched_dirs();
+
+    // Should only watch .git/ and .git/refs/heads/ — .worktrees/ doesn't exist
+    let has_worktree_dir = dirs
+        .iter()
+        .any(|d| d.to_string_lossy().contains(".worktrees"));
+    assert!(
+        !has_worktree_dir,
+        "Should NOT watch .worktrees/ when it doesn't exist, got: {:?}",
+        dirs
+    );
 }
 
 #[test]

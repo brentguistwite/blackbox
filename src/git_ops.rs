@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use chrono::TimeZone;
 use git2::Repository;
+use log::info;
 use rusqlite::Connection;
 
 use crate::db;
@@ -53,9 +55,81 @@ pub fn poll_repo(
         state.last_head_branch = current_branch.clone();
     }
 
-    // First poll: seed state, don't record history
+    // First poll: seed state, backfill today's commits
     if state.last_commit_oid.is_none() {
         state.last_commit_oid = Some(current_oid);
+
+        // Compute midnight local time as UTC epoch seconds
+        let midnight_local = chrono::Local::now()
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .unwrap();
+        let midnight_epoch = chrono::Local
+            .from_local_datetime(&midnight_local)
+            .earliest()
+            .unwrap()
+            .timestamp();
+
+        let mut revwalk = repo.revwalk()?;
+        revwalk.push_head()?;
+        revwalk.set_sorting(git2::Sort::TIME)?;
+
+        let mut count = 0u32;
+        for oid_result in revwalk {
+            let oid = match oid_result {
+                Ok(o) => o,
+                Err(_) => break, // shallow clone boundary or corrupt history
+            };
+            let commit = match repo.find_commit(oid) {
+                Ok(c) => c,
+                Err(_) => break,
+            };
+
+            if commit.time().seconds() < midnight_epoch {
+                break;
+            }
+            if count >= 50 {
+                info!("Backfill capped at 50 commits for {}", db_repo_path);
+                break;
+            }
+            count += 1;
+
+            let author_name = commit.author().name().unwrap_or("unknown").to_string();
+            let message = commit.message().unwrap_or("").to_string();
+            let time = commit.time();
+            let ts = chrono::DateTime::from_timestamp(time.seconds(), 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+            let hash = oid.to_string();
+
+            if commit.parent_count() > 1 {
+                let source_branch = resolve_source_branch(&repo, &commit);
+                db::insert_activity(
+                    conn,
+                    db_repo_path,
+                    "merge",
+                    current_branch.as_deref(),
+                    Some(&source_branch),
+                    Some(&hash),
+                    Some(&author_name),
+                    Some(&message),
+                    &ts,
+                )?;
+            } else {
+                db::insert_activity(
+                    conn,
+                    db_repo_path,
+                    "commit",
+                    current_branch.as_deref(),
+                    None,
+                    Some(&hash),
+                    Some(&author_name),
+                    Some(&message),
+                    &ts,
+                )?;
+            }
+        }
+
         return Ok(());
     }
 

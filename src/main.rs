@@ -113,7 +113,8 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::RunForeground => {
             let config = blackbox::config::load_config()?;
-            blackbox::daemon::run_foreground(config)?;
+            let data_dir = blackbox::config::data_dir()?;
+            blackbox::daemon::run_foreground(config, &data_dir)?;
         }
         Commands::Hook { shell } => {
             let script = blackbox::shell_hook::generate_hook(&shell)?;

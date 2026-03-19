@@ -3,6 +3,182 @@ use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
+const MIN_GAP_FLOOR_MINS: i64 = 30;
+const MAX_GAP_CAP_MINS: i64 = 120;
+const MIN_CREDIT_MINS: i64 = 5;
+const MAX_CREDIT_MINS: i64 = 30;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimeInterval {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// Sort intervals by start, merge overlapping/adjacent, return merged list + total duration.
+pub fn merge_intervals(intervals: &mut [TimeInterval]) -> (Vec<TimeInterval>, Duration) {
+    if intervals.is_empty() {
+        return (vec![], Duration::zero());
+    }
+    intervals.sort_by_key(|i| i.start);
+    let mut merged = vec![intervals[0]];
+    for iv in &intervals[1..] {
+        let last = merged.last_mut().unwrap();
+        if iv.start <= last.end {
+            last.end = last.end.max(iv.end);
+        } else {
+            merged.push(*iv);
+        }
+    }
+    let total = merged.iter().fold(Duration::zero(), |acc, iv| acc + (iv.end - iv.start));
+    (merged, total)
+}
+
+/// Compute median gap between consecutive commit events (ignoring non-commit events).
+/// Returns None if < 2 commits.
+pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
+    let commit_times: Vec<DateTime<Utc>> = events
+        .iter()
+        .filter(|e| e.event_type == "commit")
+        .map(|e| e.timestamp)
+        .collect();
+    if commit_times.len() < 2 {
+        return None;
+    }
+    let mut gaps: Vec<Duration> = commit_times
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|d| d.num_seconds() > 0) // ignore zero-gap duplicates
+        .collect();
+    if gaps.is_empty() {
+        return None;
+    }
+    gaps.sort();
+    let mid = gaps.len() / 2;
+    if gaps.len() % 2 == 0 {
+        Some((gaps[mid - 1] + gaps[mid]) / 2)
+    } else {
+        Some(gaps[mid])
+    }
+}
+
+/// Time estimation v2: git events + AI sessions, adaptive thresholds.
+/// No presence data. AI session intervals must be pre-clipped to query window.
+///
+/// With empty ai_sessions and < 2 commits, falls back to config gap/credit values
+/// (matching legacy behavior).
+pub fn estimate_time_v2(
+    events: &[ActivityEvent],
+    ai_sessions: &[TimeInterval],
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> Duration {
+    // Step 1: Compute adaptive thresholds from commit patterns
+    let (effective_gap, effective_credit) = match median_commit_gap(events) {
+        Some(median) => {
+            let median_mins = median.num_minutes();
+            let gap = (median_mins * 3).max(MIN_GAP_FLOOR_MINS).min(MAX_GAP_CAP_MINS);
+            let credit = median_mins.max(MIN_CREDIT_MINS).min(MAX_CREDIT_MINS);
+            (Duration::minutes(gap), Duration::minutes(credit))
+        }
+        None => (
+            Duration::minutes(session_gap_minutes as i64),
+            Duration::minutes(first_commit_minutes as i64),
+        ),
+    };
+
+    // Step 2: Group git events into sessions → tentative intervals with credit
+    let mut git_intervals: Vec<TimeInterval> = Vec::new();
+    if !events.is_empty() {
+        let mut session_start_idx = 0;
+        for i in 1..=events.len() {
+            let is_end = i == events.len()
+                || (events[i].timestamp - events[i - 1].timestamp) >= effective_gap;
+            if is_end {
+                let first_event = events[session_start_idx].timestamp;
+                let last_event = events[i - 1].timestamp;
+                let tentative_start = first_event - effective_credit;
+                git_intervals.push(TimeInterval {
+                    start: tentative_start,
+                    end: last_event,
+                });
+                if i < events.len() {
+                    session_start_idx = i;
+                }
+            }
+        }
+    }
+
+    // Step 3: Credit suppression — if AI session covers [first_event - credit, first_event],
+    // shrink git interval start to first_event (real data > guess)
+    for iv in &mut git_intervals {
+        let credit_window_start = iv.start;
+        let credit_window_end = iv.start + effective_credit;
+        let has_ai_overlap = ai_sessions.iter().any(|ai| {
+            ai.start < credit_window_end && ai.end > credit_window_start
+        });
+        if has_ai_overlap {
+            iv.start = credit_window_end; // shrink to first_event
+        }
+    }
+
+    // Step 4: Collect git + AI intervals
+    let mut all_intervals: Vec<TimeInterval> = Vec::new();
+    all_intervals.extend_from_slice(&git_intervals);
+    all_intervals.extend_from_slice(ai_sessions);
+
+    // Step 5: Merge and return total
+    let (_, total) = merge_intervals(&mut all_intervals);
+    total
+}
+
+/// Query directory_presence for a time range, grouped by repo_path.
+/// NULL left_at capped at entered_at + session_gap_minutes.
+/// Intervals clipped to [from, to].
+pub fn query_presence(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    session_gap_minutes: u64,
+) -> anyhow::Result<BTreeMap<String, Vec<TimeInterval>>> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+    let gap = Duration::minutes(session_gap_minutes as i64);
+
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, entered_at, left_at
+         FROM directory_presence
+         WHERE entered_at <= ?2 AND (left_at >= ?1 OR left_at IS NULL)
+         ORDER BY repo_path, entered_at ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+
+    let mut map: BTreeMap<String, Vec<TimeInterval>> = BTreeMap::new();
+    for row in rows {
+        let (repo_path, entered_str, left_str) = row?;
+        let entered = DateTime::parse_from_rfc3339(&entered_str)?.with_timezone(&Utc);
+        let effective_end = match left_str {
+            Some(ref s) => DateTime::parse_from_rfc3339(s)?.with_timezone(&Utc),
+            None => entered + gap,
+        };
+
+        // Clip to [from, to]
+        let start = entered.max(from);
+        let end = effective_end.min(to);
+        if start < end {
+            map.entry(repo_path).or_default().push(TimeInterval { start, end });
+        }
+    }
+
+    Ok(map)
+}
+
 #[derive(Debug, Clone)]
 pub struct ActivityEvent {
     pub event_type: String,
@@ -179,14 +355,17 @@ pub fn query_activity(
     // Query AI sessions in the same time range
     let ai_session_map = query_ai_sessions(conn, from, to)?;
 
-    // Collect all repo paths from git activity, reviews, and AI sessions
+    // Collect all repo paths. Filter out AI sessions from user's home dir.
+    let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
+    let not_home = |k: &&String| home_dir.as_ref().map_or(true, |h| k.as_str() != h);
     let all_repo_paths: std::collections::BTreeSet<String> = repo_map
         .keys()
         .chain(review_map.keys())
-        .chain(ai_session_map.keys())
+        .chain(ai_session_map.keys().filter(not_home))
         .cloned()
         .collect();
 
+    let now = Utc::now();
     let mut repos: Vec<RepoSummary> = Vec::new();
     for repo_path in all_repo_paths {
         let events = repo_map.remove(&repo_path).unwrap_or_default();
@@ -211,7 +390,17 @@ pub fn query_activity(
             .collect();
         branches.sort();
 
-        let estimated_time = estimate_time(&events, session_gap_minutes, first_commit_minutes);
+        // Extract AI session time intervals, clip to [from, to]
+        let ai_intervals: Vec<TimeInterval> = ai_sessions.iter().filter_map(|s| {
+            let end = s.ended_at.unwrap_or(now);
+            let start = s.started_at.max(from);
+            let end = end.min(to);
+            if start < end { Some(TimeInterval { start, end }) } else { None }
+        }).collect();
+
+        let estimated_time = estimate_time_v2(
+            &events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+        );
 
         repos.push(RepoSummary {
             repo_path,

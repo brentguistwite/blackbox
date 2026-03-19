@@ -137,8 +137,8 @@ fn fetch_reviewed_prs(repo_path: &str) -> Option<Vec<GhPrWithReviews>> {
         .args([
             "pr",
             "list",
-            "--reviewed-by",
-            "@me",
+            "--search",
+            "reviewed-by:@me",
             "--state",
             "all",
             "--json",
@@ -164,6 +164,9 @@ fn fetch_reviewed_prs(repo_path: &str) -> Option<Vec<GhPrWithReviews>> {
 /// Collect reviews for all given repo paths, dedup and insert into DB.
 /// Silently skips if gh not available or username can't be determined.
 pub fn collect_reviews(repo_paths: &[std::path::PathBuf], conn: &Connection) {
+    use crate::repo_scanner;
+    use std::collections::HashSet;
+
     if !gh_available() {
         log::debug!("gh CLI not available, skipping review collection");
         return;
@@ -177,33 +180,45 @@ pub fn collect_reviews(repo_paths: &[std::path::PathBuf], conn: &Connection) {
         }
     };
 
+    // Dedup: resolve worktrees to main repo, only fetch reviews once per main repo.
+    let mut seen_main_repos: HashSet<std::path::PathBuf> = HashSet::new();
     for repo_path in repo_paths {
-        let repo_str = repo_path.to_string_lossy();
-        let prs = match fetch_reviewed_prs(&repo_str) {
+        let main_repo = if repo_scanner::is_worktree(repo_path).is_some() {
+            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.clone())
+        } else {
+            repo_path.clone()
+        };
+
+        if !seen_main_repos.insert(main_repo.clone()) {
+            continue; // already fetched reviews for this main repo
+        }
+
+        let main_str = main_repo.to_string_lossy();
+        // Run gh from repo_path (works from both main repo and worktree)
+        let prs = match fetch_reviewed_prs(&repo_path.to_string_lossy()) {
             Some(prs) => prs,
             None => {
-                log::debug!("Failed to fetch reviews for {}", repo_str);
+                log::debug!("Failed to fetch reviews for {}", main_str);
                 continue;
             }
         };
 
         for pr in &prs {
-            // Filter to current user's reviews only
             for review in &pr.reviews {
                 if review.author.login != username {
                     continue;
                 }
-                // Map gh review states to our action names
                 let action = match review.state.as_str() {
                     "APPROVED" => "APPROVED",
                     "CHANGES_REQUESTED" => "CHANGES_REQUESTED",
                     "COMMENTED" => "COMMENTED",
-                    _ => continue, // skip PENDING, DISMISSED, etc.
+                    _ => continue,
                 };
 
+                // Store under main repo path, not worktree path
                 match db::insert_review(
                     conn,
-                    &repo_str,
+                    &main_str,
                     pr.number as i64,
                     &pr.title,
                     &pr.url,
@@ -212,14 +227,14 @@ pub fn collect_reviews(repo_paths: &[std::path::PathBuf], conn: &Connection) {
                 ) {
                     Ok(true) => log::debug!(
                         "Recorded review: {} PR#{} ({})",
-                        repo_str,
+                        main_str,
                         pr.number,
                         action
                     ),
-                    Ok(false) => {} // duplicate, skip silently
+                    Ok(false) => {}
                     Err(e) => log::warn!(
                         "Failed to insert review for {} PR#{}: {}",
-                        repo_str,
+                        main_str,
                         pr.number,
                         e
                     ),

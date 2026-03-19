@@ -1,6 +1,6 @@
 use blackbox::repo_scanner::{
-    auto_scan_repos_from, discover_repos, is_valid_gitdir_file, is_worktree, resolve_main_repo,
-    scan_directory,
+    auto_scan_repos_from, discover_repos, find_worktree_parent_dirs, is_valid_gitdir_file,
+    is_worktree, resolve_main_repo, scan_directory,
 };
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -17,7 +17,7 @@ fn test_discover_finds_git_repos() {
     init_repo(&tmp.path().join("repo_a"));
     init_repo(&tmp.path().join("repo_b"));
 
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 2);
     assert!(repos.contains(&tmp.path().join("repo_a")));
     assert!(repos.contains(&tmp.path().join("repo_b")));
@@ -28,7 +28,7 @@ fn test_discover_finds_nested_repos() {
     let tmp = TempDir::new().unwrap();
     init_repo(&tmp.path().join("deep/nested/repo"));
 
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("deep/nested/repo"));
 }
@@ -39,7 +39,7 @@ fn test_discover_skips_node_modules() {
     init_repo(&tmp.path().join("node_modules/pkg"));
     init_repo(&tmp.path().join("real_repo"));
 
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("real_repo"));
 }
@@ -52,7 +52,7 @@ fn test_discover_skips_target_and_vendor() {
     init_repo(&tmp.path().join(".build/out"));
     init_repo(&tmp.path().join("good"));
 
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("good"));
 }
@@ -63,7 +63,7 @@ fn test_discover_skips_bare_repos() {
     init_repo(&tmp.path().join("normal"));
     git2::Repository::init_bare(tmp.path().join("bare")).unwrap();
 
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("normal"));
 }
@@ -71,13 +71,13 @@ fn test_discover_skips_bare_repos() {
 #[test]
 fn test_discover_empty_dirs() {
     let tmp = TempDir::new().unwrap();
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert!(repos.is_empty());
 }
 
 #[test]
 fn test_discover_nonexistent_dir() {
-    let repos = discover_repos(&[PathBuf::from("/nonexistent/path/xyz")]);
+    let repos = discover_repos(&[PathBuf::from("/nonexistent/path/xyz")], None);
     assert!(repos.is_empty());
 }
 
@@ -88,7 +88,7 @@ fn test_discover_multiple_watch_dirs() {
     init_repo(&tmp1.path().join("repo1"));
     init_repo(&tmp2.path().join("repo2"));
 
-    let repos = discover_repos(&[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()], None);
     assert_eq!(repos.len(), 2);
 }
 
@@ -208,7 +208,7 @@ fn test_auto_scan_handles_permission_errors() {
 fn test_fast_path_git_dir() {
     let tmp = TempDir::new().unwrap();
     init_repo(tmp.path()); // .git dir at root level
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().to_path_buf());
 }
@@ -222,7 +222,7 @@ fn test_fast_path_git_file_worktree() {
         "gitdir: /some/repo/.git/worktrees/feat\n",
     )
     .unwrap();
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().to_path_buf());
 }
@@ -234,7 +234,7 @@ fn test_fast_path_malformed_git_file_falls_through() {
     std::fs::write(tmp.path().join(".git"), "not a valid gitdir pointer\n").unwrap();
     // Real repo in subdirectory should be found by WalkDir
     init_repo(&tmp.path().join("real_repo"));
-    let repos = discover_repos(&[tmp.path().to_path_buf()]);
+    let repos = discover_repos(&[tmp.path().to_path_buf()], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("real_repo"));
 }
@@ -264,7 +264,7 @@ fn test_walkdir_discovers_worktree_git_files() {
     std::fs::write(wt_gitdir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
     std::fs::write(wt_gitdir.join("commondir"), "../..\n").unwrap();
 
-    let repos = discover_repos(&[tmp.path().join("parent")]);
+    let repos = discover_repos(&[tmp.path().join("parent")], None);
     assert!(repos.contains(&main_path), "should find main repo");
     assert!(repos.contains(&wt_path), "should find worktree");
     assert_eq!(repos.len(), 2);
@@ -282,7 +282,7 @@ fn test_walkdir_skips_malformed_git_files() {
     std::fs::create_dir_all(&bad_path).unwrap();
     std::fs::write(bad_path.join(".git"), "garbage content\n").unwrap();
 
-    let repos = discover_repos(&[tmp.path().join("parent")]);
+    let repos = discover_repos(&[tmp.path().join("parent")], None);
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().join("parent/real_repo"));
 }
@@ -477,4 +477,60 @@ fn test_scan_directory_is_repo_root() {
     let repos = scan_directory(tmp.path());
     assert_eq!(repos.len(), 1);
     assert_eq!(repos[0], tmp.path().to_path_buf());
+}
+
+// --- find_worktree_parent_dirs tests ---
+
+#[test]
+fn test_find_worktree_parent_dirs_finds_existing() {
+    let tmp = TempDir::new().unwrap();
+    let main_path = tmp.path().join("main_repo");
+    init_repo(&main_path);
+    // Create .worktrees/ dir inside main repo
+    std::fs::create_dir_all(main_path.join(".worktrees")).unwrap();
+
+    let repos = vec![main_path.clone()];
+    let dirs = find_worktree_parent_dirs(&repos, ".worktrees");
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(dirs[0], main_path.join(".worktrees"));
+}
+
+#[test]
+fn test_find_worktree_parent_dirs_skips_missing() {
+    let tmp = TempDir::new().unwrap();
+    let main_path = tmp.path().join("main_repo");
+    init_repo(&main_path);
+    // No .worktrees/ dir
+
+    let repos = vec![main_path.clone()];
+    let dirs = find_worktree_parent_dirs(&repos, ".worktrees");
+    assert!(dirs.is_empty());
+}
+
+#[test]
+fn test_find_worktree_parent_dirs_skips_worktrees_themselves() {
+    let tmp = TempDir::new().unwrap();
+    let (main_path, wt_path) = create_repo_with_worktree(tmp.path(), "feat");
+    // Create .worktrees/ in main repo only
+    std::fs::create_dir_all(main_path.join(".worktrees")).unwrap();
+    // Also create .worktrees/ in worktree (shouldn't be picked up)
+    std::fs::create_dir_all(wt_path.join(".worktrees")).unwrap();
+
+    let repos = vec![main_path.clone(), wt_path.clone()];
+    let dirs = find_worktree_parent_dirs(&repos, ".worktrees");
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(dirs[0], main_path.join(".worktrees"));
+}
+
+#[test]
+fn test_find_worktree_parent_dirs_custom_name() {
+    let tmp = TempDir::new().unwrap();
+    let main_path = tmp.path().join("main_repo");
+    init_repo(&main_path);
+    std::fs::create_dir_all(main_path.join("trees")).unwrap();
+
+    let repos = vec![main_path.clone()];
+    let dirs = find_worktree_parent_dirs(&repos, "trees");
+    assert_eq!(dirs.len(), 1);
+    assert_eq!(dirs[0], main_path.join("trees"));
 }
