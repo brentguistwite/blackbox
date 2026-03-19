@@ -6,6 +6,11 @@ use tempfile::TempDir;
 
 fn create_test_repo(tmp: &TempDir) -> Repository {
     let repo = Repository::init(tmp.path()).unwrap();
+    {
+        let mut config = repo.config().unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        config.set_str("user.name", "Test").unwrap();
+    }
     let sig = Signature::now("Test", "test@test.com").unwrap();
     let tree_id = {
         let mut index = repo.index().unwrap();
@@ -217,6 +222,11 @@ fn create_repo_with_worktree(tmp: &TempDir) -> (Repository, std::path::PathBuf) 
     let main_dir = tmp.path().join("main");
     std::fs::create_dir_all(&main_dir).unwrap();
     let repo = Repository::init(&main_dir).unwrap();
+    {
+        let mut config = repo.config().unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        config.set_str("user.name", "Test").unwrap();
+    }
     let sig = Signature::now("Test", "test@test.com").unwrap();
     {
         let tree_id = {
@@ -322,6 +332,11 @@ fn test_two_worktrees_tracked_independently() {
     let main_dir = tmp.path().join("main");
     std::fs::create_dir_all(&main_dir).unwrap();
     let repo = Repository::init(&main_dir).unwrap();
+    {
+        let mut config = repo.config().unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        config.set_str("user.name", "Test").unwrap();
+    }
     let sig = Signature::now("Test", "test@test.com").unwrap();
     let tree_id = {
         let mut index = repo.index().unwrap();
@@ -433,6 +448,11 @@ fn test_regular_repo_main_repo_path_equals_key() {
 /// Create a repo whose initial commit has a specific epoch timestamp.
 fn create_test_repo_at(tmp: &TempDir, epoch: i64) -> Repository {
     let repo = Repository::init(tmp.path()).unwrap();
+    {
+        let mut config = repo.config().unwrap();
+        config.set_str("user.email", "test@test.com").unwrap();
+        config.set_str("user.name", "Test").unwrap();
+    }
     let sig = Signature::new("Test", "test@test.com", &git2::Time::new(epoch, 0)).unwrap();
     let tree_id = {
         let mut index = repo.index().unwrap();
