@@ -71,7 +71,7 @@ pub fn estimate_time_v2(
     ai_sessions: &[TimeInterval],
     session_gap_minutes: u64,
     first_commit_minutes: u64,
-) -> Duration {
+) -> (Duration, Vec<TimeInterval>) {
     // Step 1: Compute adaptive thresholds from commit patterns
     let (effective_gap, effective_credit) = match median_commit_gap(events) {
         Some(median) => {
@@ -126,9 +126,9 @@ pub fn estimate_time_v2(
     all_intervals.extend_from_slice(&git_intervals);
     all_intervals.extend_from_slice(ai_sessions);
 
-    // Step 5: Merge and return total
-    let (_, total) = merge_intervals(&mut all_intervals);
-    total
+    // Step 5: Merge and return total + intervals
+    let (merged, total) = merge_intervals(&mut all_intervals);
+    (total, merged)
 }
 
 /// Query directory_presence for a time range, grouped by repo_path.
@@ -398,7 +398,7 @@ pub fn query_activity(
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
 
-        let estimated_time = estimate_time_v2(
+        let (estimated_time, _) = estimate_time_v2(
             &events, &ai_intervals, session_gap_minutes, first_commit_minutes,
         );
 
@@ -416,6 +416,29 @@ pub fn query_activity(
     }
 
     Ok(repos)
+}
+
+/// Compute global estimated time by merging all per-repo intervals.
+/// Avoids double-counting when working across multiple repos simultaneously.
+pub fn global_estimated_time(
+    repos: &[RepoSummary],
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> Duration {
+    let now = Utc::now();
+    let mut all_intervals: Vec<TimeInterval> = Vec::new();
+    for repo in repos {
+        let ai_intervals: Vec<TimeInterval> = repo.ai_sessions.iter().filter_map(|s| {
+            let end = s.ended_at.unwrap_or(now);
+            if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
+        }).collect();
+        let (_, intervals) = estimate_time_v2(
+            &repo.events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+        );
+        all_intervals.extend_from_slice(&intervals);
+    }
+    let (_, total) = merge_intervals(&mut all_intervals);
+    total
 }
 
 /// Query review_activity table for a given time range, grouped by repo.

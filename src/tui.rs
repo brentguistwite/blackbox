@@ -195,10 +195,10 @@ impl App {
         feed = collapse_similar_events(feed);
         feed.truncate(50);
 
-        // Total time
-        let total_time = repos
-            .iter()
-            .fold(chrono::Duration::zero(), |acc, r| acc + r.estimated_time);
+        // Total time — global merge avoids double-counting concurrent repo work
+        let total_time = crate::query::global_estimated_time(
+            &repos, self.session_gap_minutes, self.first_commit_minutes,
+        );
         self.total_time_mins = total_time.num_minutes();
 
         // Sparkline: 8 hours in 30-min buckets = 16 buckets
