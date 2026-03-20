@@ -1,5 +1,5 @@
 use blackbox::db;
-use blackbox::git_ops::{poll_repo, RepoState};
+use blackbox::git_ops::{RepoState, poll_repo};
 use chrono::TimeZone;
 use git2::{Repository, Signature};
 use std::path::Path;
@@ -71,7 +71,11 @@ fn test_first_poll_backfills_todays_commits() {
 
     // Backfill should have inserted the initial commit (today's timestamp)
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'", [], |row| row.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE event_type = 'commit'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(total, 1);
 }
@@ -249,7 +253,12 @@ fn create_repo_with_worktree(tmp: &TempDir) -> (Repository, std::path::PathBuf) 
     let wt_path = tmp.path().join("wt1");
     {
         let wt_ref = repo.find_reference("refs/heads/wt-branch").unwrap();
-        repo.worktree("wt1", &wt_path, Some(git2::WorktreeAddOptions::new().reference(Some(&wt_ref)))).unwrap();
+        repo.worktree(
+            "wt1",
+            &wt_path,
+            Some(git2::WorktreeAddOptions::new().reference(Some(&wt_ref))),
+        )
+        .unwrap();
     }
 
     (repo, wt_path)

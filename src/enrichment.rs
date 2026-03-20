@@ -48,9 +48,7 @@ fn fetch_prs_impl(repo_path: &str, state: Option<&str>, limit: u32) -> Option<Ve
 
     let handle = std::thread::spawn(move || child.wait_with_output());
     match handle.join() {
-        Ok(Ok(output)) if output.status.success() => {
-            serde_json::from_slice(&output.stdout).ok()
-        }
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout).ok(),
         _ => None,
     }
 }
@@ -171,9 +169,7 @@ fn fetch_reviewed_prs(repo_path: &str) -> Option<Vec<GhPrWithReviews>> {
 
     let handle = std::thread::spawn(move || child.wait_with_output());
     match handle.join() {
-        Ok(Ok(output)) if output.status.success() => {
-            serde_json::from_slice(&output.stdout).ok()
-        }
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout).ok(),
         _ => None,
     }
 }

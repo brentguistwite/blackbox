@@ -125,7 +125,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let _guard = PidGuard::new(dir.path()).unwrap();
         let pid_path = pid_file_path(dir.path());
-        assert!(pid_path.exists(), "PID file should exist after guard creation");
+        assert!(
+            pid_path.exists(),
+            "PID file should exist after guard creation"
+        );
         let content = std::fs::read_to_string(&pid_path).unwrap();
         let pid: u32 = content.trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
@@ -139,7 +142,10 @@ mod tests {
             let _guard = PidGuard::new(dir.path()).unwrap();
             assert!(pid_path.exists());
         }
-        assert!(!pid_path.exists(), "PID file should be removed after guard is dropped");
+        assert!(
+            !pid_path.exists(),
+            "PID file should be removed after guard is dropped"
+        );
     }
 
     #[test]

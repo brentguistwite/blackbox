@@ -18,7 +18,10 @@ fn test_encode_project_path() {
 
 #[test]
 fn test_encode_project_path_simple() {
-    assert_eq!(claude_tracking::encode_project_path("/tmp/repo"), "-tmp-repo");
+    assert_eq!(
+        claude_tracking::encode_project_path("/tmp/repo"),
+        "-tmp-repo"
+    );
 }
 
 #[test]
@@ -55,7 +58,11 @@ fn test_poll_sessions_discovers_active_session() {
 
     // Session should be in DB
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_sessions WHERE session_id = 'abc-123'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_sessions WHERE session_id = 'abc-123'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 1);
 
@@ -91,11 +98,25 @@ fn test_poll_sessions_dedup() {
     let watched: Vec<PathBuf> = vec![];
 
     // Poll twice
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM ai_sessions WHERE session_id = 'dedup-test'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM ai_sessions WHERE session_id = 'dedup-test'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 1);
 }
@@ -119,14 +140,25 @@ fn test_poll_sessions_marks_ended_when_pid_dead() {
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
 
     let watched: Vec<PathBuf> = vec![];
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     // Now remove the session file (simulating session ended) and replace with dead PID
     std::fs::remove_file(sessions_dir.join(format!("{}.json", pid))).unwrap();
-    let dead_json = r#"{"pid":999999,"sessionId":"end-test","cwd":"/tmp/repo","startedAt":1773674448026}"#;
+    let dead_json =
+        r#"{"pid":999999,"sessionId":"end-test","cwd":"/tmp/repo","startedAt":1773674448026}"#;
     std::fs::write(sessions_dir.join("999999.json"), dead_json).unwrap();
 
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     // Should now have ended_at
     let ended: Option<String> = conn
@@ -169,7 +201,12 @@ fn test_poll_sessions_counts_turns() {
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
 
     let watched: Vec<PathBuf> = vec![];
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     // Now simulate session end with dead PID
     std::fs::remove_file(sessions_dir.join(format!("{}.json", pid))).unwrap();
@@ -179,7 +216,12 @@ fn test_poll_sessions_counts_turns() {
     );
     std::fs::write(sessions_dir.join("999999.json"), &dead_json).unwrap();
 
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     let turns: Option<i64> = conn
         .query_row(
@@ -213,7 +255,12 @@ fn test_poll_sessions_maps_cwd_to_watched_repo() {
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
 
     let watched = vec![repo_root.clone()];
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     let repo_path: String = conn
         .query_row(
@@ -235,7 +282,12 @@ fn test_poll_sessions_no_sessions_dir_no_crash() {
 
     let watched: Vec<PathBuf> = vec![];
     // Should not panic
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&nonexistent), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&nonexistent),
+        Some(&projects_dir),
+    );
 }
 
 #[test]
@@ -260,7 +312,12 @@ fn test_poll_sessions_malformed_json_skipped() {
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &valid_json).unwrap();
 
     let watched: Vec<PathBuf> = vec![];
-    claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &watched,
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
 
     // Valid one should be recorded, bad one skipped
     let count: i64 = conn

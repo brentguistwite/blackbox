@@ -1,5 +1,5 @@
 use anyhow::Context;
-use etcetera::{choose_base_strategy, BaseStrategy};
+use etcetera::{BaseStrategy, choose_base_strategy};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -99,7 +99,10 @@ impl Default for Config {
 impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.poll_interval_secs < 10 {
-            anyhow::bail!("poll_interval_secs must be >= 10, got {}", self.poll_interval_secs);
+            anyhow::bail!(
+                "poll_interval_secs must be >= 10, got {}",
+                self.poll_interval_secs
+            );
         }
         if self.work_hours_start > 23 {
             anyhow::bail!("work_hours_start must be 0..=23, got {}", self.work_hours_start);
@@ -118,7 +121,11 @@ impl Config {
 
     pub fn expand_paths(&mut self) {
         let home = etcetera::home_dir().ok();
-        self.watch_dirs = self.watch_dirs.iter().map(|p| expand_tilde_path(p, &home)).collect();
+        self.watch_dirs = self
+            .watch_dirs
+            .iter()
+            .map(|p| expand_tilde_path(p, &home))
+            .collect();
         if let Some(ref dirs) = self.scan_dirs {
             self.scan_dirs = Some(dirs.iter().map(|p| expand_tilde_path(p, &home)).collect());
         }
@@ -177,7 +184,10 @@ pub fn run_init(watch_dirs: Option<String>, poll_interval: Option<u64>) -> anyho
             .with_prompt("Watch directories (comma-separated)")
             .default("~/code".to_string())
             .interact_text()?;
-        let watch_dirs: Vec<PathBuf> = dirs_input.split(',').map(|s| PathBuf::from(s.trim())).collect();
+        let watch_dirs: Vec<PathBuf> = dirs_input
+            .split(',')
+            .map(|s| PathBuf::from(s.trim()))
+            .collect();
 
         let poll_interval: u64 = dialoguer::Input::new()
             .with_prompt("Poll interval (seconds)")

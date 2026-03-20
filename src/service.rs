@@ -48,7 +48,8 @@ pub fn generate_plist(exe_path: &str, data_dir: &str) -> String {
         label = LABEL,
         exe = exe_path,
         data = data_dir,
-        path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".to_string()),
+        path = std::env::var("PATH")
+            .unwrap_or_else(|_| "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin".to_string()),
     )
 }
 
@@ -116,7 +117,10 @@ pub fn install() -> anyhow::Result<()> {
             .args(["load", &path_str])
             .output()?;
         if !fallback.status.success() {
-            anyhow::bail!("{}", format_command_error("launchctl load", &fallback.stderr));
+            anyhow::bail!(
+                "{}",
+                format_command_error("launchctl load", &fallback.stderr)
+            );
         }
     }
 
@@ -149,14 +153,20 @@ pub fn install() -> anyhow::Result<()> {
         .args(["--user", "daemon-reload"])
         .output()?;
     if !reload.status.success() {
-        anyhow::bail!("{}", format_command_error("systemctl daemon-reload", &reload.stderr));
+        anyhow::bail!(
+            "{}",
+            format_command_error("systemctl daemon-reload", &reload.stderr)
+        );
     }
 
     let enable = std::process::Command::new("systemctl")
         .args(["--user", "enable", "--now", "blackbox.service"])
         .output()?;
     if !enable.status.success() {
-        anyhow::bail!("{}", format_command_error("systemctl enable", &enable.stderr));
+        anyhow::bail!(
+            "{}",
+            format_command_error("systemctl enable", &enable.stderr)
+        );
     }
 
     println!("Service installed and enabled (systemd)");
@@ -190,7 +200,10 @@ pub fn uninstall() -> anyhow::Result<()> {
             .args(["unload", &path_str])
             .output()?;
         if !fallback.status.success() {
-            anyhow::bail!("{}", format_command_error("launchctl unload", &fallback.stderr));
+            anyhow::bail!(
+                "{}",
+                format_command_error("launchctl unload", &fallback.stderr)
+            );
         }
     }
 
@@ -211,7 +224,10 @@ pub fn uninstall() -> anyhow::Result<()> {
         .args(["--user", "disable", "--now", "blackbox.service"])
         .output()?;
     if !disable.status.success() {
-        anyhow::bail!("{}", format_command_error("systemctl disable", &disable.stderr));
+        anyhow::bail!(
+            "{}",
+            format_command_error("systemctl disable", &disable.stderr)
+        );
     }
 
     std::fs::remove_file(&path)?;
@@ -230,7 +246,10 @@ mod tests {
 
     #[test]
     fn test_generate_plist_contains_expected_fragments() {
-        let plist = generate_plist("/usr/local/bin/blackbox", "/home/user/.local/share/blackbox");
+        let plist = generate_plist(
+            "/usr/local/bin/blackbox",
+            "/home/user/.local/share/blackbox",
+        );
         assert!(plist.contains("<string>com.blackbox.agent</string>"));
         assert!(plist.contains("<string>/usr/local/bin/blackbox</string>"));
         assert!(plist.contains("<string>run-foreground</string>"));

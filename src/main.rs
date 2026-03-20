@@ -1,9 +1,9 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
-use clap::{CommandFactory, Parser};
 use blackbox::cli::{Cli, Commands};
 use blackbox::output::OutputFormat;
 use blackbox::query::ActivitySummary;
+use chrono::{DateTime, Utc};
+use clap::{CommandFactory, Parser};
 
 fn build_summary(
     label: &str,
@@ -25,12 +25,26 @@ fn build_summary(
         blackbox::enrichment::enrich_with_prs(&mut repos);
     }
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
-    let total_reviews: usize = repos.iter().map(|r| {
-        r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
-    }).sum();
-    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+    let total_reviews: usize = repos
+        .iter()
+        .map(|r| {
+            r.reviews
+                .iter()
+                .map(|rv| rv.pr_number)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+        })
+        .sum();
+    let total_time = blackbox::query::global_estimated_time(
+        &repos,
+        config.session_gap_minutes,
+        config.first_commit_minutes,
+    );
     let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
-        acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
+        acc + r
+            .ai_sessions
+            .iter()
+            .fold(chrono::Duration::zero(), |a, s| a + s.duration)
     });
     let summary = ActivitySummary {
         period_label: label.to_string(),
@@ -86,7 +100,10 @@ fn main() -> anyhow::Result<()> {
     }
 
     match cli.command {
-        Commands::Init { watch_dirs, poll_interval } => {
+        Commands::Init {
+            watch_dirs,
+            poll_interval,
+        } => {
             blackbox::config::run_init(watch_dirs, poll_interval)?;
         }
         Commands::Start => {
@@ -375,6 +392,14 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", blackbox::output::render_metrics(&metrics));
                 }
             }
+=======
+            run_query(
+                "This Month",
+                blackbox::query::month_range,
+                format,
+                summarize,
+            )?;
+>>>>>>> 0e38861 (fix: resolve all clippy warnings and fmt issues)
         }
         Commands::Install => {
             blackbox::service::install()?;

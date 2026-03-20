@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
@@ -33,10 +33,13 @@ pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
         .unwrap_or("anthropic")
         .to_string();
 
-    let model = config.llm_model.clone().unwrap_or_else(|| match provider.as_str() {
-        "anthropic" => "claude-sonnet-4-20250514".to_string(),
-        _ => "gpt-4o-mini".to_string(),
-    });
+    let model = config
+        .llm_model
+        .clone()
+        .unwrap_or_else(|| match provider.as_str() {
+            "anthropic" => "claude-sonnet-4-20250514".to_string(),
+            _ => "gpt-4o-mini".to_string(),
+        });
 
     Ok(LlmConfig {
         provider,

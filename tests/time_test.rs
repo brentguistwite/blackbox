@@ -1,4 +1,4 @@
-use blackbox::query::{estimate_time, ActivityEvent};
+use blackbox::query::{ActivityEvent, estimate_time};
 use chrono::{Duration, TimeZone, Utc};
 
 fn make_event(minutes_offset: i64) -> ActivityEvent {
@@ -48,7 +48,12 @@ fn three_events_cross_session() {
 fn four_events_single_session() {
     // t=0, t=30, t=60, t=90 with gap=120
     // All within one session: 30 credit + 90 total gaps = 120
-    let events = vec![make_event(0), make_event(30), make_event(60), make_event(90)];
+    let events = vec![
+        make_event(0),
+        make_event(30),
+        make_event(60),
+        make_event(90),
+    ];
     let result = estimate_time(&events, 120, 30);
     assert_eq!(result, Duration::minutes(120));
 }

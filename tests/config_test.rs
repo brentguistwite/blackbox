@@ -68,7 +68,10 @@ fn test_tilde_expansion() {
     cfg.expand_paths();
     let expanded = &cfg.watch_dirs[0];
     assert!(!expanded.starts_with("~"), "Path should not start with ~");
-    assert!(expanded.is_absolute(), "Path should be absolute after expansion");
+    assert!(
+        expanded.is_absolute(),
+        "Path should be absolute after expansion"
+    );
 }
 
 #[test]
@@ -155,7 +158,10 @@ fn test_expand_paths_scan_dirs_tilde() {
     let dirs = cfg.scan_dirs.unwrap();
     for d in &dirs {
         assert!(!d.starts_with("~"), "scan_dir should not start with ~");
-        assert!(d.is_absolute(), "scan_dir should be absolute after expansion");
+        assert!(
+            d.is_absolute(),
+            "scan_dir should be absolute after expansion"
+        );
     }
 }
 

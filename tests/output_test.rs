@@ -1,7 +1,10 @@
-use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_tickets, render_metrics, OutputFormat};
-use blackbox::insights::TicketSummary;
 use blackbox::enrichment::PrInfo;
+use blackbox::insights::TicketSummary;
+use blackbox::output::{
+    format_duration, render_csv, render_json, render_metrics, render_standup, render_summary_to_string,
+    render_tickets, OutputFormat,
+};
+use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
 use chrono::{Duration, Utc};
 
 #[test]
@@ -76,14 +79,29 @@ fn render_summary_with_repos() {
 
     let output = render_summary_to_string(&summary);
     assert!(output.contains("Today"), "should contain period label");
-    assert!(output.contains("5 commits across 1 repo"), "should contain summary stats");
-    assert!(output.contains("~1h 30m"), "should contain approximate time");
+    assert!(
+        output.contains("5 commits across 1 repo"),
+        "should contain summary stats"
+    );
+    assert!(
+        output.contains("~1h 30m"),
+        "should contain approximate time"
+    );
     assert!(output.contains("myproject"), "should contain repo name");
     assert!(output.contains("main"), "should contain branch");
     assert!(output.contains("feature-x"), "should contain branch");
-    assert!(output.contains("abc1234"), "should contain short commit hash");
-    assert!(output.contains("fix login bug"), "should contain commit message");
-    assert!(output.contains("branch_switch"), "should show branch switch");
+    assert!(
+        output.contains("abc1234"),
+        "should contain short commit hash"
+    );
+    assert!(
+        output.contains("fix login bug"),
+        "should contain commit message"
+    );
+    assert!(
+        output.contains("branch_switch"),
+        "should show branch switch"
+    );
 }
 
 #[test]
@@ -101,7 +119,10 @@ fn render_empty_summary() {
     };
 
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("No activity recorded for This Week"), "should show no activity message");
+    assert!(
+        output.contains("No activity recorded for This Week"),
+        "should show no activity message"
+    );
 }
 
 fn make_test_summary() -> ActivitySummary {
@@ -308,7 +329,10 @@ fn render_pretty_shows_review_count_in_summary() {
     colored::control::set_override(false);
     let summary = make_summary_with_reviews();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("3 reviews"), "should show total reviews in summary line");
+    assert!(
+        output.contains("3 reviews"),
+        "should show total reviews in summary line"
+    );
 }
 
 #[test]
@@ -316,9 +340,15 @@ fn render_pretty_shows_reviewed_prs() {
     colored::control::set_override(false);
     let summary = make_summary_with_reviews();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("Reviewed 3 PRs"), "should show reviewed N PRs");
+    assert!(
+        output.contains("Reviewed 3 PRs"),
+        "should show reviewed N PRs"
+    );
     assert!(output.contains("PR #42: Add auth"), "should list PR titles");
-    assert!(output.contains("PR #44: Refactor DB"), "should list all reviewed PRs");
+    assert!(
+        output.contains("PR #44: Refactor DB"),
+        "should list all reviewed PRs"
+    );
 }
 
 #[test]
@@ -341,9 +371,18 @@ fn render_csv_includes_review_rows() {
     let lines: Vec<&str> = csv_str.lines().collect();
     // header + 1 commit event + 3 review rows = 5
     assert_eq!(lines.len(), 5);
-    assert!(csv_str.contains("review_approved"), "should have review_approved event_type");
-    assert!(csv_str.contains("review_commented"), "should have review_commented event_type");
-    assert!(csv_str.contains("review_changes_requested"), "should have review_changes_requested");
+    assert!(
+        csv_str.contains("review_approved"),
+        "should have review_approved event_type"
+    );
+    assert!(
+        csv_str.contains("review_commented"),
+        "should have review_commented event_type"
+    );
+    assert!(
+        csv_str.contains("review_changes_requested"),
+        "should have review_changes_requested"
+    );
 }
 
 #[test]
@@ -352,7 +391,10 @@ fn render_json_no_reviews_omits_field() {
     let json_str = render_json(&summary);
     let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     // reviews field should be absent when empty (skip_serializing_if)
-    assert!(v["repos"][0].get("reviews").is_none(), "empty reviews should be omitted from JSON");
+    assert!(
+        v["repos"][0].get("reviews").is_none(),
+        "empty reviews should be omitted from JSON"
+    );
 }
 
 // --- AI Session output tests ---
@@ -407,7 +449,10 @@ fn render_pretty_shows_ai_session_count() {
     colored::control::set_override(false);
     let summary = make_summary_with_ai_sessions();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("2 Claude Code sessions"), "should show session count per repo");
+    assert!(
+        output.contains("2 Claude Code sessions"),
+        "should show session count per repo"
+    );
 }
 
 #[test]
@@ -415,7 +460,10 @@ fn render_pretty_shows_ai_session_summary_line() {
     colored::control::set_override(false);
     let summary = make_summary_with_ai_sessions();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("AI sessions:"), "should show AI session time in summary line");
+    assert!(
+        output.contains("AI sessions:"),
+        "should show AI session time in summary line"
+    );
 }
 
 #[test]
@@ -423,7 +471,10 @@ fn render_pretty_shows_active_session() {
     colored::control::set_override(false);
     let summary = make_summary_with_ai_sessions();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("active"), "should show 'active' for ongoing sessions");
+    assert!(
+        output.contains("active"),
+        "should show 'active' for ongoing sessions"
+    );
 }
 
 #[test]
@@ -431,7 +482,10 @@ fn render_pretty_shows_turns() {
     colored::control::set_override(false);
     let summary = make_summary_with_ai_sessions();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("15 turns"), "should show turn count for ended sessions");
+    assert!(
+        output.contains("15 turns"),
+        "should show turn count for ended sessions"
+    );
 }
 
 #[test]
@@ -452,7 +506,10 @@ fn render_json_no_ai_sessions_omits_field() {
     let summary = make_test_summary();
     let json_str = render_json(&summary);
     let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-    assert!(v["repos"][0].get("ai_sessions").is_none(), "empty ai_sessions should be omitted");
+    assert!(
+        v["repos"][0].get("ai_sessions").is_none(),
+        "empty ai_sessions should be omitted"
+    );
 }
 
 #[test]
@@ -462,8 +519,14 @@ fn render_csv_includes_ai_session_rows() {
     let lines: Vec<&str> = csv_str.lines().collect();
     // header + 1 commit event + 2 ai_session rows = 4
     assert_eq!(lines.len(), 4);
-    assert!(csv_str.contains("ai_session"), "should have ai_session event_type");
-    assert!(csv_str.contains("Claude Code session"), "should have session description");
+    assert!(
+        csv_str.contains("ai_session"),
+        "should have ai_session event_type"
+    );
+    assert!(
+        csv_str.contains("Claude Code session"),
+        "should have session description"
+    );
 }
 
 // --- Standup output tests ---
@@ -472,14 +535,20 @@ fn render_csv_includes_ai_session_rows() {
 fn standup_empty_shows_no_activity() {
     let summary = make_empty_summary();
     let output = render_standup(&summary);
-    assert!(output.contains("No activity recorded"), "empty standup should say no activity");
+    assert!(
+        output.contains("No activity recorded"),
+        "empty standup should say no activity"
+    );
 }
 
 #[test]
 fn standup_has_markdown_bold_header() {
     let summary = make_test_summary();
     let output = render_standup(&summary);
-    assert!(output.starts_with("**Today"), "header should start with markdown bold");
+    assert!(
+        output.starts_with("**Today"),
+        "header should start with markdown bold"
+    );
     assert!(output.contains(")**"), "header should close bold");
 }
 
@@ -499,9 +568,27 @@ fn standup_groups_commits_by_branch() {
             branches: vec!["feat/auth".to_string(), "main".to_string()],
             estimated_time: Duration::minutes(60),
             events: vec![
-                ActivityEvent { event_type: "commit".to_string(), branch: Some("feat/auth".to_string()), commit_hash: Some("a1".to_string()), message: Some("wip".to_string()), timestamp: Utc::now() },
-                ActivityEvent { event_type: "commit".to_string(), branch: Some("feat/auth".to_string()), commit_hash: Some("a2".to_string()), message: Some("wip2".to_string()), timestamp: Utc::now() },
-                ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("b1".to_string()), message: Some("merge".to_string()), timestamp: Utc::now() },
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: Some("feat/auth".to_string()),
+                    commit_hash: Some("a1".to_string()),
+                    message: Some("wip".to_string()),
+                    timestamp: Utc::now(),
+                },
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: Some("feat/auth".to_string()),
+                    commit_hash: Some("a2".to_string()),
+                    message: Some("wip2".to_string()),
+                    timestamp: Utc::now(),
+                },
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: Some("main".to_string()),
+                    commit_hash: Some("b1".to_string()),
+                    message: Some("merge".to_string()),
+                    timestamp: Utc::now(),
+                },
             ],
             pr_info: None,
             reviews: vec![],
@@ -509,22 +596,34 @@ fn standup_groups_commits_by_branch() {
         }],
     };
     let output = render_standup(&summary);
-    assert!(output.contains("feat/auth: 2 commits"), "should group feat/auth commits");
-    assert!(output.contains("main: 1 commit"), "should show single commit for main");
+    assert!(
+        output.contains("feat/auth: 2 commits"),
+        "should group feat/auth commits"
+    );
+    assert!(
+        output.contains("main: 1 commit"),
+        "should show single commit for main"
+    );
 }
 
 #[test]
 fn standup_shows_repo_with_bullet() {
     let summary = make_test_summary();
     let output = render_standup(&summary);
-    assert!(output.contains("\u{2022} myproject"), "should use bullet for repo name");
+    assert!(
+        output.contains("\u{2022} myproject"),
+        "should use bullet for repo name"
+    );
 }
 
 #[test]
 fn standup_shows_time_estimate() {
     let summary = make_test_summary();
     let output = render_standup(&summary);
-    assert!(output.contains("~45m"), "should show time estimate on repo line");
+    assert!(
+        output.contains("~45m"),
+        "should show time estimate on repo line"
+    );
 }
 
 #[test]
@@ -539,7 +638,10 @@ fn standup_shows_total_line() {
 fn standup_no_ansi_codes() {
     let summary = make_test_summary();
     let output = render_standup(&summary);
-    assert!(!output.contains("\x1b["), "standup output should have no ANSI escape codes");
+    assert!(
+        !output.contains("\x1b["),
+        "standup output should have no ANSI escape codes"
+    );
 }
 
 #[test]
@@ -557,8 +659,19 @@ fn standup_includes_pr_info() {
             commits: 1,
             branches: vec!["main".to_string()],
             estimated_time: Duration::minutes(30),
-            events: vec![ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("x".to_string()), message: Some("m".to_string()), timestamp: Utc::now() }],
-            pr_info: Some(vec![PrInfo { number: 472, title: "Auth refactor".to_string(), state: "MERGED".to_string(), head_ref_name: "feat/auth".to_string() }]),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("x".to_string()),
+                message: Some("m".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: Some(vec![PrInfo {
+                number: 472,
+                title: "Auth refactor".to_string(),
+                state: "MERGED".to_string(),
+                head_ref_name: "feat/auth".to_string(),
+            }]),
             reviews: vec![],
             ai_sessions: vec![],
         }],
@@ -571,7 +684,10 @@ fn standup_includes_pr_info() {
 fn standup_includes_reviews() {
     let summary = make_summary_with_reviews();
     let output = render_standup(&summary);
-    assert!(output.contains("Reviewed PR #42"), "should list reviewed PRs");
+    assert!(
+        output.contains("Reviewed PR #42"),
+        "should list reviewed PRs"
+    );
     assert!(output.contains("PR #43"), "should list all reviewed PRs");
 }
 
@@ -579,7 +695,10 @@ fn standup_includes_reviews() {
 fn standup_includes_ai_sessions() {
     let summary = make_summary_with_ai_sessions();
     let output = render_standup(&summary);
-    assert!(output.contains("Claude Code session"), "should show AI sessions");
+    assert!(
+        output.contains("Claude Code session"),
+        "should show AI sessions"
+    );
 }
 
 #[test]
@@ -746,15 +865,27 @@ fn standup_week_header() {
             commits: 1,
             branches: vec!["main".to_string()],
             estimated_time: Duration::minutes(10),
-            events: vec![ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("z".to_string()), message: Some("x".to_string()), timestamp: Utc::now() }],
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("z".to_string()),
+                message: Some("x".to_string()),
+                timestamp: Utc::now(),
+            }],
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
         }],
     };
     let output = render_standup(&summary);
-    assert!(output.starts_with("**This Week"), "week standup should start with week header");
-    assert!(output.contains(" - "), "week header should have date range with dash");
+    assert!(
+        output.starts_with("**This Week"),
+        "week standup should start with week header"
+    );
+    assert!(
+        output.contains(" - "),
+        "week header should have date range with dash"
+    );
 }
 
 // --- US-014: render_tickets ---

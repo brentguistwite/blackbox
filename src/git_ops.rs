@@ -21,19 +21,17 @@ fn get_user_identity(repo: &Repository) -> Option<(Option<String>, Option<String
 /// Check if a commit was authored by the local git user.
 fn is_own_commit(commit: &git2::Commit, identity: &(Option<String>, Option<String>)) -> bool {
     let author = commit.author();
-    if let Some(ref email) = identity.0 {
-        if let Some(author_email) = author.email() {
-            if author_email.eq_ignore_ascii_case(email) {
-                return true;
-            }
-        }
+    if let Some(ref email) = identity.0
+        && let Some(author_email) = author.email()
+        && author_email.eq_ignore_ascii_case(email)
+    {
+        return true;
     }
-    if let Some(ref name) = identity.1 {
-        if let Some(author_name) = author.name() {
-            if author_name == name {
-                return true;
-            }
-        }
+    if let Some(ref name) = identity.1
+        && let Some(author_name) = author.name()
+        && author_name == name
+    {
+        return true;
     }
     false
 }
@@ -150,8 +148,7 @@ pub fn poll_repo(
         revwalk.push_head()?;
         revwalk.set_sorting(git2::Sort::TIME)?;
 
-        let mut count = 0u32;
-        for oid_result in revwalk {
+        for (count, oid_result) in revwalk.enumerate() {
             let oid = match oid_result {
                 Ok(o) => o,
                 Err(_) => break, // shallow clone boundary or corrupt history
@@ -168,13 +165,12 @@ pub fn poll_repo(
                 info!("Backfill capped at 50 commits for {}", db_repo_path);
                 break;
             }
-            count += 1;
 
             // Skip commits not authored by the local user
-            if let Some(ref id) = identity {
-                if !is_own_commit(&commit, id) {
-                    continue;
-                }
+            if let Some(ref id) = identity
+                && !is_own_commit(&commit, id)
+            {
+                continue;
             }
 
             let author_name = commit.author().name().unwrap_or("unknown").to_string();
@@ -234,10 +230,10 @@ pub fn poll_repo(
             let commit = repo.find_commit(oid)?;
 
             // Skip commits not authored by the local user
-            if let Some(ref id) = identity {
-                if !is_own_commit(&commit, id) {
-                    continue;
-                }
+            if let Some(ref id) = identity
+                && !is_own_commit(&commit, id)
+            {
+                continue;
             }
 
             let author_name = commit.author().name().unwrap_or("unknown").to_string();
@@ -293,22 +289,18 @@ fn resolve_source_branch(repo: &Repository, merge_commit: &git2::Commit) -> Stri
         return String::new();
     }
 
-    let parent_oid = match merge_commit.parent_id(1) {
-        Ok(oid) => oid,
-        Err(_) => return String::new(),
+    let Ok(parent_oid) = merge_commit.parent_id(1) else {
+        return String::new();
     };
 
     // Try to find a branch pointing at this commit
     if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
-        for branch_result in branches {
-            if let Ok((branch, _)) = branch_result {
-                if let Some(target) = branch.get().target() {
-                    if target == parent_oid {
-                        if let Some(name) = branch.name().ok().flatten() {
-                            return name.to_string();
-                        }
-                    }
-                }
+        for (branch, _) in branches.flatten() {
+            if let Some(target) = branch.get().target()
+                && target == parent_oid
+                && let Some(name) = branch.name().ok().flatten()
+            {
+                return name.to_string();
             }
         }
     }

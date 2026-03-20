@@ -117,10 +117,7 @@ pub fn total_setup_steps() -> u8 {
 pub fn run_setup() -> anyhow::Result<()> {
     // Styled header
     println!();
-    println!(
-        "{}",
-        "  blackbox setup  ".bold().on_bright_black().white()
-    );
+    println!("{}", "  blackbox setup  ".bold().on_bright_black().white());
     println!("{}", "  flight recorder for your dev day".dimmed());
     println!();
 
@@ -215,7 +212,10 @@ pub fn run_setup() -> anyhow::Result<()> {
     println!("{}", format_step(2, total, "Select repos to watch"));
 
     let selected_repos: Vec<PathBuf> = if all_repos.is_empty() {
-        println!("  {}", "No git repos found in scanned directories.".dimmed());
+        println!(
+            "  {}",
+            "No git repos found in scanned directories.".dimmed()
+        );
         Vec::new()
     } else {
         let items: Vec<String> = all_repos.iter().map(|p| contract_tilde(p)).collect();
@@ -294,10 +294,7 @@ pub fn run_setup() -> anyhow::Result<()> {
                 );
                 hook_installed = true;
             } else {
-                println!(
-                    "  This line will be added to {}:",
-                    contract_tilde(&rc_path)
-                );
+                println!("  This line will be added to {}:", contract_tilde(&rc_path));
                 println!("    {}", line.dimmed());
 
                 let install_hook = dialoguer::Confirm::with_theme(&ColorfulTheme::default())
@@ -409,10 +406,7 @@ pub fn run_setup() -> anyhow::Result<()> {
 
     // === Summary ===
     println!();
-    println!(
-        "{}",
-        "  Setup complete  ".bold().on_green().black()
-    );
+    println!("{}", "  Setup complete  ".bold().on_green().black());
     println!();
 
     // Checkmark/cross for each component
@@ -451,10 +445,7 @@ pub fn run_setup() -> anyhow::Result<()> {
     };
     println!("  {} Service: {}", svc_icon, svc_text);
 
-    println!(
-        "\n  Config: {}",
-        contract_tilde(&config_path).dimmed()
-    );
+    println!("\n  Config: {}", contract_tilde(&config_path).dimmed());
 
     println!("\n  {}:", "Next steps".bold());
     if !hook_installed {

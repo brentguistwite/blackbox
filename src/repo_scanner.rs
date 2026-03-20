@@ -1,4 +1,4 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -6,7 +6,14 @@ use walkdir::WalkDir;
 const SKIP_DIRS: &[&str] = &["node_modules", "target", ".build", "vendor"];
 
 const WELL_KNOWN_DIRS: &[&str] = &[
-    "Documents", "code", "projects", "src", "dev", "repos", "work", "github",
+    "Documents",
+    "code",
+    "projects",
+    "src",
+    "dev",
+    "repos",
+    "work",
+    "github",
 ];
 
 /// Check if a .git file is a valid worktree pointer (first line starts with 'gitdir:')
@@ -43,10 +50,7 @@ pub fn resolve_main_repo(worktree_path: &Path) -> anyhow::Result<PathBuf> {
     let git_path = worktree_path.join(".git");
     let content = std::fs::read_to_string(&git_path)
         .with_context(|| format!("failed to read {}", git_path.display()))?;
-    let first_line = content
-        .lines()
-        .next()
-        .context("empty .git file")?;
+    let first_line = content.lines().next().context("empty .git file")?;
     let raw = first_line
         .strip_prefix("gitdir: ")
         .context("missing 'gitdir:' prefix in .git file")?;
@@ -200,13 +204,10 @@ fn scan_repos_walkdir(dir: &Path, max_depth: Option<usize>, repos: &mut Vec<Path
     if let Some(depth) = max_depth {
         walker = walker.max_depth(depth);
     }
-    for entry in walker
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !SKIP_DIRS.contains(&name.as_ref())
-        })
-    {
+    for entry in walker.into_iter().filter_entry(|e| {
+        let name = e.file_name().to_string_lossy();
+        !SKIP_DIRS.contains(&name.as_ref())
+    }) {
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -214,9 +215,7 @@ fn scan_repos_walkdir(dir: &Path, max_depth: Option<usize>, repos: &mut Vec<Path
         if entry.file_name() == ".git" {
             let is_repo = entry.file_type().is_dir()
                 || (entry.file_type().is_file() && is_valid_gitdir_file(entry.path()));
-            if is_repo
-                && let Some(parent) = entry.path().parent()
-            {
+            if is_repo && let Some(parent) = entry.path().parent() {
                 match git2::Repository::open(parent) {
                     Ok(repo) if !repo.is_bare() => {
                         repos.push(parent.to_path_buf());

@@ -3,16 +3,16 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
+    DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Sparkline, Table},
-    DefaultTerminal, Frame,
 };
 
-use crate::query::{AiSessionInfo, RepoSummary};
 #[cfg(test)]
 use crate::query::ActivityEvent;
+use crate::query::{AiSessionInfo, RepoSummary};
 
 /// A flattened event for the recent-events feed.
 #[derive(Debug, Clone)]
@@ -150,9 +150,7 @@ impl App {
 
         // Sort repos by selected mode
         match self.sort_mode {
-            SortMode::Recent => repos.sort_by(|a, b| {
-                latest_timestamp(b).cmp(&latest_timestamp(a))
-            }),
+            SortMode::Recent => repos.sort_by_key(|b| std::cmp::Reverse(latest_timestamp(b))),
             SortMode::Time => repos.sort_by(|a, b| b.estimated_time.cmp(&a.estimated_time)),
             SortMode::Commits => repos.sort_by(|a, b| b.commits.cmp(&a.commits)),
         };
@@ -197,7 +195,9 @@ impl App {
 
         // Total time — global merge avoids double-counting concurrent repo work
         let total_time = crate::query::global_estimated_time(
-            &repos, self.session_gap_minutes, self.first_commit_minutes,
+            &repos,
+            self.session_gap_minutes,
+            self.first_commit_minutes,
         );
         self.total_time_mins = total_time.num_minutes();
 
@@ -439,26 +439,18 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
     if let Some(ref err) = app.error {
         let content = vec![
             Line::raw(""),
-            Line::styled(
-                format!("  Error: {err}"),
-                Style::default().fg(Color::Red),
-            ),
+            Line::styled(format!("  Error: {err}"), Style::default().fg(Color::Red)),
             Line::raw(""),
             Line::raw("  Run 'blackbox setup' to configure, or check your data directory."),
         ];
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Activity ");
+        let block = Block::default().borders(Borders::ALL).title(" Activity ");
         frame.render_widget(Paragraph::new(content).block(block), area);
         return;
     }
 
     // Split body: top for panels, bottom for sparkline
-    let [panels_area, sparkline_area] = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(4),
-    ])
-    .areas(area);
+    let [panels_area, sparkline_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).areas(area);
 
     // Split panels: left 40%, right 60%
     let [left_area, right_area] =
@@ -512,11 +504,7 @@ fn render_repo_table(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 format!("~{m}m")
             };
-            Row::new(vec![
-                r.repo_name.clone(),
-                r.commits.to_string(),
-                time_str,
-            ])
+            Row::new(vec![r.repo_name.clone(), r.commits.to_string(), time_str])
         })
         .collect();
 
@@ -542,10 +530,7 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
     if app.feed_events.is_empty() {
         let msg = vec![
             Line::raw(""),
-            Line::styled(
-                "  No events yet",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Line::styled("  No events yet", Style::default().fg(Color::DarkGray)),
         ];
         frame.render_widget(Paragraph::new(msg).block(block), area);
         return;
@@ -596,14 +581,12 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect();
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 
     frame.render_stateful_widget(list, area, &mut app.events_state);
 }

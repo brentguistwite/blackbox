@@ -229,20 +229,41 @@ fn test_insert_review_dedup() {
 
     // First insert succeeds
     let first = db::insert_review(
-        &conn, "/tmp/repo", 42, "Title", "http://url", "APPROVED", "2026-03-15T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        42,
+        "Title",
+        "http://url",
+        "APPROVED",
+        "2026-03-15T10:00:00Z",
+    )
+    .unwrap();
     assert!(first);
 
     // Duplicate returns false (same repo_path + pr_number + reviewed_at)
     let second = db::insert_review(
-        &conn, "/tmp/repo", 42, "Title", "http://url", "APPROVED", "2026-03-15T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        42,
+        "Title",
+        "http://url",
+        "APPROVED",
+        "2026-03-15T10:00:00Z",
+    )
+    .unwrap();
     assert!(!second);
 
     // Different reviewed_at = not a duplicate
     let third = db::insert_review(
-        &conn, "/tmp/repo", 42, "Title", "http://url", "CHANGES_REQUESTED", "2026-03-15T11:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        42,
+        "Title",
+        "http://url",
+        "CHANGES_REQUESTED",
+        "2026-03-15T11:00:00Z",
+    )
+    .unwrap();
     assert!(third);
 
     let count: i64 = conn
@@ -315,10 +336,12 @@ fn test_insert_ai_session_dedup() {
     let db_path = tmp.path().join("test.db");
     let conn = db::open_db(&db_path).unwrap();
 
-    let first = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    let first =
+        db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
     assert!(first);
 
-    let second = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    let second =
+        db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
     assert!(!second);
 
     let count: i64 = conn
@@ -335,7 +358,8 @@ fn test_update_session_ended() {
 
     db::insert_ai_session(&conn, "/tmp/repo", "end-session", "2026-03-16T10:00:00Z").unwrap();
 
-    let updated = db::update_session_ended(&conn, "end-session", "2026-03-16T11:00:00Z", Some(42)).unwrap();
+    let updated =
+        db::update_session_ended(&conn, "end-session", "2026-03-16T11:00:00Z", Some(42)).unwrap();
     assert!(updated);
 
     let (ended, turns): (String, i64) = conn
@@ -349,7 +373,8 @@ fn test_update_session_ended() {
     assert_eq!(turns, 42);
 
     // Second update should be no-op (already ended)
-    let second = db::update_session_ended(&conn, "end-session", "2026-03-16T12:00:00Z", Some(50)).unwrap();
+    let second =
+        db::update_session_ended(&conn, "end-session", "2026-03-16T12:00:00Z", Some(50)).unwrap();
     assert!(!second);
 }
 
@@ -394,20 +419,40 @@ fn test_insert_activity_commit_dedup_same_repo() {
     let conn = db::open_db(&db_path).unwrap();
 
     let first = db::insert_activity(
-        &conn, "/tmp/repo", "commit", Some("main"), None,
-        Some("abc123"), Some("Alice"), Some("fix bug"), "2026-03-18T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        "commit",
+        Some("main"),
+        None,
+        Some("abc123"),
+        Some("Alice"),
+        Some("fix bug"),
+        "2026-03-18T10:00:00Z",
+    )
+    .unwrap();
     assert!(first);
 
     // Same repo + same commit_hash → ignored
     let second = db::insert_activity(
-        &conn, "/tmp/repo", "commit", Some("main"), None,
-        Some("abc123"), Some("Alice"), Some("fix bug"), "2026-03-18T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        "commit",
+        Some("main"),
+        None,
+        Some("abc123"),
+        Some("Alice"),
+        Some("fix bug"),
+        "2026-03-18T10:00:00Z",
+    )
+    .unwrap();
     assert!(!second);
 
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 1);
 }
@@ -419,17 +464,37 @@ fn test_insert_activity_commit_different_repos_both_kept() {
     let conn = db::open_db(&db_path).unwrap();
 
     db::insert_activity(
-        &conn, "/repo/a", "commit", Some("main"), None,
-        Some("abc123"), Some("Alice"), Some("fix"), "2026-03-18T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/repo/a",
+        "commit",
+        Some("main"),
+        None,
+        Some("abc123"),
+        Some("Alice"),
+        Some("fix"),
+        "2026-03-18T10:00:00Z",
+    )
+    .unwrap();
 
     db::insert_activity(
-        &conn, "/repo/b", "commit", Some("main"), None,
-        Some("abc123"), Some("Alice"), Some("fix"), "2026-03-18T10:00:00Z",
-    ).unwrap();
+        &conn,
+        "/repo/b",
+        "commit",
+        Some("main"),
+        None,
+        Some("abc123"),
+        Some("Alice"),
+        Some("fix"),
+        "2026-03-18T10:00:00Z",
+    )
+    .unwrap();
 
     let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'", [], |r| r.get(0))
+        .query_row(
+            "SELECT COUNT(*) FROM git_activity WHERE commit_hash = 'abc123'",
+            [],
+            |r| r.get(0),
+        )
         .unwrap();
     assert_eq!(count, 2);
 }
@@ -443,17 +508,27 @@ fn test_branch_switch_never_blocked() {
     // Multiple branch_switch events (NULL commit_hash) should all insert
     for _ in 0..3 {
         let inserted = db::insert_activity(
-            &conn, "/tmp/repo", "branch_switch", Some("develop"), None,
-            None, None, None, "2026-03-18T10:00:00Z",
-        ).unwrap();
+            &conn,
+            "/tmp/repo",
+            "branch_switch",
+            Some("develop"),
+            None,
+            None,
+            None,
+            None,
+            "2026-03-18T10:00:00Z",
+        )
+        .unwrap();
         assert!(inserted);
     }
 
     let count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM git_activity WHERE event_type = 'branch_switch'",
-            [], |r| r.get(0),
-        ).unwrap();
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
     assert_eq!(count, 3);
 }
 

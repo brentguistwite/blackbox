@@ -4,7 +4,7 @@ Flight recorder for your dev day.
 
 ## What it does
 
-Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Zero config after `blackbox init`.
+Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Zero config after `blackbox setup`.
 
 ## Install
 
@@ -62,10 +62,16 @@ Config lives at `~/.config/blackbox/config.toml`:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `watch_dirs` | (required) | List of directories to scan for git repos |
-| `poll_interval_secs` | `300` | Seconds between daemon polls |
+| `watch_dirs` | `[]` | List of repo paths to watch |
+| `scan_dirs` | (none) | Parent directories to scan for repos during setup |
+| `poll_interval_secs` | `1800` | Seconds between daemon polls |
 | `session_gap_minutes` | `120` | Minutes of inactivity before new session |
 | `first_commit_minutes` | `30` | Time credit for first commit in a session |
+| `worktree_dir_name` | `.worktrees` | Subdirectory name for git worktrees |
+| `llm_provider` | (none) | LLM provider for `--summarize` |
+| `llm_model` | (none) | Model name for LLM summarization |
+| `llm_base_url` | (none) | Custom API base URL for LLM |
+| `llm_api_key` | (none) | API key for LLM provider |
 
 ## Output Formats
 

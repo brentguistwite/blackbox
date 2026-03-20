@@ -30,7 +30,9 @@ pub fn merge_intervals(intervals: &mut [TimeInterval]) -> (Vec<TimeInterval>, Du
             merged.push(*iv);
         }
     }
-    let total = merged.iter().fold(Duration::zero(), |acc, iv| acc + (iv.end - iv.start));
+    let total = merged
+        .iter()
+        .fold(Duration::zero(), |acc, iv| acc + (iv.end - iv.start));
     (merged, total)
 }
 
@@ -55,7 +57,7 @@ pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
     }
     gaps.sort();
     let mid = gaps.len() / 2;
-    if gaps.len() % 2 == 0 {
+    if gaps.len().is_multiple_of(2) {
         Some((gaps[mid - 1] + gaps[mid]) / 2)
     } else {
         Some(gaps[mid])
@@ -77,8 +79,8 @@ pub fn estimate_time_v2(
     let (effective_gap, effective_credit) = match median_commit_gap(events) {
         Some(median) => {
             let median_mins = median.num_minutes();
-            let gap = (median_mins * 3).max(MIN_GAP_FLOOR_MINS).min(MAX_GAP_CAP_MINS);
-            let credit = median_mins.max(MIN_CREDIT_MINS).min(MAX_CREDIT_MINS);
+            let gap = (median_mins * 3).clamp(MIN_GAP_FLOOR_MINS, MAX_GAP_CAP_MINS);
+            let credit = median_mins.clamp(MIN_CREDIT_MINS, MAX_CREDIT_MINS);
             (Duration::minutes(gap), Duration::minutes(credit))
         }
         None => (
@@ -114,9 +116,9 @@ pub fn estimate_time_v2(
     for iv in &mut git_intervals {
         let credit_window_start = iv.start;
         let credit_window_end = iv.start + effective_credit;
-        let has_ai_overlap = ai_sessions.iter().any(|ai| {
-            ai.start < credit_window_end && ai.end > credit_window_start
-        });
+        let has_ai_overlap = ai_sessions
+            .iter()
+            .any(|ai| ai.start < credit_window_end && ai.end > credit_window_start);
         if has_ai_overlap {
             iv.start = credit_window_end; // shrink to first_event
         }
@@ -173,7 +175,9 @@ pub fn query_presence(
         let start = entered.max(from);
         let end = effective_end.min(to);
         if start < end {
-            map.entry(repo_path).or_default().push(TimeInterval { start, end });
+            map.entry(repo_path)
+                .or_default()
+                .push(TimeInterval { start, end });
         }
     }
 
@@ -252,9 +256,9 @@ pub fn estimate_time(
         let gap = events[i].timestamp - events[i - 1].timestamp;
         if gap >= gap_threshold {
             // New session
-            total = total + first_credit;
+            total += first_credit;
         } else {
-            total = total + gap;
+            total += gap;
         }
     }
 
@@ -291,9 +295,7 @@ impl QueryRange {
 pub fn today_range() -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();
     let local_today = Local::now().date_naive();
-    let start_local = local_today
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
+    let start_local = local_today.and_hms_opt(0, 0, 0).unwrap();
     let start_utc = Local
         .from_local_datetime(&start_local)
         .unwrap()
@@ -365,9 +367,7 @@ pub fn week_range() -> (DateTime<Utc>, DateTime<Utc>) {
 pub fn month_range() -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();
     let local_today = Local::now().date_naive();
-    let first_of_month = local_today
-        .with_day(1)
-        .unwrap();
+    let first_of_month = local_today.with_day(1).unwrap();
     let start_local = first_of_month.and_hms_opt(0, 0, 0).unwrap();
     let start_utc = Local
         .from_local_datetime(&start_local)
@@ -410,16 +410,13 @@ pub fn query_activity(
     for row in rows {
         let (repo_path, event_type, branch, commit_hash, message, timestamp_str) = row?;
         let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)?.with_timezone(&Utc);
-        repo_map
-            .entry(repo_path)
-            .or_default()
-            .push(ActivityEvent {
-                event_type,
-                branch,
-                commit_hash,
-                message,
-                timestamp,
-            });
+        repo_map.entry(repo_path).or_default().push(ActivityEvent {
+            event_type,
+            branch,
+            commit_hash,
+            message,
+            timestamp,
+        });
     }
 
     // Query reviews in the same time range
@@ -429,8 +426,10 @@ pub fn query_activity(
     let ai_session_map = query_ai_sessions(conn, from, to)?;
 
     // Collect all repo paths. Filter out AI sessions from user's home dir.
-    let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
-    let not_home = |k: &&String| home_dir.as_ref().map_or(true, |h| k.as_str() != h);
+    let home_dir = etcetera::home_dir()
+        .ok()
+        .map(|h| h.to_string_lossy().to_string());
+    let not_home = |k: &&String| home_dir.as_ref().is_none_or(|h| k.as_str() != h);
     let all_repo_paths: std::collections::BTreeSet<String> = repo_map
         .keys()
         .chain(review_map.keys())
@@ -450,10 +449,7 @@ pub fn query_activity(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| repo_path.clone());
 
-        let commits = events
-            .iter()
-            .filter(|e| e.event_type == "commit")
-            .count();
+        let commits = events.iter().filter(|e| e.event_type == "commit").count();
 
         let mut branches: Vec<String> = events
             .iter()
@@ -464,15 +460,25 @@ pub fn query_activity(
         branches.sort();
 
         // Extract AI session time intervals, clip to [from, to]
-        let ai_intervals: Vec<TimeInterval> = ai_sessions.iter().filter_map(|s| {
-            let end = s.ended_at.unwrap_or(now);
-            let start = s.started_at.max(from);
-            let end = end.min(to);
-            if start < end { Some(TimeInterval { start, end }) } else { None }
-        }).collect();
+        let ai_intervals: Vec<TimeInterval> = ai_sessions
+            .iter()
+            .filter_map(|s| {
+                let end = s.ended_at.unwrap_or(now);
+                let start = s.started_at.max(from);
+                let end = end.min(to);
+                if start < end {
+                    Some(TimeInterval { start, end })
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         let (estimated_time, _) = estimate_time_v2(
-            &events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &events,
+            &ai_intervals,
+            session_gap_minutes,
+            first_commit_minutes,
         );
 
         repos.push(RepoSummary {
@@ -501,12 +507,26 @@ pub fn global_estimated_time(
     let now = Utc::now();
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     for repo in repos {
-        let ai_intervals: Vec<TimeInterval> = repo.ai_sessions.iter().filter_map(|s| {
-            let end = s.ended_at.unwrap_or(now);
-            if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
-        }).collect();
+        let ai_intervals: Vec<TimeInterval> = repo
+            .ai_sessions
+            .iter()
+            .filter_map(|s| {
+                let end = s.ended_at.unwrap_or(now);
+                if s.started_at < end {
+                    Some(TimeInterval {
+                        start: s.started_at,
+                        end,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
         let (_, intervals) = estimate_time_v2(
-            &repo.events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &repo.events,
+            &ai_intervals,
+            session_gap_minutes,
+            first_commit_minutes,
         );
         all_intervals.extend_from_slice(&intervals);
     }

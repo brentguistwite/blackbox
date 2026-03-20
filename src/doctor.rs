@@ -71,7 +71,10 @@ pub fn check_watch_dirs(config: &crate::config::Config) -> Vec<CheckResult> {
                     name: format!("Watch dir: {}", dir.display()),
                     passed: false,
                     detail: "Not found".into(),
-                    suggestion: Some(format!("Create it or update config: mkdir -p {}", dir.display())),
+                    suggestion: Some(format!(
+                        "Create it or update config: mkdir -p {}",
+                        dir.display()
+                    )),
                 }
             }
         })
@@ -277,12 +280,12 @@ pub fn parse_launchctl_output(success: bool, stdout: &str) -> Option<u32> {
     // launchctl list <label> output contains "PID" = <number>; if running
     for line in stdout.lines() {
         let trimmed = line.trim().trim_end_matches(';');
-        if trimmed.starts_with("\"PID\"") {
-            if let Some(val) = trimmed.split('=').nth(1) {
-                let val = val.trim().trim_matches('"');
-                if let Ok(pid) = val.parse::<u32>() {
-                    return Some(pid);
-                }
+        if trimmed.starts_with("\"PID\"")
+            && let Some(val) = trimmed.split('=').nth(1)
+        {
+            let val = val.trim().trim_matches('"');
+            if let Ok(pid) = val.parse::<u32>() {
+                return Some(pid);
             }
         }
     }
@@ -380,10 +383,7 @@ pub fn run_doctor() -> anyhow::Result<bool> {
         println!("{}", "All checks passed!".green().bold());
     } else {
         let fail_count = results.iter().filter(|r| !r.passed).count();
-        println!(
-            "{}",
-            format!("{fail_count} check(s) failed").red().bold()
-        );
+        println!("{}", format!("{fail_count} check(s) failed").red().bold());
     }
 
     Ok(all_passed)

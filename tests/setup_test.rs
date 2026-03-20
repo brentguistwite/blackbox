@@ -1,6 +1,6 @@
 use blackbox::setup::{
-    detect_shell_type_from, format_step, hook_comment_block, notset_shell_message,
-    total_setup_steps, unsupported_shell_message, ShellDetection,
+    ShellDetection, detect_shell_type_from, format_step, hook_comment_block, notset_shell_message,
+    total_setup_steps, unsupported_shell_message,
 };
 
 // --- detect_shell_type_from tests ---
@@ -11,7 +11,11 @@ fn detect_shell_zsh_returns_supported() {
     match result {
         ShellDetection::Supported { name, rc_path } => {
             assert_eq!(name, "zsh");
-            assert!(rc_path.ends_with(".zshrc"), "rc_path should end with .zshrc, got {:?}", rc_path);
+            assert!(
+                rc_path.ends_with(".zshrc"),
+                "rc_path should end with .zshrc, got {:?}",
+                rc_path
+            );
         }
         other => panic!("expected Supported, got {:?}", other),
     }
@@ -23,7 +27,11 @@ fn detect_shell_bash_returns_supported() {
     match result {
         ShellDetection::Supported { name, rc_path } => {
             assert_eq!(name, "bash");
-            assert!(rc_path.ends_with(".bashrc"), "rc_path should end with .bashrc, got {:?}", rc_path);
+            assert!(
+                rc_path.ends_with(".bashrc"),
+                "rc_path should end with .bashrc, got {:?}",
+                rc_path
+            );
         }
         other => panic!("expected Supported, got {:?}", other),
     }
@@ -71,13 +79,19 @@ fn detect_shell_empty_returns_notset() {
 #[test]
 fn hook_comment_contains_time_estimation() {
     let comment = hook_comment_block("zsh");
-    assert!(comment.contains("time estimation"), "comment should mention time estimation");
+    assert!(
+        comment.contains("time estimation"),
+        "comment should mention time estimation"
+    );
 }
 
 #[test]
 fn hook_comment_contains_disable() {
     let comment = hook_comment_block("zsh");
-    assert!(comment.contains("disable"), "comment should mention how to disable");
+    assert!(
+        comment.contains("disable"),
+        "comment should mention how to disable"
+    );
 }
 
 #[test]
@@ -94,15 +108,23 @@ fn hook_comment_contains_eval_line() {
 #[test]
 fn unsupported_message_contains_shell_name() {
     let msg = unsupported_shell_message("nushell");
-    assert!(msg.contains("nushell"), "message should contain detected shell name");
+    assert!(
+        msg.contains("nushell"),
+        "message should contain detected shell name"
+    );
 }
 
 #[test]
 fn unsupported_message_contains_manual_instructions() {
     let msg = unsupported_shell_message("nushell");
-    assert!(msg.contains("eval"), "message should contain manual eval instruction");
-    assert!(msg.contains("zsh, bash, and fish") || msg.contains("zsh/bash/fish"),
-        "message should list supported shells");
+    assert!(
+        msg.contains("eval"),
+        "message should contain manual eval instruction"
+    );
+    assert!(
+        msg.contains("zsh, bash, and fish") || msg.contains("zsh/bash/fish"),
+        "message should list supported shells"
+    );
 }
 
 // --- step indicator tests ---
@@ -112,7 +134,11 @@ fn format_step_contains_step_numbers() {
     // Disable colors for predictable output
     colored::control::set_override(false);
     let result = format_step(1, 4, "Scan for repositories");
-    assert!(result.contains("[1/4]"), "should contain [1/4], got: {}", result);
+    assert!(
+        result.contains("[1/4]"),
+        "should contain [1/4], got: {}",
+        result
+    );
     assert!(
         result.contains("Scan for repositories"),
         "should contain label"
@@ -123,7 +149,11 @@ fn format_step_contains_step_numbers() {
 fn format_step_renders_different_numbers() {
     colored::control::set_override(false);
     let result = format_step(3, 3, "Shell hook");
-    assert!(result.contains("[3/3]"), "should contain [3/3], got: {}", result);
+    assert!(
+        result.contains("[3/3]"),
+        "should contain [3/3], got: {}",
+        result
+    );
 }
 
 // --- total_setup_steps tests ---
@@ -156,7 +186,10 @@ fn notset_message_mentions_shell_var() {
 #[test]
 fn notset_message_contains_manual_instructions() {
     let msg = notset_shell_message();
-    assert!(msg.contains("eval"), "message should contain manual eval instruction");
+    assert!(
+        msg.contains("eval"),
+        "message should contain manual eval instruction"
+    );
 }
 
 // --- total_setup_steps updated for worktree step ---
@@ -165,8 +198,14 @@ fn notset_message_contains_manual_instructions() {
 fn total_steps_includes_worktree_step() {
     let total = total_setup_steps();
     if cfg!(target_os = "macos") || cfg!(target_os = "linux") {
-        assert_eq!(total, 5, "should be 5 on macOS/Linux (scan+select+worktree+hook+service)");
+        assert_eq!(
+            total, 5,
+            "should be 5 on macOS/Linux (scan+select+worktree+hook+service)"
+        );
     } else {
-        assert_eq!(total, 4, "should be 4 on other platforms (scan+select+worktree+hook)");
+        assert_eq!(
+            total, 4,
+            "should be 4 on other platforms (scan+select+worktree+hook)"
+        );
     }
 }

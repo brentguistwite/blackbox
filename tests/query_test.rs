@@ -1,8 +1,10 @@
-use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
+use blackbox::db::{
+    insert_activity, insert_ai_session, insert_review, open_db, update_session_ended,
+};
 use blackbox::query::{
-    estimate_time, estimate_time_v2, median_commit_gap, merge_intervals, query_activity,
-    query_presence, today_range, yesterday_range, custom_range, week_range, month_range,
-    ActivityEvent, TimeInterval,
+    ActivityEvent, TimeInterval, custom_range, estimate_time, estimate_time_v2, median_commit_gap,
+    merge_intervals, month_range, query_activity, query_presence, today_range, week_range,
+    yesterday_range,
 };
 use chrono::{Datelike, Duration, Local, TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -22,9 +24,42 @@ fn query_activity_groups_by_repo() {
     let ts2 = "2025-01-15T10:30:00Z";
     let ts3 = "2025-01-15T11:00:00Z";
 
-    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), ts1).unwrap();
-    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("second"), ts2).unwrap();
-    insert_activity(&conn, "/repo/beta", "commit", Some("feat"), None, Some("ccc"), Some("dev"), Some("init"), ts3).unwrap();
+    insert_activity(
+        &conn,
+        "/repo/alpha",
+        "commit",
+        Some("main"),
+        None,
+        Some("aaa"),
+        Some("dev"),
+        Some("first"),
+        ts1,
+    )
+    .unwrap();
+    insert_activity(
+        &conn,
+        "/repo/alpha",
+        "commit",
+        Some("main"),
+        None,
+        Some("bbb"),
+        Some("dev"),
+        Some("second"),
+        ts2,
+    )
+    .unwrap();
+    insert_activity(
+        &conn,
+        "/repo/beta",
+        "commit",
+        Some("feat"),
+        None,
+        Some("ccc"),
+        Some("dev"),
+        Some("init"),
+        ts3,
+    )
+    .unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
     let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
@@ -112,9 +147,38 @@ fn query_activity_includes_reviews() {
     let (conn, _tmp) = setup_db();
 
     let ts = "2025-01-15T10:00:00+00:00";
-    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), ts).unwrap();
-    insert_review(&conn, "/repo/alpha", 42, "Add auth", "https://github.com/repo/pull/42", "APPROVED", "2025-01-15T11:00:00+00:00").unwrap();
-    insert_review(&conn, "/repo/alpha", 43, "Fix typo", "https://github.com/repo/pull/43", "COMMENTED", "2025-01-15T12:00:00+00:00").unwrap();
+    insert_activity(
+        &conn,
+        "/repo/alpha",
+        "commit",
+        Some("main"),
+        None,
+        Some("aaa"),
+        Some("dev"),
+        Some("first"),
+        ts,
+    )
+    .unwrap();
+    insert_review(
+        &conn,
+        "/repo/alpha",
+        42,
+        "Add auth",
+        "https://github.com/repo/pull/42",
+        "APPROVED",
+        "2025-01-15T11:00:00+00:00",
+    )
+    .unwrap();
+    insert_review(
+        &conn,
+        "/repo/alpha",
+        43,
+        "Fix typo",
+        "https://github.com/repo/pull/43",
+        "COMMENTED",
+        "2025-01-15T12:00:00+00:00",
+    )
+    .unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
     let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
@@ -132,7 +196,16 @@ fn query_activity_reviews_only_repo() {
     let (conn, _tmp) = setup_db();
 
     // Repo with only reviews, no git activity
-    insert_review(&conn, "/repo/review-only", 10, "Some PR", "https://github.com/repo/pull/10", "CHANGES_REQUESTED", "2025-01-15T10:00:00+00:00").unwrap();
+    insert_review(
+        &conn,
+        "/repo/review-only",
+        10,
+        "Some PR",
+        "https://github.com/repo/pull/10",
+        "CHANGES_REQUESTED",
+        "2025-01-15T10:00:00+00:00",
+    )
+    .unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
     let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
@@ -151,8 +224,25 @@ fn query_activity_includes_ai_sessions() {
     let (conn, _tmp) = setup_db();
 
     let ts = "2025-01-15T10:00:00+00:00";
-    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), ts).unwrap();
-    insert_ai_session(&conn, "/repo/alpha", "sess-001", "2025-01-15T09:00:00+00:00").unwrap();
+    insert_activity(
+        &conn,
+        "/repo/alpha",
+        "commit",
+        Some("main"),
+        None,
+        Some("aaa"),
+        Some("dev"),
+        Some("first"),
+        ts,
+    )
+    .unwrap();
+    insert_ai_session(
+        &conn,
+        "/repo/alpha",
+        "sess-001",
+        "2025-01-15T09:00:00+00:00",
+    )
+    .unwrap();
     update_session_ended(&conn, "sess-001", "2025-01-15T10:30:00+00:00", Some(12)).unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
@@ -171,7 +261,13 @@ fn query_activity_includes_ai_sessions() {
 fn query_activity_ai_sessions_only_repo() {
     let (conn, _tmp) = setup_db();
 
-    insert_ai_session(&conn, "/repo/ai-only", "sess-100", "2025-01-15T08:00:00+00:00").unwrap();
+    insert_ai_session(
+        &conn,
+        "/repo/ai-only",
+        "sess-100",
+        "2025-01-15T08:00:00+00:00",
+    )
+    .unwrap();
     update_session_ended(&conn, "sess-100", "2025-01-15T09:00:00+00:00", Some(5)).unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
@@ -193,7 +289,10 @@ fn ts(hour: u32, min: u32) -> chrono::DateTime<Utc> {
 }
 
 fn iv(start_h: u32, start_m: u32, end_h: u32, end_m: u32) -> TimeInterval {
-    TimeInterval { start: ts(start_h, start_m), end: ts(end_h, end_m) }
+    TimeInterval {
+        start: ts(start_h, start_m),
+        end: ts(end_h, end_m),
+    }
 }
 
 fn make_event_at(hour: u32, min: u32) -> ActivityEvent {
@@ -282,9 +381,14 @@ fn median_gap_two_commits() {
 fn median_gap_many_commits() {
     // Gaps: 10, 10, 10, 60, 10, 10, 10 => sorted: [10,10,10,10,10,10,60] => median=10
     let events = vec![
-        make_event_at(10, 0), make_event_at(10, 10), make_event_at(10, 20),
-        make_event_at(10, 30), make_event_at(11, 30), make_event_at(11, 40),
-        make_event_at(11, 50), make_event_at(12, 0),
+        make_event_at(10, 0),
+        make_event_at(10, 10),
+        make_event_at(10, 20),
+        make_event_at(10, 30),
+        make_event_at(11, 30),
+        make_event_at(11, 40),
+        make_event_at(11, 50),
+        make_event_at(12, 0),
     ];
     assert_eq!(median_commit_gap(&events).unwrap(), Duration::minutes(10));
 }
@@ -292,8 +396,13 @@ fn median_gap_many_commits() {
 #[test]
 fn median_gap_ignores_non_commit_events() {
     let events = vec![
-        ActivityEvent { event_type: "branch_switch".into(), branch: Some("main".into()),
-            commit_hash: None, message: None, timestamp: ts(10, 0) },
+        ActivityEvent {
+            event_type: "branch_switch".into(),
+            branch: Some("main".into()),
+            commit_hash: None,
+            message: None,
+            timestamp: ts(10, 0),
+        },
         make_event_at(10, 10),
         make_event_at(10, 30),
     ];
@@ -329,8 +438,10 @@ fn v2_rapid_committer_tight_gap() {
     // Events: 10:00, 10:08, 10:16, 10:24 (all within 30 min gap)
     // Session: [9:52, 10:24] = 32 min
     let events = vec![
-        make_event_at(10, 0), make_event_at(10, 8),
-        make_event_at(10, 16), make_event_at(10, 24),
+        make_event_at(10, 0),
+        make_event_at(10, 8),
+        make_event_at(10, 16),
+        make_event_at(10, 24),
     ];
     let (result, _) = estimate_time_v2(&events, &[], 120, 30);
     assert_eq!(result, Duration::minutes(32));
@@ -343,8 +454,12 @@ fn v2_rapid_committer_session_split() {
     // effective_gap=30, effective_credit=8
     // Session 1: [9:52, 10:16] = 24 min. Session 2: [10:43, 11:07] = 24 min. Total = 48 min
     let events = vec![
-        make_event_at(10, 0), make_event_at(10, 8), make_event_at(10, 16),
-        make_event_at(10, 51), make_event_at(10, 59), make_event_at(11, 7),
+        make_event_at(10, 0),
+        make_event_at(10, 8),
+        make_event_at(10, 16),
+        make_event_at(10, 51),
+        make_event_at(10, 59),
+        make_event_at(11, 7),
     ];
     let (result, _) = estimate_time_v2(&events, &[], 120, 30);
     assert_eq!(result, Duration::minutes(48));
@@ -401,20 +516,32 @@ fn insert_presence(conn: &rusqlite::Connection, repo: &str, entered: &str, left:
         conn.execute(
             "INSERT INTO directory_presence (repo_path, entered_at, left_at) VALUES (?1, ?2, ?3)",
             rusqlite::params![repo, entered, l],
-        ).unwrap();
+        )
+        .unwrap();
     } else {
         conn.execute(
             "INSERT INTO directory_presence (repo_path, entered_at) VALUES (?1, ?2)",
             rusqlite::params![repo, entered],
-        ).unwrap();
+        )
+        .unwrap();
     }
 }
 
 #[test]
 fn query_presence_basic_intervals() {
     let (conn, _tmp) = setup_db();
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T10:00:00Z", Some("2025-01-15T11:00:00Z"));
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T12:00:00Z", Some("2025-01-15T13:00:00Z"));
+    insert_presence(
+        &conn,
+        "/repo/alpha",
+        "2025-01-15T10:00:00Z",
+        Some("2025-01-15T11:00:00Z"),
+    );
+    insert_presence(
+        &conn,
+        "/repo/alpha",
+        "2025-01-15T12:00:00Z",
+        Some("2025-01-15T13:00:00Z"),
+    );
 
     let from = ts(0, 0);
     let to = ts(23, 59);
@@ -445,7 +572,12 @@ fn query_presence_null_left_at_capped() {
 fn query_presence_spanning_boundary_included() {
     let (conn, _tmp) = setup_db();
     // Presence started before 'from' but extends into the window
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T08:00:00Z", Some("2025-01-15T11:00:00Z"));
+    insert_presence(
+        &conn,
+        "/repo/alpha",
+        "2025-01-15T08:00:00Z",
+        Some("2025-01-15T11:00:00Z"),
+    );
 
     let from = ts(10, 0); // query starts at 10:00
     let to = ts(23, 59);
@@ -461,7 +593,12 @@ fn query_presence_spanning_boundary_included() {
 fn query_presence_clipped_to_query_window() {
     let (conn, _tmp) = setup_db();
     // Presence spans wider than the query window on both sides
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T08:00:00Z", Some("2025-01-15T20:00:00Z"));
+    insert_presence(
+        &conn,
+        "/repo/alpha",
+        "2025-01-15T08:00:00Z",
+        Some("2025-01-15T20:00:00Z"),
+    );
 
     let from = ts(10, 0);
     let to = ts(15, 0);
@@ -478,12 +615,20 @@ fn query_presence_clipped_to_query_window() {
 fn query_activity_presence_does_not_create_repos() {
     let (conn, _tmp) = setup_db();
     // Presence-only entries should NOT create repo entries
-    insert_presence(&conn, "/repo/presence-only", "2025-01-15T10:00:00Z", Some("2025-01-15T10:10:00Z"));
+    insert_presence(
+        &conn,
+        "/repo/presence-only",
+        "2025-01-15T10:00:00Z",
+        Some("2025-01-15T10:10:00Z"),
+    );
 
     let from = ts(0, 0);
     let to = ts(23, 59);
     let repos = query_activity(&conn, from, to, 120, 30).unwrap();
 
     let repo = repos.iter().find(|r| r.repo_path == "/repo/presence-only");
-    assert!(repo.is_none(), "presence should not create standalone repos");
+    assert!(
+        repo.is_none(),
+        "presence should not create standalone repos"
+    );
 }
