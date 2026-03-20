@@ -20,9 +20,9 @@ cargo build                    # Build
 cargo test                     # All tests
 cargo clippy                   # Lint (if available)
 cargo run -- <subcommand>      # Run locally
-cargo run -- init              # Interactive setup
-cargo run -- daemon start      # Start polling daemon
-cargo run -- summary           # Show activity summary
+cargo run -- setup             # Full interactive onboarding
+cargo run -- start             # Start polling daemon
+cargo run -- today             # Show today's activity
 ```
 
 ## Architecture
@@ -34,18 +34,24 @@ src/
 ├── main.rs           # Entry point, command dispatch
 ├── lib.rs            # Module declarations
 ├── cli.rs            # Clap CLI definition (Commands enum)
+├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
 ├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management)
 ├── db.rs             # SQLite with WAL, migrations, insert/query functions
+├── doctor.rs         # Health checks and diagnostics
 ├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation)
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
+├── llm.rs            # LLM integration for --summarize flag
 ├── output.rs         # OutputFormat enum, render_summary/json/csv
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges
 ├── repo_scanner.rs   # discover_repos() — recursive git repo finder
 ├── service.rs        # launchd/systemd install/uninstall (cfg-gated)
-└── shell_hook.rs     # Shell hook generation for zsh/bash/fish
+├── setup.rs          # Full interactive onboarding wizard
+├── shell_hook.rs     # Shell hook generation for zsh/bash/fish
+├── tui.rs            # Live TUI dashboard (ratatui)
+└── watcher.rs        # Event-driven repo watching (notify crate)
 
 tests/                # Integration tests (one file per module)
 ```
