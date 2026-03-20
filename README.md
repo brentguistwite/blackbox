@@ -105,6 +105,19 @@ The `--summarize` flag is available on `today`, `week`, `month`, and `standup` t
 
 A background daemon polls your watched directories for git repos, recording commits, branch switches, and merges to a local SQLite database. The CLI queries this database and estimates time using a session-gap algorithm: commits within `session_gap_minutes` of each other belong to the same work session, and the first commit in each session gets a configurable time credit. When `gh` CLI is available, output is enriched with PR titles and URLs.
 
+## Diagnostics
+
+`blackbox doctor` validates your installation:
+
+| Check | What it verifies |
+|-------|-----------------|
+| Config file | `config.toml` exists and parses correctly |
+| Watch dirs | Each configured directory exists |
+| Database | SQLite DB exists with expected tables |
+| Daemon | Polling daemon is running (PID or launchd) |
+| GitHub CLI | `gh` installed and authenticated (optional, for PR enrichment) |
+| Shell hook | `blackbox hook` eval line found in shell rc file |
+
 ## License
 
 MIT
