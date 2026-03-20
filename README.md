@@ -17,8 +17,7 @@ Note: build includes bundled SQLite, so compile may take a minute.
 ## Quick Start
 
 ```
-blackbox init
-blackbox start
+blackbox setup
 blackbox today
 ```
 
@@ -27,15 +26,20 @@ blackbox today
 | Command | Description |
 |---------|-------------|
 | `init` | Create config interactively (`--watch-dirs`, `--poll-interval` for non-interactive) |
+| `setup` | Full interactive onboarding wizard |
 | `start` | Start background daemon |
 | `stop` | Stop running daemon |
 | `status` | Show daemon status (running/stopped) |
-| `today` | Show today's git activity (`--format pretty\|json\|csv`) |
-| `week` | Show this week's activity (`--format pretty\|json\|csv`) |
-| `month` | Show this month's activity (`--format pretty\|json\|csv`) |
+| `today` | Show today's git activity (`--format pretty\|json\|csv`, `--summarize`) |
+| `week` | Show this week's activity (`--format pretty\|json\|csv`, `--summarize`) |
+| `month` | Show this month's activity (`--format pretty\|json\|csv`, `--summarize`) |
+| `standup` | Slack/Teams-friendly activity summary (`--week`, `--summarize`) |
+| `live` | Interactive TUI dashboard |
+| `doctor` | Run health checks and report status |
 | `install` | Register as OS service (launchd on macOS, systemd on Linux) |
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
+| `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
 
@@ -77,6 +81,10 @@ Today - 3 repos, 12 commits, 4h 30m estimated
 **JSON:** `blackbox today --format json` -- structured output with repo details, commit counts, time estimates, and PR info (when gh CLI available).
 
 **CSV:** `blackbox today --format csv` -- flat rows suitable for spreadsheets/pipelines.
+
+**Standup:** `blackbox standup` -- copy-paste-ready summary for Slack/Teams. Use `--week` for weekly and `--summarize` for LLM-generated summaries.
+
+The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
 
 ## How It Works
 
