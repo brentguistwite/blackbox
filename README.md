@@ -6,6 +6,15 @@ Flight recorder for your dev day.
 
 Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Zero config after `blackbox setup`.
 
+## What it doesn't do
+
+Blackbox is intentionally minimal. It does not:
+
+- **Require manual time entry** — everything is derived from git activity
+- **Integrate with project management tools** — no Jira, Linear, or Asana sync
+- **Track non-git work** — browser activity, app usage, etc. are out of scope
+- **Phone home** — all data stays local in SQLite
+
 ## Install
 
 ```
