@@ -471,6 +471,66 @@ pub fn retro_summary(
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct DoraLiteMetrics {
+    pub commits_per_day: f64,
+    pub prs_merged_per_week: f64,
+    pub velocity_trend: f64,
+}
+
+/// Compute DORA-lite metrics from activity summary.
+/// `period_days` is the number of days in the analysis window.
+/// velocity_trend: compare commit counts in first half vs second half of period.
+/// Positive = accelerating, negative = decelerating, 0.0 = flat or no first-half data.
+pub fn dora_lite_metrics(summary: &ActivitySummary, period_days: i64) -> DoraLiteMetrics {
+    if period_days <= 0 || summary.repos.is_empty() {
+        return DoraLiteMetrics {
+            commits_per_day: 0.0,
+            prs_merged_per_week: 0.0,
+            velocity_trend: 0.0,
+        };
+    }
+
+    let total_commits = summary.total_commits;
+    let commits_per_day = total_commits as f64 / period_days as f64;
+
+    // Count merged PRs across all repos
+    let merged_prs: usize = summary.repos.iter()
+        .filter_map(|r| r.pr_info.as_ref())
+        .flat_map(|prs| prs.iter())
+        .filter(|pr| pr.state == "MERGED")
+        .count();
+    let weeks = period_days as f64 / 7.0;
+    let prs_merged_per_week = if weeks > 0.0 { merged_prs as f64 / weeks } else { 0.0 };
+
+    // Velocity trend: first half vs second half commit counts via daily_commit_counts
+    let daily = daily_commit_counts(&summary.repos);
+    let now = chrono::Local::now().date_naive();
+    let period_start = now - chrono::Duration::days(period_days);
+    let midpoint = now - chrono::Duration::days(period_days / 2);
+
+    let first_half: usize = daily.iter()
+        .filter(|(d, _)| **d >= period_start && **d < midpoint)
+        .map(|(_, c)| *c)
+        .sum();
+    let second_half: usize = daily.iter()
+        .filter(|(d, _)| **d >= midpoint && **d <= now)
+        .map(|(_, c)| *c)
+        .sum();
+
+    let velocity_trend = if first_half == 0 {
+        0.0
+    } else {
+        (second_half as f64 - first_half as f64) / first_half as f64
+    };
+
+    DoraLiteMetrics {
+        commits_per_day,
+        prs_merged_per_week,
+        velocity_trend,
+    }
+}
+
 /// Aggregate estimated time per ticket across repos.
 /// If a repo matches multiple tickets, time and commits are split equally.
 /// Results sorted by estimated_minutes descending.

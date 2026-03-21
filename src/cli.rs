@@ -194,6 +194,15 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Personal DORA-lite metrics (throughput, PRs merged, velocity trend)
+    Metrics {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard

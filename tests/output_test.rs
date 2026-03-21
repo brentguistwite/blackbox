@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_tickets, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_tickets, render_metrics, OutputFormat};
 use blackbox::insights::TicketSummary;
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
@@ -960,4 +960,43 @@ fn render_retro_populated_shows_all_sections() {
     assert!(output.contains("15"), "should show after-hours pct");
     assert!(output.contains("14:00"), "should show peak hour");
     assert!(output.contains("2025-03-12"), "should show busiest day");
+}
+
+// --- US-023: render_metrics ---
+
+#[test]
+fn render_metrics_empty_shows_no_data() {
+    colored::control::set_override(false);
+    let m = blackbox::insights::DoraLiteMetrics {
+        commits_per_day: 0.0,
+        prs_merged_per_week: 0.0,
+        velocity_trend: 0.0,
+    };
+    let output = render_metrics(&m);
+    assert!(output.contains("No metrics"), "should show no data message");
+}
+
+#[test]
+fn render_metrics_shows_trend_arrows() {
+    colored::control::set_override(false);
+    // Positive trend → up arrow
+    let m_up = blackbox::insights::DoraLiteMetrics {
+        commits_per_day: 3.5,
+        prs_merged_per_week: 2.0,
+        velocity_trend: 0.5,
+    };
+    let output = render_metrics(&m_up);
+    assert!(output.contains("DORA-lite"), "should have header");
+    assert!(output.contains("3.5"), "should show commits/day");
+    assert!(output.contains("2.0"), "should show PRs merged/week");
+    assert!(output.contains("▲") || output.contains("↑"), "positive trend should have up arrow, got: {}", output);
+
+    // Negative trend → down arrow
+    let m_down = blackbox::insights::DoraLiteMetrics {
+        commits_per_day: 1.0,
+        prs_merged_per_week: 0.5,
+        velocity_trend: -0.3,
+    };
+    let output = render_metrics(&m_down);
+    assert!(output.contains("▼") || output.contains("↓"), "negative trend should have down arrow, got: {}", output);
 }

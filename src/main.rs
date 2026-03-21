@@ -380,6 +380,55 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Metrics { range, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range.to_range();
+            let period_days = (to - from).num_days();
+            let mut repos = blackbox::query::query_activity(
+                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            // Use enrich_with_all_prs so merged PRs are visible
+            blackbox::enrichment::enrich_with_all_prs(&mut repos);
+
+            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+            let total_reviews: usize = repos.iter().map(|r| {
+                r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
+            }).sum();
+            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
+                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
+            });
+
+            let summary = ActivitySummary {
+                period_label: "Metrics".to_string(),
+                total_commits,
+                total_reviews,
+                total_repos: repos.len(),
+                total_estimated_time: total_time,
+                total_ai_session_time,
+                repos,
+            };
+
+            let metrics = blackbox::insights::dora_lite_metrics(&summary, period_days);
+            match format {
+                OutputFormat::Json => {
+                    let json = serde_json::json!({
+                        "commits_per_day": metrics.commits_per_day,
+                        "prs_merged_per_week": metrics.prs_merged_per_week,
+                        "velocity_trend": metrics.velocity_trend,
+                        "period_days": period_days,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_metrics(&metrics));
+                }
+            }
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

@@ -638,6 +638,47 @@ pub fn render_retro(retro: &crate::insights::RetroSummary, sprint_label: &str) -
     lines.join("\n")
 }
 
+/// Render DORA-lite metrics report with trend arrows.
+pub fn render_metrics(metrics: &crate::insights::DoraLiteMetrics) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if metrics.commits_per_day == 0.0 && metrics.prs_merged_per_week == 0.0 {
+        lines.push("No metrics data available.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("DORA-lite Metrics".bold().cyan().to_string());
+    lines.push(String::new());
+
+    lines.push(format!(
+        "  {} {:.1} commits/day",
+        "Throughput:".bold(),
+        metrics.commits_per_day,
+    ));
+    lines.push(format!(
+        "  {} {:.1} PRs/week",
+        "PRs merged:".bold(),
+        metrics.prs_merged_per_week,
+    ));
+
+    let (arrow, trend_label) = if metrics.velocity_trend > 0.05 {
+        ("▲".green().to_string(), format!("+{:.0}%", metrics.velocity_trend * 100.0))
+    } else if metrics.velocity_trend < -0.05 {
+        ("▼".red().to_string(), format!("{:.0}%", metrics.velocity_trend * 100.0))
+    } else {
+        ("→".yellow().to_string(), "flat".to_string())
+    };
+
+    lines.push(format!(
+        "  {} {} {}",
+        "Velocity:".bold(),
+        arrow,
+        trend_label,
+    ));
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();

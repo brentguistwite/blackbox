@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, retro_summary, ContextSwitchMetrics};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, retro_summary, dora_lite_metrics, ContextSwitchMetrics};
 use blackbox::query::ActivitySummary;
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
 
@@ -633,4 +633,84 @@ fn retro_summary_serializes_to_json() {
     assert!(json.contains("total_commits"));
     assert!(json.contains("focus_score"));
     assert!(json.contains("busiest_day"));
+}
+
+// --- US-023: dora_lite_metrics ---
+
+#[test]
+fn dora_lite_metrics_empty_returns_zeros() {
+    let summary = make_empty_summary();
+    let m = dora_lite_metrics(&summary, 7);
+    assert!((m.commits_per_day - 0.0).abs() < f64::EPSILON);
+    assert!((m.prs_merged_per_week - 0.0).abs() < f64::EPSILON);
+    assert!((m.velocity_trend - 0.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn dora_lite_metrics_commits_per_day() {
+    // 10 commits over 5 days = 2.0 commits/day
+    let events: Vec<ActivityEvent> = (0..10).map(|i| make_event("commit", i * 10)).collect();
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let summary = make_summary_with_repos(repos);
+    let m = dora_lite_metrics(&summary, 5);
+    assert!((m.commits_per_day - 2.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn dora_lite_metrics_prs_merged_per_week() {
+    use blackbox::enrichment::PrInfo;
+    // 3 merged PRs + 1 open over 14 days (2 weeks) = 1.5 merged/week
+    let mut repo = make_repo("repo-a", vec![make_event("commit", 10)], 60);
+    repo.pr_info = Some(vec![
+        PrInfo { number: 1, title: "a".into(), state: "MERGED".into(), head_ref_name: "main".into() },
+        PrInfo { number: 2, title: "b".into(), state: "MERGED".into(), head_ref_name: "main".into() },
+        PrInfo { number: 3, title: "c".into(), state: "MERGED".into(), head_ref_name: "main".into() },
+        PrInfo { number: 4, title: "d".into(), state: "OPEN".into(), head_ref_name: "main".into() },
+    ]);
+    let summary = make_summary_with_repos(vec![repo]);
+    let m = dora_lite_metrics(&summary, 14);
+    assert!((m.prs_merged_per_week - 1.5).abs() < f64::EPSILON);
+}
+
+#[test]
+fn dora_lite_metrics_velocity_trend_positive() {
+    // 10-day period. 2 commits in first half (days -10..-5), 6 in second half (days -5..0)
+    // trend = (6-2)/2 = 2.0
+    let today = Local::now().date_naive();
+    let first_half_events: Vec<ActivityEvent> = (0..2).map(|i| {
+        let d = today - chrono::Duration::days(8 - i);
+        let local_dt = Local.with_ymd_and_hms(d.year(), d.month(), d.day(), 10, 0, 0).unwrap();
+        ActivityEvent {
+            event_type: "commit".to_string(),
+            branch: None, commit_hash: None, message: None,
+            timestamp: local_dt.with_timezone(&Utc),
+        }
+    }).collect();
+    let second_half_events: Vec<ActivityEvent> = (0..6).map(|i| {
+        let d = today - chrono::Duration::days(3 - i % 3);
+        let local_dt = Local.with_ymd_and_hms(d.year(), d.month(), d.day(), 10 + i as u32, 0, 0).unwrap();
+        ActivityEvent {
+            event_type: "commit".to_string(),
+            branch: None, commit_hash: None, message: None,
+            timestamp: local_dt.with_timezone(&Utc),
+        }
+    }).collect();
+    let mut all_events = first_half_events;
+    all_events.extend(second_half_events);
+    let repos = vec![make_repo("repo-a", all_events, 120)];
+    let summary = make_summary_with_repos(repos);
+    let m = dora_lite_metrics(&summary, 10);
+    assert!(m.velocity_trend > 0.0, "trend should be positive, got {}", m.velocity_trend);
+}
+
+#[test]
+fn dora_lite_metrics_velocity_trend_zero_when_first_half_empty() {
+    // All commits in second half, none in first → trend = 0.0
+    let events: Vec<ActivityEvent> = (0..5).map(|i| make_event("commit", i * 10)).collect();
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let summary = make_summary_with_repos(repos);
+    // 30-day period, all events are "now" (minutes ago) → all in second half
+    let m = dora_lite_metrics(&summary, 30);
+    assert!((m.velocity_trend - 0.0).abs() < f64::EPSILON,
+        "trend should be 0.0 when first half empty, got {}", m.velocity_trend);
 }
