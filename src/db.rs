@@ -71,6 +71,19 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
         ),
+        // US-016: file_changes table for code churn tracking
+        M::up(
+            "CREATE TABLE IF NOT EXISTS file_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_added INTEGER NOT NULL DEFAULT 0,
+                lines_removed INTEGER NOT NULL DEFAULT 0,
+                timestamp TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_file_changes_dedup ON file_changes(repo_path, commit_hash, file_path);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -166,6 +179,27 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
         .filter_map(|r| r.ok())
         .collect();
     Ok(ids)
+}
+
+/// Insert a file change record. Returns true if inserted, false if duplicate.
+pub fn insert_file_change(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+    lines_added: i64,
+    lines_removed: i64,
+    timestamp: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO file_changes (repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash

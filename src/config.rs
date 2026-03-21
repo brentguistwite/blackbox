@@ -63,6 +63,8 @@ pub struct Config {
     pub standup_webhook_url: Option<String>,
     #[serde(default = "default_ticket_patterns")]
     pub ticket_patterns: Vec<String>,
+    #[serde(default)]
+    pub track_file_changes: bool,
 }
 
 impl Default for Config {
@@ -83,6 +85,7 @@ impl Default for Config {
             streak_rest_days: default_streak_rest_days(),
             standup_webhook_url: None,
             ticket_patterns: default_ticket_patterns(),
+            track_file_changes: false,
         }
     }
 }

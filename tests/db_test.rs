@@ -593,3 +593,96 @@ fn test_insert_activity_branch_switch() {
 
     assert_eq!(etype, "branch_switch");
 }
+
+#[test]
+fn test_file_changes_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='file_changes'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["file_changes"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(file_changes)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"commit_hash".to_string()));
+    assert!(columns.contains(&"file_path".to_string()));
+    assert!(columns.contains(&"lines_added".to_string()));
+    assert!(columns.contains(&"lines_removed".to_string()));
+    assert!(columns.contains(&"timestamp".to_string()));
+}
+
+#[test]
+fn test_insert_file_change() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_file_change(
+        &conn,
+        "/tmp/repo",
+        "abc123",
+        "src/main.rs",
+        10,
+        3,
+        "2026-03-21T12:00:00Z",
+    )
+    .unwrap();
+    assert!(inserted);
+
+    let (repo, hash, fpath, added, removed, ts): (String, String, String, i64, i64, String) = conn
+        .query_row(
+            "SELECT repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp FROM file_changes WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        )
+        .unwrap();
+
+    assert_eq!(repo, "/tmp/repo");
+    assert_eq!(hash, "abc123");
+    assert_eq!(fpath, "src/main.rs");
+    assert_eq!(added, 10);
+    assert_eq!(removed, 3);
+    assert_eq!(ts, "2026-03-21T12:00:00Z");
+}
+
+#[test]
+fn test_insert_file_change_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/main.rs", 10, 3, "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Same (repo_path, commit_hash, file_path) → ignored
+    let second = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/main.rs", 20, 5, "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    // Different file_path → not a duplicate
+    let third = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/lib.rs", 5, 1, "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(third);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_changes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}

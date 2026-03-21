@@ -353,3 +353,30 @@ fn test_parse_ticket_patterns_custom_values() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.ticket_patterns.len(), 2);
 }
+
+// --- US-016: track_file_changes ---
+
+#[test]
+fn test_default_config_track_file_changes() {
+    let cfg = Config::default();
+    assert!(!cfg.track_file_changes);
+}
+
+#[test]
+fn test_parse_track_file_changes_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.track_file_changes);
+}
+
+#[test]
+fn test_parse_track_file_changes_true() {
+    let toml_str = r#"
+        watch_dirs = []
+        track_file_changes = true
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.track_file_changes);
+}
