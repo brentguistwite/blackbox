@@ -107,6 +107,14 @@ fn main() -> anyhow::Result<()> {
             let (from, to) = blackbox::query::month_range();
             run_query("This Month", from, to, format, summarize)?;
         }
+        Commands::Yesterday { format, summarize } => {
+            let (from, to) = blackbox::query::yesterday_range();
+            run_query("Yesterday", from, to, format, summarize)?;
+        }
+        Commands::Query { from, to, format, summarize } => {
+            let (range_from, range_to) = blackbox::query::custom_range(&from, &to)?;
+            run_query(&format!("{} to {}", from, to), range_from, range_to, format, summarize)?;
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

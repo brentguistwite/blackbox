@@ -53,6 +53,30 @@ pub enum Commands {
         #[arg(long)]
         summarize: bool,
     },
+    /// Show yesterday's git activity
+    Yesterday {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
+    },
+    /// Query git activity for a custom date range
+    Query {
+        /// Start date (YYYY-MM-DD)
+        #[arg(long, requires = "to")]
+        from: String,
+        /// End date (YYYY-MM-DD)
+        #[arg(long, requires = "from")]
+        to: String,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
+    },
     /// Register as OS service (launchd/systemd)
     Install,
     /// Remove OS service registration
