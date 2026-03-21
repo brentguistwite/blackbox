@@ -75,6 +75,7 @@ pub struct App {
     pub total_time_mins: i64,
     pub active_repo: Option<String>,
     pub sparkline_data: Vec<u64>,
+    pub event_timestamps: Vec<DateTime<Utc>>,
     // Sort
     pub sort_mode: SortMode,
     // Scroll
@@ -97,6 +98,7 @@ impl Default for App {
             total_time_mins: 0,
             active_repo: None,
             sparkline_data: vec![0; 16],
+            event_timestamps: Vec::new(),
             sort_mode: SortMode::Commits,
             events_state: ListState::default(),
             db_path: None,
@@ -201,8 +203,17 @@ impl App {
         );
         self.total_time_mins = total_time.num_minutes();
 
-        // Sparkline: 8 hours in 30-min buckets = 16 buckets
-        self.sparkline_data = build_sparkline(&repos, from);
+        // Collect all event timestamps for sparkline (rendered dynamically based on width)
+        let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+        for repo in &repos {
+            for ev in &repo.events {
+                timestamps.push(ev.timestamp);
+            }
+            for ses in &repo.ai_sessions {
+                timestamps.push(ses.started_at);
+            }
+        }
+        self.event_timestamps = timestamps;
 
         self.repos = repos;
         self.feed_events = feed;
@@ -292,27 +303,19 @@ fn collapse_similar_events(mut events: Vec<FeedEvent>) -> Vec<FeedEvent> {
     collapsed
 }
 
-/// Build sparkline data: 16 buckets of 30min over the past 8 hours.
-fn build_sparkline(repos: &[RepoSummary], range_start: DateTime<Utc>) -> Vec<u64> {
+/// Build sparkline data: distribute event timestamps into N buckets over the past 8 hours.
+fn build_sparkline_buckets(timestamps: &[DateTime<Utc>], num_buckets: usize) -> Vec<u64> {
     let now = Utc::now();
-    // Use 8 hours ago or range_start, whichever is later
     let eight_hours_ago = now - chrono::Duration::hours(8);
-    let start = if eight_hours_ago > range_start {
-        eight_hours_ago
-    } else {
-        range_start
-    };
-    let bucket_secs = 1800i64; // 30 minutes
-    let mut buckets = vec![0u64; 16];
+    let total_secs = (now - eight_hours_ago).num_seconds() as f64;
+    let mut buckets = vec![0u64; num_buckets];
 
-    for repo in repos {
-        for ev in &repo.events {
-            let offset = (ev.timestamp - start).num_seconds();
-            if offset >= 0 {
-                let idx = (offset / bucket_secs) as usize;
-                if idx < 16 {
-                    buckets[idx] += 1;
-                }
+    for ts in timestamps {
+        let offset = (*ts - eight_hours_ago).num_seconds();
+        if offset >= 0 {
+            let idx = ((offset as f64 / total_secs) * num_buckets as f64) as usize;
+            if idx < num_buckets {
+                buckets[idx] += 1;
             }
         }
     }
@@ -591,7 +594,15 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(list, area, &mut app.events_state);
 }
 
-fn render_sparkline(frame: &mut Frame, area: Rect, app: &App) {
+fn render_sparkline(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Available width minus borders = one sparkline bar per column
+    let num_buckets = (area.width.saturating_sub(2)) as usize;
+    if num_buckets == 0 {
+        return;
+    }
+
+    app.sparkline_data = build_sparkline_buckets(&app.event_timestamps, num_buckets);
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Activity (8h) ");
@@ -635,6 +646,7 @@ mod tests {
         assert_eq!(app.total_time_mins, 0);
         assert!(app.active_repo.is_none());
         assert_eq!(app.sparkline_data.len(), 16);
+        assert!(app.event_timestamps.is_empty());
     }
 
     #[test]
@@ -817,8 +829,8 @@ mod tests {
 
     #[test]
     fn test_build_sparkline_empty() {
-        let data = build_sparkline(&[], Utc::now() - chrono::Duration::hours(8));
-        assert_eq!(data.len(), 16);
+        let data = build_sparkline_buckets(&[], 100);
+        assert_eq!(data.len(), 100);
         assert!(data.iter().all(|&v| v == 0));
     }
 
