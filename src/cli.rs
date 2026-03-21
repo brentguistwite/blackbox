@@ -155,6 +155,9 @@ pub enum Commands {
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
+        /// Webhook URL to POST standup (overrides config standup_webhook_url)
+        #[arg(long)]
+        webhook: Option<String>,
     },
 }
 

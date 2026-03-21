@@ -192,7 +192,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Live => {
             blackbox::tui::run_live()?;
         }
-        Commands::Standup { week, summarize } => {
+        Commands::Standup { week, summarize, webhook } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
             if week {
@@ -234,7 +234,14 @@ fn main() -> anyhow::Result<()> {
                 let json = blackbox::output::render_json(&summary);
                 blackbox::llm::summarize_activity(&llm_config, &json)?;
             } else {
-                println!("{}", blackbox::output::render_standup(&summary));
+                let standup_text = blackbox::output::render_standup(&summary);
+                println!("{}", standup_text);
+
+                // Webhook: CLI flag overrides config value
+                let webhook_url = webhook.or(config.standup_webhook_url);
+                if let Some(url) = webhook_url {
+                    blackbox::webhook::post_to_webhook(&url, &standup_text);
+                }
             }
         }
     }

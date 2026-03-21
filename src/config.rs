@@ -56,6 +56,8 @@ pub struct Config {
     pub work_hours_end: u8,
     #[serde(default = "default_streak_rest_days")]
     pub streak_rest_days: Vec<u8>,
+    #[serde(default)]
+    pub standup_webhook_url: Option<String>,
 }
 
 impl Default for Config {
@@ -74,6 +76,7 @@ impl Default for Config {
             work_hours_start: default_work_hours_start(),
             work_hours_end: default_work_hours_end(),
             streak_rest_days: default_streak_rest_days(),
+            standup_webhook_url: None,
         }
     }
 }

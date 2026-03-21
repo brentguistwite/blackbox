@@ -302,3 +302,30 @@ fn test_parse_streak_rest_days_custom_values() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.streak_rest_days, vec![6]);
 }
+
+// --- US-011: standup_webhook_url ---
+
+#[test]
+fn test_default_config_standup_webhook_url() {
+    let cfg = Config::default();
+    assert!(cfg.standup_webhook_url.is_none());
+}
+
+#[test]
+fn test_parse_standup_webhook_url_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.standup_webhook_url.is_none());
+}
+
+#[test]
+fn test_parse_standup_webhook_url_custom_value() {
+    let toml_str = r#"
+        watch_dirs = []
+        standup_webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.standup_webhook_url.as_deref(), Some("https://hooks.slack.com/services/T00/B00/xxx"));
+}
