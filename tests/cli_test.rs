@@ -2,7 +2,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
-use blackbox::{config, db};
+use blackbox::{cli::QueryRange, config, db};
+use chrono::{TimeZone, Utc};
 
 #[test]
 fn test_cli_help() {
@@ -642,6 +643,30 @@ fn test_query_format_flag() {
         .args(["query", "--from", "2025-03-01", "--to", "2025-03-15", "--format", "json"])
         .assert()
         .success();
+}
+
+// --- US-005: QueryRange enum ---
+
+#[test]
+fn query_range_all_starts_at_epoch() {
+    let (from, to) = QueryRange::All.to_range();
+    let epoch = Utc.timestamp_opt(0, 0).single().expect("epoch");
+    assert_eq!(from, epoch);
+    assert!(to <= Utc::now() + chrono::Duration::seconds(1));
+}
+
+#[test]
+fn query_range_all_variants_produce_valid_ranges() {
+    for variant in [QueryRange::Today, QueryRange::Yesterday, QueryRange::Week, QueryRange::Month, QueryRange::All] {
+        let (from, to) = variant.to_range();
+        assert!(from <= to, "{:?}: start must be <= end", variant);
+    }
+}
+
+#[test]
+fn query_range_default_is_month() {
+    let default = QueryRange::default();
+    assert!(matches!(default, QueryRange::Month));
 }
 
 // --- US-011: --summarize flag ---
