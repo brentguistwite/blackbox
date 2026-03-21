@@ -158,6 +158,18 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Show files with high code churn (frequently modified)
+    Churn {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Minimum change count to report
+        #[arg(long, default_value = "3")]
+        threshold: i64,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show 30-day activity trends sparkline
     Trends {
         /// Output format: pretty, json

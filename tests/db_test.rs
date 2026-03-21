@@ -686,3 +686,72 @@ fn test_insert_file_change_dedup() {
         .unwrap();
     assert_eq!(count, 2);
 }
+
+#[test]
+fn test_query_churn_returns_files_above_threshold() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // src/main.rs modified in 3 commits, src/lib.rs in 1
+    for hash in ["aaa", "bbb", "ccc"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+    }
+    db::insert_file_change(&conn, "/repo", "aaa", "src/lib.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].file_path, "src/main.rs");
+    assert_eq!(results[0].change_count, 3);
+    assert_eq!(results[0].repo_path, "/repo");
+}
+
+#[test]
+fn test_query_churn_ordered_by_count_desc_limited_to_20() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Create 22 files with decreasing change counts (22 down to 1)
+    for i in 1..=22 {
+        let fname = format!("file_{:02}.rs", i);
+        for j in 0..i {
+            let hash = format!("h{}_{}", i, j);
+            db::insert_file_change(&conn, "/repo", &hash, &fname, 0, 0, "2026-03-01T10:00:00Z").unwrap();
+        }
+    }
+
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 1).unwrap();
+    // Should be limited to 20
+    assert_eq!(results.len(), 20);
+    // First result should be file with most changes (22)
+    assert_eq!(results[0].file_path, "file_22.rs");
+    assert_eq!(results[0].change_count, 22);
+    // Last result should be file_03.rs (3 changes; file_02 and file_01 are cut off)
+    assert_eq!(results[19].file_path, "file_03.rs");
+    assert_eq!(results[19].change_count, 3);
+}
+
+#[test]
+fn test_query_churn_respects_time_range() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // 3 changes in range
+    for hash in ["a1", "a2", "a3"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+    }
+    // 2 changes outside range
+    for hash in ["b1", "b2"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", 0, 0, "2026-02-28T10:00:00Z").unwrap();
+    }
+
+    // Threshold 4: only 3 in range, should return empty
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 4).unwrap();
+    assert!(results.is_empty());
+
+    // Threshold 3: exactly 3 in range, should return 1
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    assert_eq!(results.len(), 1);
+}

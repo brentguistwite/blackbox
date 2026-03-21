@@ -216,6 +216,49 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Churn { range, threshold, format } => {
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range.to_range();
+            let entries = blackbox::db::query_churn(
+                &conn,
+                &from.to_rfc3339(),
+                &to.to_rfc3339(),
+                threshold,
+            )?;
+            match format {
+                OutputFormat::Json => {
+                    let json: Vec<serde_json::Value> = entries.iter().map(|e| {
+                        serde_json::json!({
+                            "file_path": e.file_path,
+                            "change_count": e.change_count,
+                            "repo_path": e.repo_path,
+                        })
+                    }).collect();
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                }
+                OutputFormat::Csv => {
+                    let mut wtr = csv::Writer::from_writer(vec![]);
+                    for e in &entries {
+                        wtr.write_record([
+                            &e.file_path,
+                            &e.change_count.to_string(),
+                            &e.repo_path,
+                        ]).unwrap();
+                    }
+                    if entries.is_empty() {
+                        wtr.write_record(["file_path", "change_count", "repo_path"]).unwrap();
+                    }
+                    let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
+                    print!("{}", data);
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_churn(&entries));
+                }
+            }
+        }
         Commands::Trends { format } => {
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;

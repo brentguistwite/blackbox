@@ -837,3 +837,33 @@ fn render_trends_with_data_shows_sparkline_avg_peak() {
     assert!(output.contains("Peak:"), "should show peak label");
     assert!(output.contains("120"), "should show peak value of 120 min");
 }
+
+#[test]
+fn render_churn_empty_shows_no_files() {
+    colored::control::set_override(false);
+    let output = blackbox::output::render_churn(&[]);
+    assert!(output.contains("No high-churn files found"), "empty churn should show message");
+}
+
+#[test]
+fn render_churn_shows_file_and_count() {
+    colored::control::set_override(false);
+    let entries = vec![
+        blackbox::db::ChurnEntry {
+            file_path: "src/main.rs".to_string(),
+            change_count: 7,
+            repo_path: "/home/user/myrepo".to_string(),
+        },
+        blackbox::db::ChurnEntry {
+            file_path: "src/lib.rs".to_string(),
+            change_count: 4,
+            repo_path: "/home/user/myrepo".to_string(),
+        },
+    ];
+    let output = blackbox::output::render_churn(&entries);
+    assert!(output.contains("Code Churn"), "should have header");
+    assert!(output.contains("src/main.rs"), "should show file path");
+    assert!(output.contains("7 changes"), "should show count");
+    assert!(output.contains("myrepo"), "should show repo name");
+    assert!(output.contains("src/lib.rs"), "should show second file");
+}

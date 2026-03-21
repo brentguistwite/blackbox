@@ -428,6 +428,31 @@ pub fn render_tickets(tickets: &[crate::insights::TicketSummary]) -> String {
     lines.join("\n")
 }
 
+/// Render code churn report showing frequently modified files.
+pub fn render_churn(entries: &[crate::db::ChurnEntry]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if entries.is_empty() {
+        lines.push("No high-churn files found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Code Churn".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for entry in entries {
+        let repo_name = entry.repo_path.rsplit('/').next().unwrap_or(&entry.repo_path);
+        lines.push(format!(
+            "  {} ({} changes, {})",
+            entry.file_path.bold().green(),
+            entry.change_count.to_string().yellow(),
+            repo_name.dimmed(),
+        ));
+    }
+
+    lines.join("\n")
+}
+
 /// Render 30-day activity trends sparkline with avg/peak stats.
 /// `daily_minutes` maps dates to estimated minutes of work.
 pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {

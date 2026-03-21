@@ -2,6 +2,14 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
 
+/// A file that was modified multiple times in a given period (code churn).
+#[derive(Debug)]
+pub struct ChurnEntry {
+    pub file_path: String,
+    pub change_count: i64,
+    pub repo_path: String,
+}
+
 pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -228,4 +236,33 @@ pub fn insert_activity(
         rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
     )?;
     Ok(rows > 0)
+}
+
+/// Query files with high churn (modified >= threshold times) in a time range.
+/// Returns up to 20 results ordered by change count descending.
+pub fn query_churn(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    threshold: i64,
+) -> anyhow::Result<Vec<ChurnEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, repo_path, COUNT(*) as change_count
+         FROM file_changes
+         WHERE timestamp >= ?1 AND timestamp < ?2
+         GROUP BY repo_path, file_path
+         HAVING COUNT(*) >= ?3
+         ORDER BY change_count DESC
+         LIMIT 20"
+    )?;
+    let entries = stmt.query_map(rusqlite::params![from, to, threshold], |row| {
+        Ok(ChurnEntry {
+            file_path: row.get(0)?,
+            repo_path: row.get(1)?,
+            change_count: row.get(2)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+    Ok(entries)
 }
