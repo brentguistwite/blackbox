@@ -37,12 +37,13 @@ fn poll_all_repos(
     repos: &[PathBuf],
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
+    track_file_changes: bool,
 ) {
     for repo_path in repos {
         ensure_state(repo_path, repo_states);
         let state = repo_states.get_mut(repo_path).unwrap();
         let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-        if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn) {
+        if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn, track_file_changes) {
             log::warn!("Error polling {}: {}", repo_path.display(), e);
         }
     }
@@ -74,7 +75,7 @@ fn full_scan(
     conn: &Connection,
 ) -> Vec<PathBuf> {
     let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
-    poll_all_repos(&repos, repo_states, conn);
+    poll_all_repos(&repos, repo_states, conn, config.track_file_changes);
     enrichment::collect_reviews(&repos, conn);
     claude_tracking::poll_claude_sessions(conn, &repos);
     repos
@@ -110,7 +111,7 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 ensure_state(repo_path, &mut repo_states);
                 let state = repo_states.get_mut(repo_path).unwrap();
                 let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn) {
+                if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn, config.track_file_changes) {
                     log::warn!("Error polling {}: {}", repo_path.display(), e);
                 }
             }
@@ -121,7 +122,7 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 ensure_state(wt_path, &mut repo_states);
                 let state = repo_states.get_mut(wt_path).unwrap();
                 let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(wt_path, &db_repo_path, state, &conn) {
+                if let Err(e) = git_ops::poll_repo(wt_path, &db_repo_path, state, &conn, config.track_file_changes) {
                     log::warn!("Error polling new worktree {}: {}", wt_path.display(), e);
                 }
                 watcher.watch_repo(wt_path);
