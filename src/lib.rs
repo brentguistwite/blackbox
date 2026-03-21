@@ -5,6 +5,7 @@ pub mod daemon;
 pub mod doctor;
 pub mod db;
 pub mod enrichment;
+pub mod insights;
 pub mod error;
 pub mod git_ops;
 pub mod llm;
