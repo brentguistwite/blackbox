@@ -170,6 +170,52 @@ fn main() -> anyhow::Result<()> {
             let info = blackbox::insights::streak_info(&repos, &config.streak_rest_days, as_of);
             println!("{}", blackbox::output::render_streak(&info));
         }
+        Commands::Tickets { range, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range.to_range();
+            let repos = blackbox::query::query_activity(
+                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let tickets = blackbox::insights::aggregate_time_per_ticket(&repos, &config.ticket_patterns);
+            match format {
+                OutputFormat::Json => {
+                    let json: Vec<serde_json::Value> = tickets.iter().map(|t| {
+                        serde_json::json!({
+                            "ticket_id": t.ticket_id,
+                            "branches": t.branches,
+                            "repos": t.repos,
+                            "commits": t.commits,
+                            "estimated_minutes": t.estimated_minutes,
+                        })
+                    }).collect();
+                    println!("{}", serde_json::to_string_pretty(&json).unwrap());
+                }
+                OutputFormat::Csv => {
+                    let mut wtr = csv::Writer::from_writer(vec![]);
+                    for t in &tickets {
+                        wtr.write_record([
+                            &t.ticket_id,
+                            &t.branches.join(";"),
+                            &t.repos.join(";"),
+                            &t.commits.to_string(),
+                            &t.estimated_minutes.to_string(),
+                        ]).unwrap();
+                    }
+                    if tickets.is_empty() {
+                        wtr.write_record(["ticket_id", "branches", "repos", "commits", "estimated_minutes"]).unwrap();
+                    }
+                    let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
+                    print!("{}", data);
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_tickets(&tickets));
+                }
+            }
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

@@ -149,6 +149,15 @@ pub enum Commands {
         #[arg(long, default_value = "26")]
         weeks: usize,
     },
+    /// Show time spent per ticket (extracted from branch names)
+    Tickets {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard

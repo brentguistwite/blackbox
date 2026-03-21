@@ -376,6 +376,39 @@ fn intensity_char(count: usize, max: usize) -> char {
     }
 }
 
+/// Render per-ticket summary table.
+pub fn render_tickets(tickets: &[crate::insights::TicketSummary]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if tickets.is_empty() {
+        lines.push("No ticket activity found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Ticket Summary".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for t in tickets {
+        let time = format_duration(Duration::minutes(t.estimated_minutes));
+        let commit_word = if t.commits == 1 { "commit" } else { "commits" };
+        lines.push(format!(
+            "  {} ({}, {} {})",
+            t.ticket_id.bold().green(),
+            time.yellow(),
+            t.commits,
+            commit_word,
+        ));
+        if !t.branches.is_empty() {
+            lines.push(format!("    branches: {}", t.branches.join(", ").dimmed()));
+        }
+        if !t.repos.is_empty() {
+            lines.push(format!("    repos:    {}", t.repos.join(", ").dimmed()));
+        }
+    }
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();

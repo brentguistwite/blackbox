@@ -1,5 +1,6 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_tickets, OutputFormat};
+use blackbox::insights::TicketSummary;
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
@@ -754,4 +755,42 @@ fn standup_week_header() {
     let output = render_standup(&summary);
     assert!(output.starts_with("**This Week"), "week standup should start with week header");
     assert!(output.contains(" - "), "week header should have date range with dash");
+}
+
+// --- US-014: render_tickets ---
+
+#[test]
+fn render_tickets_empty_shows_no_activity() {
+    colored::control::set_override(false);
+    let output = render_tickets(&[]);
+    assert!(output.contains("No ticket"), "empty tickets should show no-ticket message");
+}
+
+#[test]
+fn render_tickets_pretty_shows_ticket_info() {
+    colored::control::set_override(false);
+    let tickets = vec![
+        TicketSummary {
+            ticket_id: "JIRA-42".to_string(),
+            branches: vec!["feature/JIRA-42-auth".to_string()],
+            repos: vec!["my-api".to_string()],
+            commits: 5,
+            estimated_minutes: 90,
+        },
+        TicketSummary {
+            ticket_id: "JIRA-99".to_string(),
+            branches: vec!["fix/JIRA-99-bug".to_string()],
+            repos: vec!["frontend".to_string()],
+            commits: 1,
+            estimated_minutes: 15,
+        },
+    ];
+    let output = render_tickets(&tickets);
+    assert!(output.contains("JIRA-42"), "should show ticket ID");
+    assert!(output.contains("~1h 30m"), "should show time estimate");
+    assert!(output.contains("5 commits"), "should show commit count");
+    assert!(output.contains("feature/JIRA-42-auth"), "should show branch");
+    assert!(output.contains("my-api"), "should show repo");
+    assert!(output.contains("JIRA-99"), "should show second ticket");
+    assert!(output.contains("1 commit"), "singular commit word");
 }
