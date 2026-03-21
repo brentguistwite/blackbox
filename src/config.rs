@@ -24,6 +24,9 @@ fn default_work_hours_start() -> u8 {
 fn default_work_hours_end() -> u8 {
     18
 }
+fn default_streak_rest_days() -> Vec<u8> {
+    vec![5, 6]
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -51,6 +54,8 @@ pub struct Config {
     pub work_hours_start: u8,
     #[serde(default = "default_work_hours_end")]
     pub work_hours_end: u8,
+    #[serde(default = "default_streak_rest_days")]
+    pub streak_rest_days: Vec<u8>,
 }
 
 impl Default for Config {
@@ -68,6 +73,7 @@ impl Default for Config {
             worktree_dir_name: default_worktree_dir_name(),
             work_hours_start: default_work_hours_start(),
             work_hours_end: default_work_hours_end(),
+            streak_rest_days: default_streak_rest_days(),
         }
     }
 }

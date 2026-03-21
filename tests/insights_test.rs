@@ -1,6 +1,6 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, ContextSwitchMetrics};
-use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, ContextSwitchMetrics};
+use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
 
 /// Create an ActivityEvent with given type, N minutes before now.
 fn make_event(event_type: &str, minutes_ago: i64) -> ActivityEvent {
@@ -281,4 +281,87 @@ fn work_hours_analysis_weekend_days_counts_unique_dates() {
     let repos = vec![make_repo("repo-a", events, 60)];
     let result = work_hours_analysis(&repos, 8, 18);
     assert_eq!(result.weekend_days_active, 2);
+}
+
+// --- US-009: streak_info ---
+
+#[test]
+fn streak_info_empty_returns_zeros() {
+    let today = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
+    let result = streak_info(&[], &[5, 6], today);
+    assert_eq!(result.current_streak, 0);
+    assert_eq!(result.longest_streak, 0);
+    assert!(result.longest_streak_start.is_none());
+    assert_eq!(result.active_days_30d, 0);
+}
+
+#[test]
+fn streak_weekday_activity_with_weekend_rest() {
+    // Mon Mar 10 – Fri Mar 14, 2025: all weekdays active, rest=[Sat,Sun]
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),  // Mon
+        make_event_at("commit", 2025, 3, 11, 9),  // Tue
+        make_event_at("commit", 2025, 3, 12, 9),  // Wed
+        make_event_at("commit", 2025, 3, 13, 9),  // Thu
+        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
+    let result = streak_info(&repos, &[5, 6], friday);
+    assert_eq!(result.current_streak, 5);
+}
+
+#[test]
+fn streak_missing_weekday_breaks_streak() {
+    // Mon, Tue active; Wed missing; Thu, Fri active → current = 2
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),  // Mon
+        make_event_at("commit", 2025, 3, 11, 9),  // Tue
+        // Wed Mar 12 missing
+        make_event_at("commit", 2025, 3, 13, 9),  // Thu
+        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
+    let result = streak_info(&repos, &[5, 6], friday);
+    assert_eq!(result.current_streak, 2); // Thu + Fri only
+}
+
+#[test]
+fn streak_longest_separate_from_current() {
+    // Week 1 Mon-Fri (5 days), weekend rest, Week 2 Mon missing, Tue-Fri (4 days)
+    // longest=5 (week 1), current=4 (week 2 Tue-Fri)
+    let events = vec![
+        make_event_at("commit", 2025, 3, 3, 9),   // Mon W1
+        make_event_at("commit", 2025, 3, 4, 9),   // Tue
+        make_event_at("commit", 2025, 3, 5, 9),   // Wed
+        make_event_at("commit", 2025, 3, 6, 9),   // Thu
+        make_event_at("commit", 2025, 3, 7, 9),   // Fri
+        // Sat 8, Sun 9 = rest
+        // Mon 10 = missing (breaks)
+        make_event_at("commit", 2025, 3, 11, 9),  // Tue W2
+        make_event_at("commit", 2025, 3, 12, 9),  // Wed
+        make_event_at("commit", 2025, 3, 13, 9),  // Thu
+        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+    ];
+    let repos = vec![make_repo("repo-a", events, 120)];
+    let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
+    let result = streak_info(&repos, &[5, 6], friday);
+    assert_eq!(result.current_streak, 4);
+    assert_eq!(result.longest_streak, 5);
+    assert_eq!(result.longest_streak_start, Some(NaiveDate::from_ymd_opt(2025, 3, 3).unwrap()));
+}
+
+#[test]
+fn streak_active_days_30d_counts_recent() {
+    let today = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
+    let events = vec![
+        make_event_at("commit", 2025, 2, 1, 9),   // 41 days ago — outside
+        make_event_at("commit", 2025, 3, 1, 9),   // 13 days ago — inside
+        make_event_at("commit", 2025, 3, 10, 9),  // 4 days ago — inside
+        make_event_at("commit", 2025, 3, 14, 9),  // today — inside
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let result = streak_info(&repos, &[5, 6], today);
+    assert_eq!(result.active_days_30d, 3);
 }

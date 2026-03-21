@@ -170,3 +170,89 @@ pub fn work_hours_analysis(repos: &[RepoSummary], work_start: u8, work_end: u8) 
         weekend_days_active: weekend_dates.len(),
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct StreakInfo {
+    pub current_streak: usize,
+    pub longest_streak: usize,
+    pub longest_streak_start: Option<NaiveDate>,
+    pub active_days_30d: usize,
+}
+
+/// Compute coding streak info with rest-day awareness.
+/// `rest_days` uses chrono weekday numbering: 0=Mon, 5=Sat, 6=Sun.
+/// Rest days are skipped (don't break streak, don't count toward it).
+pub fn streak_info(repos: &[RepoSummary], rest_days: &[u8], as_of: NaiveDate) -> StreakInfo {
+    let dates = active_dates(repos);
+    if dates.is_empty() {
+        return StreakInfo {
+            current_streak: 0,
+            longest_streak: 0,
+            longest_streak_start: None,
+            active_days_30d: 0,
+        };
+    }
+
+    let date_set: HashSet<NaiveDate> = dates.iter().copied().collect();
+    let is_rest = |d: NaiveDate| rest_days.contains(&(d.weekday().num_days_from_monday() as u8));
+
+    // Current streak: walk backward from as_of
+    let mut current_streak = 0;
+    let mut d = as_of;
+    loop {
+        if is_rest(d) {
+            d = d.pred_opt().unwrap();
+            continue;
+        }
+        if date_set.contains(&d) {
+            current_streak += 1;
+            d = d.pred_opt().unwrap();
+        } else {
+            break;
+        }
+    }
+
+    // Longest streak: walk forward from first to last active date
+    let first = *dates.first().unwrap();
+    let last = *dates.last().unwrap();
+    let mut longest = 0;
+    let mut longest_start = None;
+    let mut run = 0usize;
+    let mut run_start = None;
+    d = first;
+    while d <= last {
+        if is_rest(d) {
+            d = d.succ_opt().unwrap();
+            continue;
+        }
+        if date_set.contains(&d) {
+            if run == 0 {
+                run_start = Some(d);
+            }
+            run += 1;
+        } else {
+            if run > longest {
+                longest = run;
+                longest_start = run_start;
+            }
+            run = 0;
+            run_start = None;
+        }
+        d = d.succ_opt().unwrap();
+    }
+    if run > longest {
+        longest = run;
+        longest_start = run_start;
+    }
+
+    // Active days in last 30 days
+    let cutoff = as_of - chrono::Duration::days(30);
+    let active_days_30d = dates.iter().filter(|&&d| d > cutoff && d <= as_of).count();
+
+    StreakInfo {
+        current_streak,
+        longest_streak: longest,
+        longest_streak_start: longest_start,
+        active_days_30d,
+    }
+}

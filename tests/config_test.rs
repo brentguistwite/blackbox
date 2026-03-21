@@ -275,3 +275,30 @@ fn test_validate_work_hours_23_is_ok() {
     };
     assert!(cfg.validate().is_ok());
 }
+
+// --- US-009: streak_rest_days ---
+
+#[test]
+fn test_default_config_streak_rest_days() {
+    let cfg = Config::default();
+    assert_eq!(cfg.streak_rest_days, vec![5, 6]);
+}
+
+#[test]
+fn test_parse_streak_rest_days_missing_uses_defaults() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.streak_rest_days, vec![5, 6]);
+}
+
+#[test]
+fn test_parse_streak_rest_days_custom_values() {
+    let toml_str = r#"
+        watch_dirs = []
+        streak_rest_days = [6]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.streak_rest_days, vec![6]);
+}
