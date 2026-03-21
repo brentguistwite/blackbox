@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, ContextSwitchMetrics};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, ContextSwitchMetrics};
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
 
 /// Create an ActivityEvent with given type, N minutes before now.
@@ -364,4 +364,108 @@ fn streak_active_days_30d_counts_recent() {
     let repos = vec![make_repo("repo-a", events, 60)];
     let result = streak_info(&repos, &[5, 6], today);
     assert_eq!(result.active_days_30d, 3);
+}
+
+// --- US-013: ticket extraction ---
+
+#[test]
+fn extract_ticket_ids_finds_jira_style_in_branch() {
+    let branches = vec!["feature/JIRA-123-fix-auth".to_string()];
+    let patterns = vec![r"[A-Z]+-\d+".to_string()];
+    let ids = extract_ticket_ids(&branches, &patterns);
+    assert_eq!(ids, vec!["JIRA-123"]);
+}
+
+#[test]
+fn extract_ticket_ids_finds_github_issue_with_custom_pattern() {
+    let branches = vec!["fix/issue-#42-login".to_string()];
+    let patterns = vec![r"#\d+".to_string()];
+    let ids = extract_ticket_ids(&branches, &patterns);
+    assert_eq!(ids, vec!["#42"]);
+}
+
+#[test]
+fn extract_ticket_ids_deduplicates_across_branches() {
+    let branches = vec![
+        "feature/PROJ-100-part1".to_string(),
+        "feature/PROJ-100-part2".to_string(),
+    ];
+    let patterns = vec![r"[A-Z]+-\d+".to_string()];
+    let ids = extract_ticket_ids(&branches, &patterns);
+    assert_eq!(ids, vec!["PROJ-100"]);
+}
+
+/// Helper: make_repo with specific branches
+fn make_repo_with_branches(name: &str, branches: Vec<String>, events: Vec<ActivityEvent>, est_minutes: i64) -> RepoSummary {
+    RepoSummary {
+        repo_path: format!("/tmp/{}", name),
+        repo_name: name.to_string(),
+        commits: events.iter().filter(|e| e.event_type == "commit").count(),
+        branches,
+        estimated_time: Duration::minutes(est_minutes),
+        events,
+        pr_info: None,
+        reviews: vec![],
+        ai_sessions: vec![],
+    }
+}
+
+#[test]
+fn aggregate_time_per_ticket_groups_by_ticket() {
+    // Two repos on same ticket JIRA-123
+    let patterns = vec![r"[A-Z]+-\d+".to_string()];
+    let repos = vec![
+        make_repo_with_branches("repo-a",
+            vec!["feature/JIRA-123-auth".to_string()],
+            vec![make_event("commit", 30)],
+            60),
+        make_repo_with_branches("repo-b",
+            vec!["feature/JIRA-123-tests".to_string()],
+            vec![make_event("commit", 20)],
+            40),
+    ];
+    let result = aggregate_time_per_ticket(&repos, &patterns);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].ticket_id, "JIRA-123");
+    assert_eq!(result[0].commits, 2);
+    assert_eq!(result[0].estimated_minutes, 100); // 60 + 40
+}
+
+#[test]
+fn aggregate_time_per_ticket_splits_time_for_multi_ticket_repo() {
+    // One repo matches two tickets → time split equally
+    let patterns = vec![r"[A-Z]+-\d+".to_string()];
+    let repos = vec![
+        make_repo_with_branches("repo-a",
+            vec!["feature/JIRA-10-and-JIRA-20".to_string()],
+            vec![make_event("commit", 30), make_event("commit", 20)],
+            60),
+    ];
+    let result = aggregate_time_per_ticket(&repos, &patterns);
+    assert_eq!(result.len(), 2);
+    // Each ticket gets 60/2 = 30 minutes, 2/2 = 1 commit each
+    let jira10 = result.iter().find(|t| t.ticket_id == "JIRA-10").unwrap();
+    let jira20 = result.iter().find(|t| t.ticket_id == "JIRA-20").unwrap();
+    assert_eq!(jira10.estimated_minutes, 30);
+    assert_eq!(jira20.estimated_minutes, 30);
+    assert_eq!(jira10.commits, 1);
+    assert_eq!(jira20.commits, 1);
+}
+
+#[test]
+fn aggregate_time_per_ticket_sorted_by_time_desc() {
+    let patterns = vec![r"[A-Z]+-\d+".to_string()];
+    let repos = vec![
+        make_repo_with_branches("repo-a",
+            vec!["feature/AAA-1".to_string()],
+            vec![make_event("commit", 10)],
+            20),
+        make_repo_with_branches("repo-b",
+            vec!["feature/BBB-2".to_string()],
+            vec![make_event("commit", 10)],
+            80),
+    ];
+    let result = aggregate_time_per_ticket(&repos, &patterns);
+    assert_eq!(result[0].ticket_id, "BBB-2"); // 80 min first
+    assert_eq!(result[1].ticket_id, "AAA-1"); // 20 min second
 }

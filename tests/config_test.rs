@@ -329,3 +329,27 @@ fn test_parse_standup_webhook_url_custom_value() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.standup_webhook_url.as_deref(), Some("https://hooks.slack.com/services/T00/B00/xxx"));
 }
+
+// --- US-013: ticket_patterns ---
+
+#[test]
+fn test_default_config_ticket_patterns() {
+    let cfg = Config::default();
+    assert_eq!(cfg.ticket_patterns, vec![r"[A-Z]+-\d+".to_string()]);
+}
+
+#[test]
+fn test_parse_ticket_patterns_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.ticket_patterns, vec![r"[A-Z]+-\d+".to_string()]);
+}
+
+#[test]
+fn test_parse_ticket_patterns_custom_values() {
+    let toml_str = "watch_dirs = []\nticket_patterns = [\"[A-Z]+-\\\\d+\", \"#\\\\d+\"]\n";
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.ticket_patterns.len(), 2);
+}

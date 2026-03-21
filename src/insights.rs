@@ -1,5 +1,6 @@
 use crate::query::RepoSummary;
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
+use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -255,4 +256,79 @@ pub fn streak_info(repos: &[RepoSummary], rest_days: &[u8], as_of: NaiveDate) ->
         longest_streak_start: longest_start,
         active_days_30d,
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct TicketSummary {
+    pub ticket_id: String,
+    pub branches: Vec<String>,
+    pub repos: Vec<String>,
+    pub commits: usize,
+    pub estimated_minutes: i64,
+}
+
+/// Extract unique ticket IDs from branch names using configurable regex patterns.
+pub fn extract_ticket_ids(branches: &[String], patterns: &[String]) -> Vec<String> {
+    let regexes: Vec<Regex> = patterns
+        .iter()
+        .filter_map(|p| Regex::new(p).ok())
+        .collect();
+
+    let mut seen = HashSet::new();
+    let mut ids = Vec::new();
+
+    for branch in branches {
+        for re in &regexes {
+            for m in re.find_iter(branch) {
+                let id = m.as_str().to_string();
+                if seen.insert(id.clone()) {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    ids
+}
+
+/// Aggregate estimated time per ticket across repos.
+/// If a repo matches multiple tickets, time and commits are split equally.
+/// Results sorted by estimated_minutes descending.
+pub fn aggregate_time_per_ticket(repos: &[RepoSummary], patterns: &[String]) -> Vec<TicketSummary> {
+    let mut ticket_map: BTreeMap<String, TicketSummary> = BTreeMap::new();
+
+    for repo in repos {
+        let ticket_ids = extract_ticket_ids(&repo.branches, patterns);
+        if ticket_ids.is_empty() {
+            continue;
+        }
+
+        let n = ticket_ids.len() as i64;
+        let split_minutes = repo.estimated_time.num_minutes() / n;
+        let split_commits = repo.commits / ticket_ids.len();
+
+        for tid in &ticket_ids {
+            let entry = ticket_map.entry(tid.clone()).or_insert_with(|| TicketSummary {
+                ticket_id: tid.clone(),
+                branches: vec![],
+                repos: vec![],
+                commits: 0,
+                estimated_minutes: 0,
+            });
+            entry.estimated_minutes += split_minutes;
+            entry.commits += split_commits;
+            if !entry.repos.contains(&repo.repo_name) {
+                entry.repos.push(repo.repo_name.clone());
+            }
+            for b in &repo.branches {
+                if !entry.branches.contains(b) {
+                    entry.branches.push(b.clone());
+                }
+            }
+        }
+    }
+
+    let mut results: Vec<TicketSummary> = ticket_map.into_values().collect();
+    results.sort_by(|a, b| b.estimated_minutes.cmp(&a.estimated_minutes));
+    results
 }

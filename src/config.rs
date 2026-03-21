@@ -27,6 +27,9 @@ fn default_work_hours_end() -> u8 {
 fn default_streak_rest_days() -> Vec<u8> {
     vec![5, 6]
 }
+fn default_ticket_patterns() -> Vec<String> {
+    vec![r"[A-Z]+-\d+".to_string()]
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -58,6 +61,8 @@ pub struct Config {
     pub streak_rest_days: Vec<u8>,
     #[serde(default)]
     pub standup_webhook_url: Option<String>,
+    #[serde(default = "default_ticket_patterns")]
+    pub ticket_patterns: Vec<String>,
 }
 
 impl Default for Config {
@@ -77,6 +82,7 @@ impl Default for Config {
             work_hours_end: default_work_hours_end(),
             streak_rest_days: default_streak_rest_days(),
             standup_webhook_url: None,
+            ticket_patterns: default_ticket_patterns(),
         }
     }
 }
