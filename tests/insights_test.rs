@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, ContextSwitchMetrics};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, ContextSwitchMetrics};
 use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
 
 /// Create an ActivityEvent with given type, N minutes before now.
@@ -130,6 +130,76 @@ fn daily_commit_counts_groups_by_local_date() {
 fn active_dates_empty_returns_empty() {
     let result = active_dates(&[]);
     assert!(result.is_empty());
+}
+
+#[test]
+fn hourly_distribution_empty_returns_all_zeros() {
+    let result = hourly_distribution(&[]);
+    assert_eq!(result, [0usize; 24]);
+}
+
+#[test]
+fn hourly_distribution_buckets_by_local_hour() {
+    // Commit at local 10:00 → bucket 10, commit at local 00:05 → bucket 0
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 10),
+        make_event_at("commit", 2025, 3, 11, 0),
+    ];
+    let repos = vec![make_repo("repo-a", events, 30)];
+    let result = hourly_distribution(&repos);
+    assert_eq!(result[10], 1);
+    assert_eq!(result[0], 1);
+    assert_eq!(result.iter().sum::<usize>(), 2);
+}
+
+#[test]
+fn hourly_distribution_ignores_non_commit_events() {
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 14),
+        make_event_at("branch_switch", 2025, 3, 10, 15),
+        make_event_at("merge", 2025, 3, 10, 16),
+    ];
+    let repos = vec![make_repo("repo-a", events, 30)];
+    let result = hourly_distribution(&repos);
+    assert_eq!(result[14], 1);
+    assert_eq!(result[15], 0); // branch_switch ignored
+    assert_eq!(result[16], 0); // merge ignored
+    assert_eq!(result.iter().sum::<usize>(), 1);
+}
+
+#[test]
+fn weekly_rhythm_empty_returns_all_zeros() {
+    let result = weekly_rhythm(&[]);
+    assert_eq!(result, [0usize; 7]);
+}
+
+#[test]
+fn weekly_rhythm_buckets_by_weekday() {
+    // 2025-03-10 = Monday (bucket 0), 2025-03-12 = Wednesday (bucket 2)
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),  // Mon
+        make_event_at("commit", 2025, 3, 12, 14), // Wed
+        make_event_at("commit", 2025, 3, 12, 16), // Wed again
+    ];
+    let repos = vec![make_repo("repo-a", events, 30)];
+    let result = weekly_rhythm(&repos);
+    assert_eq!(result[0], 1); // Monday
+    assert_eq!(result[2], 2); // Wednesday
+    assert_eq!(result.iter().sum::<usize>(), 3);
+}
+
+#[test]
+fn weekly_rhythm_ignores_non_commit_events() {
+    // 2025-03-10 = Monday
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),
+        make_event_at("branch_switch", 2025, 3, 10, 10),
+        make_event_at("merge", 2025, 3, 10, 11),
+    ];
+    let repos = vec![make_repo("repo-a", events, 30)];
+    let result = weekly_rhythm(&repos);
+    assert_eq!(result[0], 1); // only the commit
+    assert_eq!(result.iter().sum::<usize>(), 1);
 }
 
 #[test]

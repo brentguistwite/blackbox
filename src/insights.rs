@@ -1,5 +1,5 @@
 use crate::query::RepoSummary;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Timelike};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
@@ -52,6 +52,36 @@ pub fn context_switches(repos: &[RepoSummary]) -> ContextSwitchMetrics {
         repo_switches,
         focus_score,
     }
+}
+
+/// Count commits per local hour of day (0-23). Only commit events counted.
+pub fn hourly_distribution(repos: &[RepoSummary]) -> [usize; 24] {
+    let mut buckets = [0usize; 24];
+    for repo in repos {
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let hour = event.timestamp.with_timezone(&chrono::Local).hour() as usize;
+                buckets[hour] += 1;
+            }
+        }
+    }
+    buckets
+}
+
+/// Count commits per day of week (0=Mon, 6=Sun). Only commit events counted.
+pub fn weekly_rhythm(repos: &[RepoSummary]) -> [usize; 7] {
+    let mut buckets = [0usize; 7];
+    for repo in repos {
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let weekday = event.timestamp.with_timezone(&chrono::Local)
+                    .weekday()
+                    .num_days_from_monday() as usize;
+                buckets[weekday] += 1;
+            }
+        }
+    }
+    buckets
 }
 
 /// Count commits per local calendar date across all repos.
