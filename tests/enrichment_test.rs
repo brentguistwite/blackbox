@@ -84,6 +84,57 @@ fn match_prs_no_match_returns_empty() {
     assert!(matched.is_empty());
 }
 
+// --- All-PR enrichment tests (US-022) ---
+
+#[test]
+fn all_state_prs_match_to_branches() {
+    // enrich_with_all_prs fetches OPEN+MERGED+CLOSED — all states should match
+    let prs = vec![
+        PrInfo {
+            number: 1,
+            title: "Open PR".to_string(),
+            state: "OPEN".to_string(),
+            head_ref_name: "feature-a".to_string(),
+        },
+        PrInfo {
+            number: 2,
+            title: "Merged PR".to_string(),
+            state: "MERGED".to_string(),
+            head_ref_name: "feature-a".to_string(),
+        },
+        PrInfo {
+            number: 3,
+            title: "Closed PR".to_string(),
+            state: "CLOSED".to_string(),
+            head_ref_name: "feature-b".to_string(),
+        },
+        PrInfo {
+            number: 4,
+            title: "Unrelated".to_string(),
+            state: "MERGED".to_string(),
+            head_ref_name: "other-branch".to_string(),
+        },
+    ];
+    let branches = vec!["feature-a".to_string(), "feature-b".to_string()];
+    let matched: Vec<&PrInfo> = prs
+        .iter()
+        .filter(|pr| branches.contains(&pr.head_ref_name))
+        .collect();
+    assert_eq!(matched.len(), 3);
+    // All states represented in matched results
+    let states: Vec<&str> = matched.iter().map(|pr| pr.state.as_str()).collect();
+    assert!(states.contains(&"OPEN"));
+    assert!(states.contains(&"MERGED"));
+    assert!(states.contains(&"CLOSED"));
+}
+
+#[test]
+fn enrich_with_all_prs_is_public() {
+    // Compilation test: enrich_with_all_prs is importable
+    use blackbox::enrichment::enrich_with_all_prs;
+    let _ = enrich_with_all_prs as fn(&mut [blackbox::query::RepoSummary]);
+}
+
 // --- Review activity struct tests ---
 
 #[test]

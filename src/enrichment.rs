@@ -83,6 +83,63 @@ pub fn enrich_with_prs(repos: &mut [RepoSummary]) {
     }
 }
 
+/// Fetch all PRs (open+merged+closed) for a repo directory. Returns None on any failure.
+fn fetch_all_prs(repo_path: &str) -> Option<Vec<PrInfo>> {
+    let child = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--json",
+            "number,title,state,headRefName",
+            "--limit",
+            "30",
+        ])
+        .current_dir(repo_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let handle = std::thread::spawn(move || child.wait_with_output());
+
+    match handle.join() {
+        Ok(Ok(output)) if output.status.success() => {
+            serde_json::from_slice(&output.stdout).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Enrich repo summaries with all PRs (open+merged+closed) from gh CLI.
+/// Used by DORA-lite metrics to see merged PRs. Silently returns on any failure.
+pub fn enrich_with_all_prs(repos: &mut [RepoSummary]) {
+    if !gh_available() {
+        log::debug!("gh CLI not available, skipping all-PR enrichment");
+        return;
+    }
+
+    for repo in repos.iter_mut() {
+        let prs = match fetch_all_prs(&repo.repo_path) {
+            Some(prs) => prs,
+            None => {
+                log::debug!("Failed to fetch all PRs for {}", repo.repo_path);
+                continue;
+            }
+        };
+
+        let matched: Vec<PrInfo> = prs
+            .into_iter()
+            .filter(|pr| repo.branches.contains(&pr.head_ref_name))
+            .collect();
+
+        if !matched.is_empty() {
+            repo.pr_info = Some(matched);
+        }
+    }
+}
+
 // --- Review activity tracking ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
