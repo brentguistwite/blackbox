@@ -89,7 +89,7 @@ fn match_prs_no_match_returns_empty() {
 #[test]
 fn all_state_prs_match_to_branches() {
     // enrich_with_all_prs fetches OPEN+MERGED+CLOSED — all states should match
-    let prs = vec![
+    let prs = [
         PrInfo {
             number: 1,
             title: "Open PR".to_string(),
@@ -115,7 +115,7 @@ fn all_state_prs_match_to_branches() {
             head_ref_name: "other-branch".to_string(),
         },
     ];
-    let branches = vec!["feature-a".to_string(), "feature-b".to_string()];
+    let branches = ["feature-a".to_string(), "feature-b".to_string()];
     let matched: Vec<&PrInfo> = prs
         .iter()
         .filter(|pr| branches.contains(&pr.head_ref_name))

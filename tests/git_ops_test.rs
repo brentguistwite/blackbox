@@ -596,7 +596,12 @@ fn test_first_poll_dedup_existing() {
 // --- File change tracking tests (US-017) ---
 
 /// Add a file to the repo workdir, stage it, and commit. Returns the new commit OID.
-fn add_file_and_commit(repo: &Repository, filename: &str, content: &str, message: &str) -> git2::Oid {
+fn add_file_and_commit(
+    repo: &Repository,
+    filename: &str,
+    content: &str,
+    message: &str,
+) -> git2::Oid {
     let sig = Signature::now("Test", "test@test.com").unwrap();
     let workdir = repo.workdir().unwrap().to_path_buf();
     std::fs::write(workdir.join(filename), content).unwrap();
@@ -606,11 +611,13 @@ fn add_file_and_commit(repo: &Repository, filename: &str, content: &str, message
     let tree_id = index.write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
     let head = repo.head().unwrap().peel_to_commit().unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head]).unwrap()
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head])
+        .unwrap()
 }
 
 fn count_file_changes(conn: &rusqlite::Connection) -> i64 {
-    conn.query_row("SELECT COUNT(*) FROM file_changes", [], |row| row.get(0)).unwrap()
+    conn.query_row("SELECT COUNT(*) FROM file_changes", [], |row| row.get(0))
+        .unwrap()
 }
 
 #[test]
@@ -633,9 +640,11 @@ fn test_file_changes_recorded_when_enabled() {
 
     // file_changes should have at least 1 entry for hello.txt
     assert!(count_file_changes(&conn) >= 1);
-    let file_path: String = conn.query_row(
-        "SELECT file_path FROM file_changes LIMIT 1", [], |row| row.get(0),
-    ).unwrap();
+    let file_path: String = conn
+        .query_row("SELECT file_path FROM file_changes LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
     assert_eq!(file_path, "hello.txt");
 }
 

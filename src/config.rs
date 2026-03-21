@@ -105,7 +105,10 @@ impl Config {
             );
         }
         if self.work_hours_start > 23 {
-            anyhow::bail!("work_hours_start must be 0..=23, got {}", self.work_hours_start);
+            anyhow::bail!(
+                "work_hours_start must be 0..=23, got {}",
+                self.work_hours_start
+            );
         }
         if self.work_hours_end > 23 {
             anyhow::bail!("work_hours_end must be 0..=23, got {}", self.work_hours_end);
@@ -113,7 +116,8 @@ impl Config {
         if self.work_hours_start >= self.work_hours_end {
             anyhow::bail!(
                 "work_hours_start ({}) must be less than work_hours_end ({})",
-                self.work_hours_start, self.work_hours_end
+                self.work_hours_start,
+                self.work_hours_end
             );
         }
         Ok(())

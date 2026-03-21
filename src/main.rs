@@ -17,7 +17,11 @@ fn build_summary(
     let conn = blackbox::db::open_db(&db_path)
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
     let mut repos = blackbox::query::query_activity(
-        &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+        &conn,
+        from,
+        to,
+        config.session_gap_minutes,
+        config.first_commit_minutes,
     )?;
     if all_prs {
         blackbox::enrichment::enrich_with_all_prs(&mut repos);
@@ -135,9 +139,20 @@ fn main() -> anyhow::Result<()> {
             let (from, to) = blackbox::query::yesterday_range();
             run_query("Yesterday", from, to, format, summarize)?;
         }
-        Commands::Query { from, to, format, summarize } => {
+        Commands::Query {
+            from,
+            to,
+            format,
+            summarize,
+        } => {
             let (range_from, range_to) = blackbox::query::custom_range(&from, &to)?;
-            run_query(&format!("{} to {}", from, to), range_from, range_to, format, summarize)?;
+            run_query(
+                &format!("{} to {}", from, to),
+                range_from,
+                range_to,
+                format,
+                summarize,
+            )?;
         }
         Commands::Rhythms { range, format } => {
             let config = blackbox::config::load_config()?;
@@ -147,7 +162,11 @@ fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range.to_range();
             let repos = blackbox::query::query_activity(
-                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                from,
+                to,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
             let hourly = blackbox::insights::hourly_distribution(&repos);
             let weekly = blackbox::insights::weekly_rhythm(&repos);
@@ -174,7 +193,11 @@ fn main() -> anyhow::Result<()> {
             let now = chrono::Utc::now();
             let from = now - chrono::Duration::weeks(weeks as i64 + 1);
             let repos = blackbox::query::query_activity(
-                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                from,
+                now,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
             let counts = blackbox::insights::daily_commit_counts(&repos);
             println!("{}", blackbox::output::render_heatmap(&counts, weeks));
@@ -185,10 +208,16 @@ fn main() -> anyhow::Result<()> {
             let db_path = data_dir.join("blackbox.db");
             let conn = blackbox::db::open_db(&db_path)
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
-            let epoch = chrono::TimeZone::timestamp_opt(&chrono::Utc, 0, 0).single().expect("epoch");
+            let epoch = chrono::TimeZone::timestamp_opt(&chrono::Utc, 0, 0)
+                .single()
+                .expect("epoch");
             let now = chrono::Utc::now();
             let repos = blackbox::query::query_activity(
-                &conn, epoch, now, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                epoch,
+                now,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
             let as_of = chrono::Local::now().date_naive();
             let info = blackbox::insights::streak_info(&repos, &config.streak_rest_days, as_of);
@@ -202,25 +231,40 @@ fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range.to_range();
             let repos = blackbox::query::query_activity(
-                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                from,
+                to,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
-            let tickets = blackbox::insights::aggregate_time_per_ticket(&repos, &config.ticket_patterns);
+            let tickets =
+                blackbox::insights::aggregate_time_per_ticket(&repos, &config.ticket_patterns);
             match format {
                 OutputFormat::Json => {
-                    let json: Vec<serde_json::Value> = tickets.iter().map(|t| {
-                        serde_json::json!({
-                            "ticket_id": t.ticket_id,
-                            "branches": t.branches,
-                            "repos": t.repos,
-                            "commits": t.commits,
-                            "estimated_minutes": t.estimated_minutes,
+                    let json: Vec<serde_json::Value> = tickets
+                        .iter()
+                        .map(|t| {
+                            serde_json::json!({
+                                "ticket_id": t.ticket_id,
+                                "branches": t.branches,
+                                "repos": t.repos,
+                                "commits": t.commits,
+                                "estimated_minutes": t.estimated_minutes,
+                            })
                         })
-                    }).collect();
+                        .collect();
                     println!("{}", serde_json::to_string_pretty(&json).unwrap());
                 }
                 OutputFormat::Csv => {
                     let mut wtr = csv::Writer::from_writer(vec![]);
-                    wtr.write_record(["ticket_id", "branches", "repos", "commits", "estimated_minutes"]).unwrap();
+                    wtr.write_record([
+                        "ticket_id",
+                        "branches",
+                        "repos",
+                        "commits",
+                        "estimated_minutes",
+                    ])
+                    .unwrap();
                     for t in &tickets {
                         wtr.write_record([
                             &t.ticket_id,
@@ -228,7 +272,8 @@ fn main() -> anyhow::Result<()> {
                             &t.repos.join(";"),
                             &t.commits.to_string(),
                             &t.estimated_minutes.to_string(),
-                        ]).unwrap();
+                        ])
+                        .unwrap();
                     }
                     let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
                     print!("{}", data);
@@ -238,38 +283,39 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Churn { range, threshold, format } => {
+        Commands::Churn {
+            range,
+            threshold,
+            format,
+        } => {
             let data_dir = blackbox::config::data_dir()?;
             let db_path = data_dir.join("blackbox.db");
             let conn = blackbox::db::open_db(&db_path)
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range.to_range();
-            let entries = blackbox::db::query_churn(
-                &conn,
-                &from.to_rfc3339(),
-                &to.to_rfc3339(),
-                threshold,
-            )?;
+            let entries =
+                blackbox::db::query_churn(&conn, &from.to_rfc3339(), &to.to_rfc3339(), threshold)?;
             match format {
                 OutputFormat::Json => {
-                    let json: Vec<serde_json::Value> = entries.iter().map(|e| {
-                        serde_json::json!({
-                            "file_path": e.file_path,
-                            "change_count": e.change_count,
-                            "repo_path": e.repo_path,
+                    let json: Vec<serde_json::Value> = entries
+                        .iter()
+                        .map(|e| {
+                            serde_json::json!({
+                                "file_path": e.file_path,
+                                "change_count": e.change_count,
+                                "repo_path": e.repo_path,
+                            })
                         })
-                    }).collect();
+                        .collect();
                     println!("{}", serde_json::to_string_pretty(&json).unwrap());
                 }
                 OutputFormat::Csv => {
                     let mut wtr = csv::Writer::from_writer(vec![]);
-                    wtr.write_record(["file_path", "change_count", "repo_path"]).unwrap();
+                    wtr.write_record(["file_path", "change_count", "repo_path"])
+                        .unwrap();
                     for e in &entries {
-                        wtr.write_record([
-                            &e.file_path,
-                            &e.change_count.to_string(),
-                            &e.repo_path,
-                        ]).unwrap();
+                        wtr.write_record([&e.file_path, &e.change_count.to_string(), &e.repo_path])
+                            .unwrap();
                     }
                     let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
                     print!("{}", data);
@@ -287,20 +333,30 @@ fn main() -> anyhow::Result<()> {
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range.to_range();
             let repos = blackbox::query::query_activity(
-                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                from,
+                to,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
-            let sessions = blackbox::insights::deep_work_sessions(&repos, config.deep_work_threshold_minutes as i64);
+            let sessions = blackbox::insights::deep_work_sessions(
+                &repos,
+                config.deep_work_threshold_minutes as i64,
+            );
             let total_minutes: i64 = repos.iter().map(|r| r.estimated_time.num_minutes()).sum();
             match format {
                 OutputFormat::Json => {
-                    let json: Vec<serde_json::Value> = sessions.iter().map(|s| {
-                        serde_json::json!({
-                            "repo_name": s.repo_name,
-                            "branch": s.branch,
-                            "duration_minutes": s.duration_minutes,
-                            "commit_count": s.commit_count,
+                    let json: Vec<serde_json::Value> = sessions
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "repo_name": s.repo_name,
+                                "branch": s.branch,
+                                "duration_minutes": s.duration_minutes,
+                                "commit_count": s.commit_count,
+                            })
                         })
-                    }).collect();
+                        .collect();
                     let wrapper = serde_json::json!({
                         "sessions": json,
                         "total_deep_work_minutes": sessions.iter().map(|s| s.duration_minutes).sum::<i64>(),
@@ -312,7 +368,10 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", serde_json::to_string_pretty(&wrapper).unwrap());
                 }
                 _ => {
-                    println!("{}", blackbox::output::render_focus(&sessions, total_minutes));
+                    println!(
+                        "{}",
+                        blackbox::output::render_focus(&sessions, total_minutes)
+                    );
                 }
             }
         }
@@ -325,7 +384,11 @@ fn main() -> anyhow::Result<()> {
             let now = chrono::Utc::now();
             let from = now - chrono::Duration::days(31);
             let repos = blackbox::query::query_activity(
-                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
+                &conn,
+                from,
+                now,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
             )?;
             let daily = blackbox::insights::daily_estimated_minutes(&repos);
             match format {
@@ -349,12 +412,14 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Retro { sprint, format } => {
             // Parse sprint: strip 'w' suffix, multiply by 7
-            let weeks: i64 = sprint.trim_end_matches('w').parse()
-                .map_err(|_| anyhow::anyhow!("Invalid sprint format '{}'. Use 1w, 2w, 3w, or 4w.", sprint))?;
+            let weeks: i64 = sprint.trim_end_matches('w').parse().map_err(|_| {
+                anyhow::anyhow!("Invalid sprint format '{}'. Use 1w, 2w, 3w, or 4w.", sprint)
+            })?;
             let now = chrono::Utc::now();
             let from = now - chrono::Duration::weeks(weeks);
 
-            let (config, summary) = build_summary(&format!("Sprint ({})", sprint), from, now, false)?;
+            let (config, summary) =
+                build_summary(&format!("Sprint ({})", sprint), from, now, false)?;
 
             let retro = blackbox::insights::retro_summary(
                 &summary,
@@ -377,7 +442,12 @@ fn main() -> anyhow::Result<()> {
             let period_days = (to - from).num_days();
             let (_config, summary) = build_summary("Metrics", from, to, true)?;
 
-            let metrics = blackbox::insights::dora_lite_metrics(&summary, period_days, from.date_naive(), to.date_naive());
+            let metrics = blackbox::insights::dora_lite_metrics(
+                &summary,
+                period_days,
+                from.date_naive(),
+                to.date_naive(),
+            );
             match format {
                 OutputFormat::Json => {
                     let json = serde_json::json!({
@@ -392,14 +462,6 @@ fn main() -> anyhow::Result<()> {
                     println!("{}", blackbox::output::render_metrics(&metrics));
                 }
             }
-=======
-            run_query(
-                "This Month",
-                blackbox::query::month_range,
-                format,
-                summarize,
-            )?;
->>>>>>> 0e38861 (fix: resolve all clippy warnings and fmt issues)
         }
         Commands::Install => {
             blackbox::service::install()?;
@@ -438,8 +500,13 @@ fn main() -> anyhow::Result<()> {
         Commands::Live => {
             blackbox::tui::run_live()?;
         }
-        Commands::Standup { week, summarize, webhook } => {
-            let (label, range_fn): (&str, fn() -> (DateTime<Utc>, DateTime<Utc>)) = if week {
+        Commands::Standup {
+            week,
+            summarize,
+            webhook,
+        } => {
+            type RangeFn = fn() -> (DateTime<Utc>, DateTime<Utc>);
+            let (label, range_fn): (&str, RangeFn) = if week {
                 ("This Week", blackbox::query::week_range)
             } else {
                 ("Today", blackbox::query::today_range)

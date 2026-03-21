@@ -319,7 +319,27 @@ fn build_sparkline_buckets(timestamps: &[DateTime<Utc>], num_buckets: usize) -> 
             }
         }
     }
-    buckets
+    // Gaussian blur: spread each event into neighboring buckets
+    let radius = (num_buckets / 40).max(2); // ~2.5% of width per side
+    let sigma = radius as f64 / 2.0;
+    let mut blurred = vec![0.0f64; num_buckets];
+    for (i, &val) in buckets.iter().enumerate() {
+        if val == 0 {
+            continue;
+        }
+        for offset in 0..=radius {
+            let weight = (-(offset as f64).powi(2) / (2.0 * sigma * sigma)).exp();
+            let contribution = val as f64 * weight;
+            if i + offset < num_buckets {
+                blurred[i + offset] += contribution;
+            }
+            if offset > 0 && i >= offset {
+                blurred[i - offset] += contribution;
+            }
+        }
+    }
+
+    blurred.iter().map(|v| v.round() as u64).collect()
 }
 
 /// Entry point: initialize terminal, run event loop, restore on exit.

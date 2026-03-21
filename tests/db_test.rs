@@ -736,20 +736,35 @@ fn test_insert_file_change_dedup() {
     let conn = db::open_db(&db_path).unwrap();
 
     let first = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        "abc123",
+        "src/main.rs",
+        "2026-03-21T12:00:00Z",
+    )
+    .unwrap();
     assert!(first);
 
     // Same (repo_path, commit_hash, file_path) → ignored
     let second = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        "abc123",
+        "src/main.rs",
+        "2026-03-21T12:00:00Z",
+    )
+    .unwrap();
     assert!(!second);
 
     // Different file_path → not a duplicate
     let third = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/lib.rs", "2026-03-21T12:00:00Z",
-    ).unwrap();
+        &conn,
+        "/tmp/repo",
+        "abc123",
+        "src/lib.rs",
+        "2026-03-21T12:00:00Z",
+    )
+    .unwrap();
     assert!(third);
 
     let count: i64 = conn
@@ -766,11 +781,13 @@ fn test_query_churn_returns_files_above_threshold() {
 
     // src/main.rs modified in 3 commits, src/lib.rs in 1
     for hash in ["aaa", "bbb", "ccc"] {
-        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", "2026-03-01T10:00:00Z").unwrap();
+        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", "2026-03-01T10:00:00Z")
+            .unwrap();
     }
     db::insert_file_change(&conn, "/repo", "aaa", "src/lib.rs", "2026-03-01T10:00:00Z").unwrap();
 
-    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    let results =
+        db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].file_path, "src/main.rs");
     assert_eq!(results[0].change_count, 3);
@@ -792,7 +809,8 @@ fn test_query_churn_ordered_by_count_desc_limited_to_20() {
         }
     }
 
-    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 1).unwrap();
+    let results =
+        db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 1).unwrap();
     // Should be limited to 20
     assert_eq!(results.len(), 20);
     // First result should be file with most changes (22)
@@ -819,10 +837,12 @@ fn test_query_churn_respects_time_range() {
     }
 
     // Threshold 4: only 3 in range, should return empty
-    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 4).unwrap();
+    let results =
+        db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 4).unwrap();
     assert!(results.is_empty());
 
     // Threshold 3: exactly 3 in range, should return 1
-    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    let results =
+        db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
     assert_eq!(results.len(), 1);
 }

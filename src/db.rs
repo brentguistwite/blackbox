@@ -262,16 +262,17 @@ pub fn query_churn(
          GROUP BY repo_path, file_path
          HAVING COUNT(*) >= ?3
          ORDER BY change_count DESC
-         LIMIT 20"
+         LIMIT 20",
     )?;
-    let entries = stmt.query_map(rusqlite::params![from, to, threshold], |row| {
-        Ok(ChurnEntry {
-            file_path: row.get(0)?,
-            repo_path: row.get(1)?,
-            change_count: row.get(2)?,
-        })
-    })?
-    .filter_map(|r| r.ok())
-    .collect();
+    let entries = stmt
+        .query_map(rusqlite::params![from, to, threshold], |row| {
+            Ok(ChurnEntry {
+                file_path: row.get(0)?,
+                repo_path: row.get(1)?,
+                change_count: row.get(2)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(entries)
 }

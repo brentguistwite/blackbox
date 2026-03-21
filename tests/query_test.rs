@@ -2,11 +2,11 @@ use blackbox::db::{
     insert_activity, insert_ai_session, insert_review, open_db, update_session_ended,
 };
 use blackbox::query::{
-    ActivityEvent, TimeInterval, custom_range, estimate_time, estimate_time_v2, median_commit_gap,
+    ActivityEvent, TimeInterval, custom_range, estimate_time_v2, median_commit_gap,
     merge_intervals, month_range, query_activity, query_presence, today_range, week_range,
     yesterday_range,
 };
-use chrono::{Datelike, Duration, Local, TimeZone, Utc};
+use chrono::{Duration, Local, TimeZone, Utc};
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, tempfile::NamedTempFile) {

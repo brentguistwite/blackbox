@@ -1,5 +1,5 @@
 use crate::enrichment::PrInfo;
-use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, TimeZone, Utc};
 use clap::ValueEnum;
 use rusqlite::Connection;
 use std::collections::BTreeMap;

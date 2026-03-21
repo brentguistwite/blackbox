@@ -38,15 +38,19 @@ pub fn context_switches(repos: &[RepoSummary]) -> ContextSwitchMetrics {
         .collect();
     tagged.sort_by_key(|(_, e)| e.timestamp);
 
-    let repo_switches = tagged
-        .windows(2)
-        .filter(|w| w[0].0 != w[1].0)
-        .count();
+    let repo_switches = tagged.windows(2).filter(|w| w[0].0 != w[1].0).count();
 
-    let total_minutes: f64 = repos.iter().map(|r| r.estimated_time.num_minutes() as f64).sum();
+    let total_minutes: f64 = repos
+        .iter()
+        .map(|r| r.estimated_time.num_minutes() as f64)
+        .sum();
     let total_hours = total_minutes / 60.0;
     let total_switches = (branch_switches + repo_switches) as f64;
-    let switches_per_hour = if total_hours > 0.0 { total_switches / total_hours } else { 0.0 };
+    let switches_per_hour = if total_hours > 0.0 {
+        total_switches / total_hours
+    } else {
+        0.0
+    };
     let focus_score = 1.0 / (1.0 + switches_per_hour);
 
     ContextSwitchMetrics {
@@ -76,7 +80,9 @@ pub fn weekly_rhythm(repos: &[RepoSummary]) -> [usize; 7] {
     for repo in repos {
         for event in &repo.events {
             if event.event_type == "commit" {
-                let weekday = event.timestamp.with_timezone(&chrono::Local)
+                let weekday = event
+                    .timestamp
+                    .with_timezone(&chrono::Local)
                     .weekday()
                     .num_days_from_monday() as usize;
                 buckets[weekday] += 1;
@@ -118,7 +124,11 @@ pub struct WorkHoursAnalysis {
 
 /// Analyze commit activity relative to configured work hours.
 /// `work_start`/`work_end` are local hours (0..=23). Commits outside [start, end) are "after hours".
-pub fn work_hours_analysis(repos: &[RepoSummary], work_start: u8, work_end: u8) -> WorkHoursAnalysis {
+pub fn work_hours_analysis(
+    repos: &[RepoSummary],
+    work_start: u8,
+    work_end: u8,
+) -> WorkHoursAnalysis {
     let mut total = 0usize;
     let mut after_hours = 0usize;
     let mut earliest: Option<NaiveTime> = None;
@@ -389,10 +399,7 @@ pub fn deep_work_sessions(repos: &[RepoSummary], threshold_minutes: i64) -> Vec<
 
 /// Extract unique ticket IDs from branch names using configurable regex patterns.
 pub fn extract_ticket_ids(branches: &[String], patterns: &[String]) -> Vec<String> {
-    let regexes: Vec<Regex> = patterns
-        .iter()
-        .filter_map(|p| Regex::new(p).ok())
-        .collect();
+    let regexes: Vec<Regex> = patterns.iter().filter_map(|p| Regex::new(p).ok()).collect();
 
     let mut seen = HashSet::new();
     let mut ids = Vec::new();
@@ -510,23 +517,31 @@ pub fn dora_lite_metrics(
     let commits_per_day = total_commits as f64 / period_days as f64;
 
     // Count merged PRs across all repos
-    let merged_prs: usize = summary.repos.iter()
+    let merged_prs: usize = summary
+        .repos
+        .iter()
         .filter_map(|r| r.pr_info.as_ref())
         .flat_map(|prs| prs.iter())
         .filter(|pr| pr.state == "MERGED")
         .count();
     let weeks = period_days as f64 / 7.0;
-    let prs_merged_per_week = if weeks > 0.0 { merged_prs as f64 / weeks } else { 0.0 };
+    let prs_merged_per_week = if weeks > 0.0 {
+        merged_prs as f64 / weeks
+    } else {
+        0.0
+    };
 
     // Velocity trend: first half vs second half commit counts via daily_commit_counts
     let daily = daily_commit_counts(&summary.repos);
     let midpoint = period_start + chrono::Duration::days(period_days / 2);
 
-    let first_half: usize = daily.iter()
+    let first_half: usize = daily
+        .iter()
         .filter(|(d, _)| **d >= period_start && **d < midpoint)
         .map(|(_, c)| *c)
         .sum();
-    let second_half: usize = daily.iter()
+    let second_half: usize = daily
+        .iter()
         .filter(|(d, _)| **d >= midpoint && **d <= period_end)
         .map(|(_, c)| *c)
         .sum();
@@ -561,13 +576,15 @@ pub fn aggregate_time_per_ticket(repos: &[RepoSummary], patterns: &[String]) -> 
         let split_commits = repo.commits / ticket_ids.len();
 
         for tid in &ticket_ids {
-            let entry = ticket_map.entry(tid.clone()).or_insert_with(|| TicketSummary {
-                ticket_id: tid.clone(),
-                branches: vec![],
-                repos: vec![],
-                commits: 0,
-                estimated_minutes: 0,
-            });
+            let entry = ticket_map
+                .entry(tid.clone())
+                .or_insert_with(|| TicketSummary {
+                    ticket_id: tid.clone(),
+                    branches: vec![],
+                    repos: vec![],
+                    commits: 0,
+                    estimated_minutes: 0,
+                });
             entry.estimated_minutes += split_minutes;
             entry.commits += split_commits;
             if !entry.repos.contains(&repo.repo_name) {

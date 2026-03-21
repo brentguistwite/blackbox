@@ -1,8 +1,8 @@
 use blackbox::enrichment::PrInfo;
 use blackbox::insights::TicketSummary;
 use blackbox::output::{
-    format_duration, render_csv, render_json, render_metrics, render_standup, render_summary_to_string,
-    render_tickets, OutputFormat,
+    OutputFormat, format_duration, render_csv, render_json, render_metrics, render_standup,
+    render_summary_to_string, render_tickets,
 };
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
 use chrono::{Duration, Utc};
@@ -701,16 +701,17 @@ fn standup_includes_ai_sessions() {
     );
 }
 
-#[test]
 // --- US-007: Rhythms bar chart tests ---
-
 #[test]
 fn render_rhythms_empty_shows_no_activity() {
     colored::control::set_override(false);
     let hourly = [0usize; 24];
     let weekly = [0usize; 7];
     let output = blackbox::output::render_rhythms(&hourly, &weekly);
-    assert!(output.contains("No activity"), "empty data should say no activity");
+    assert!(
+        output.contains("No activity"),
+        "empty data should say no activity"
+    );
 }
 
 #[test]
@@ -740,8 +741,8 @@ fn render_rhythms_has_7_day_labels() {
 fn render_rhythms_bars_scale_to_max() {
     colored::control::set_override(false);
     let mut hourly = [0usize; 24];
-    hourly[9] = 10;  // max
-    hourly[14] = 5;  // half
+    hourly[9] = 10; // max
+    hourly[14] = 5; // half
     let weekly = [0usize; 7];
     let output = blackbox::output::render_rhythms(&hourly, &weekly);
     // The max value row should have a longer bar than the half value row
@@ -751,12 +752,15 @@ fn render_rhythms_bars_scale_to_max() {
     // Count bar chars (█)
     let bars_9: usize = line_9.chars().filter(|c| *c == '█').count();
     let bars_14: usize = line_14.chars().filter(|c| *c == '█').count();
-    assert!(bars_9 > bars_14, "max value should have more bar chars: {} vs {}", bars_9, bars_14);
+    assert!(
+        bars_9 > bars_14,
+        "max value should have more bar chars: {} vs {}",
+        bars_9,
+        bars_14
+    );
 }
 
-#[test]
 // --- US-010: Streak output tests ---
-
 #[test]
 fn render_streak_empty_shows_no_streak() {
     colored::control::set_override(false);
@@ -767,7 +771,10 @@ fn render_streak_empty_shows_no_streak() {
         active_days_30d: 0,
     };
     let output = blackbox::output::render_streak(&info);
-    assert!(output.contains("No streak"), "empty streak should say no streak");
+    assert!(
+        output.contains("No streak"),
+        "empty streak should say no streak"
+    );
 }
 
 #[test]
@@ -782,7 +789,10 @@ fn render_streak_shows_current_and_longest() {
     let output = blackbox::output::render_streak(&info);
     assert!(output.contains("5"), "should show current streak count");
     assert!(output.contains("12"), "should show longest streak count");
-    assert!(output.contains("2026-02-01"), "should show longest streak start date");
+    assert!(
+        output.contains("2026-02-01"),
+        "should show longest streak start date"
+    );
     assert!(output.contains("18"), "should show active days in 30d");
 }
 
@@ -800,16 +810,17 @@ fn render_streak_longest_without_start_date() {
     // Should not panic when longest_streak_start is None
 }
 
-#[test]
 // --- US-012: Heatmap output tests ---
-
 #[test]
 fn render_heatmap_empty_no_panic() {
     colored::control::set_override(false);
     let counts = std::collections::BTreeMap::new();
     let output = blackbox::output::render_heatmap(&counts, 26);
     assert!(!output.is_empty(), "empty heatmap should produce output");
-    assert!(output.contains("No activity") || output.contains("·"), "should handle empty gracefully");
+    assert!(
+        output.contains("No activity") || output.contains("·"),
+        "should handle empty gracefully"
+    );
 }
 
 #[test]
@@ -826,10 +837,22 @@ fn render_heatmap_has_7_rows_with_day_labels() {
     assert!(output.contains("Fri"), "should have Fri label");
     // Should NOT have Tue, Thu, Sat as labels (blank spacers)
     // Count lines with day content (after header)
-    let grid_lines: Vec<&str> = output.lines()
-        .filter(|l| l.contains('·') || l.contains('░') || l.contains('▒') || l.contains('▓') || l.contains('█'))
+    let grid_lines: Vec<&str> = output
+        .lines()
+        .filter(|l| {
+            l.contains('·')
+                || l.contains('░')
+                || l.contains('▒')
+                || l.contains('▓')
+                || l.contains('█')
+        })
         .collect();
-    assert_eq!(grid_lines.len(), 7, "should have exactly 7 grid rows, got {}", grid_lines.len());
+    assert_eq!(
+        grid_lines.len(),
+        7,
+        "should have exactly 7 grid rows, got {}",
+        grid_lines.len()
+    );
 }
 
 #[test]
@@ -838,10 +861,10 @@ fn render_heatmap_intensity_scales_to_max() {
     let mut counts = std::collections::BTreeMap::new();
     // Use dates in a known week
     let mon = chrono::NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
-    counts.insert(mon, 10);                                                    // 100% → █
-    counts.insert(mon + chrono::Duration::days(1), 1);                         // 10% → ░
-    counts.insert(mon + chrono::Duration::days(2), 5);                         // 50% → ▒
-    counts.insert(mon + chrono::Duration::days(3), 7);                         // 70% → ▓
+    counts.insert(mon, 10); // 100% → █
+    counts.insert(mon + chrono::Duration::days(1), 1); // 10% → ░
+    counts.insert(mon + chrono::Duration::days(2), 5); // 50% → ▒
+    counts.insert(mon + chrono::Duration::days(3), 7); // 70% → ▓
     let output = blackbox::output::render_heatmap(&counts, 4);
     assert!(output.contains('█'), "should have full block for max");
     assert!(output.contains('░'), "should have light shade for low");
@@ -894,7 +917,10 @@ fn standup_week_header() {
 fn render_tickets_empty_shows_no_activity() {
     colored::control::set_override(false);
     let output = render_tickets(&[]);
-    assert!(output.contains("No ticket"), "empty tickets should show no-ticket message");
+    assert!(
+        output.contains("No ticket"),
+        "empty tickets should show no-ticket message"
+    );
 }
 
 #[test]
@@ -920,7 +946,10 @@ fn render_tickets_pretty_shows_ticket_info() {
     assert!(output.contains("JIRA-42"), "should show ticket ID");
     assert!(output.contains("~1h 30m"), "should show time estimate");
     assert!(output.contains("5 commits"), "should show commit count");
-    assert!(output.contains("feature/JIRA-42-auth"), "should show branch");
+    assert!(
+        output.contains("feature/JIRA-42-auth"),
+        "should show branch"
+    );
     assert!(output.contains("my-api"), "should show repo");
     assert!(output.contains("JIRA-99"), "should show second ticket");
     assert!(output.contains("1 commit"), "singular commit word");
@@ -943,9 +972,13 @@ fn sparkline_all_zeros_returns_all_lowest() {
 #[test]
 fn render_trends_empty_shows_no_activity() {
     colored::control::set_override(false);
-    let daily: std::collections::BTreeMap<chrono::NaiveDate, i64> = std::collections::BTreeMap::new();
+    let daily: std::collections::BTreeMap<chrono::NaiveDate, i64> =
+        std::collections::BTreeMap::new();
     let output = blackbox::output::render_trends(&daily);
-    assert!(output.contains("No activity"), "empty trends should say no activity");
+    assert!(
+        output.contains("No activity"),
+        "empty trends should say no activity"
+    );
 }
 
 #[test]
@@ -959,8 +992,10 @@ fn render_trends_with_data_shows_sparkline_avg_peak() {
     daily.insert(today, 30i64);
     let output = blackbox::output::render_trends(&daily);
     // Should contain sparkline chars
-    assert!(output.contains('▁') || output.contains('▂') || output.contains('█'),
-        "should contain sparkline chars");
+    assert!(
+        output.contains('▁') || output.contains('▂') || output.contains('█'),
+        "should contain sparkline chars"
+    );
     // Should show avg
     assert!(output.contains("Avg:"), "should show average label");
     assert!(output.contains("min/day"), "should show min/day unit");
@@ -973,7 +1008,10 @@ fn render_trends_with_data_shows_sparkline_avg_peak() {
 fn render_churn_empty_shows_no_files() {
     colored::control::set_override(false);
     let output = blackbox::output::render_churn(&[]);
-    assert!(output.contains("No high-churn files found"), "empty churn should show message");
+    assert!(
+        output.contains("No high-churn files found"),
+        "empty churn should show message"
+    );
 }
 
 #[test]
@@ -1003,7 +1041,10 @@ fn render_churn_shows_file_and_count() {
 fn render_focus_empty_shows_no_sessions() {
     colored::control::set_override(false);
     let output = blackbox::output::render_focus(&[], 0);
-    assert!(output.contains("No deep work sessions"), "empty should show message");
+    assert!(
+        output.contains("No deep work sessions"),
+        "empty should show message"
+    );
 }
 
 #[test]
@@ -1030,8 +1071,14 @@ fn render_focus_shows_session_details() {
     assert!(output.contains("myrepo"), "should show repo name");
     assert!(output.contains("feature/auth"), "should show branch");
     assert!(output.contains("120"), "should show longest duration");
-    assert!(output.contains("195"), "should show total deep work mins (120+75)");
-    assert!(output.contains("65"), "should show percentage (195/300=65%)");
+    assert!(
+        output.contains("195"),
+        "should show total deep work mins (120+75)"
+    );
+    assert!(
+        output.contains("65"),
+        "should show percentage (195/300=65%)"
+    );
 }
 
 // --- US-021: render_retro ---
@@ -1058,7 +1105,10 @@ fn render_retro_empty_shows_no_activity() {
         peak_hour_commits: 0,
     };
     let output = blackbox::output::render_retro(&retro, "2w");
-    assert!(output.contains("No activity"), "should show no activity message");
+    assert!(
+        output.contains("No activity"),
+        "should show no activity message"
+    );
 }
 
 #[test]
@@ -1120,7 +1170,11 @@ fn render_metrics_shows_trend_arrows() {
     assert!(output.contains("DORA-lite"), "should have header");
     assert!(output.contains("3.5"), "should show commits/day");
     assert!(output.contains("2.0"), "should show PRs merged/week");
-    assert!(output.contains("▲") || output.contains("↑"), "positive trend should have up arrow, got: {}", output);
+    assert!(
+        output.contains("▲") || output.contains("↑"),
+        "positive trend should have up arrow, got: {}",
+        output
+    );
 
     // Negative trend → down arrow
     let m_down = blackbox::insights::DoraLiteMetrics {
@@ -1129,5 +1183,9 @@ fn render_metrics_shows_trend_arrows() {
         velocity_trend: -0.3,
     };
     let output = render_metrics(&m_down);
-    assert!(output.contains("▼") || output.contains("↓"), "negative trend should have down arrow, got: {}", output);
+    assert!(
+        output.contains("▼") || output.contains("↓"),
+        "negative trend should have down arrow, got: {}",
+        output
+    );
 }

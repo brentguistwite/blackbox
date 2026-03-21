@@ -333,7 +333,10 @@ fn test_parse_standup_webhook_url_custom_value() {
         standup_webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
     "#;
     let cfg: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.standup_webhook_url.as_deref(), Some("https://hooks.slack.com/services/T00/B00/xxx"));
+    assert_eq!(
+        cfg.standup_webhook_url.as_deref(),
+        Some("https://hooks.slack.com/services/T00/B00/xxx")
+    );
 }
 
 // --- US-013: ticket_patterns ---

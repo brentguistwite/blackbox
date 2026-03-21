@@ -608,7 +608,13 @@ fn test_yesterday_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -646,7 +652,13 @@ fn test_query_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -691,7 +703,13 @@ fn test_yesterday_format_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -718,7 +736,13 @@ fn test_query_format_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -730,7 +754,15 @@ fn test_query_format_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["query", "--from", "2025-03-01", "--to", "2025-03-15", "--format", "json"])
+        .args([
+            "query",
+            "--from",
+            "2025-03-01",
+            "--to",
+            "2025-03-15",
+            "--format",
+            "json",
+        ])
         .assert()
         .success();
 }
@@ -747,7 +779,13 @@ fn query_range_all_starts_at_epoch() {
 
 #[test]
 fn query_range_all_variants_produce_valid_ranges() {
-    for variant in [QueryRange::Today, QueryRange::Yesterday, QueryRange::Week, QueryRange::Month, QueryRange::All] {
+    for variant in [
+        QueryRange::Today,
+        QueryRange::Yesterday,
+        QueryRange::Week,
+        QueryRange::Month,
+        QueryRange::All,
+    ] {
         let (from, to) = variant.to_range();
         assert!(from <= to, "{:?}: start must be <= end", variant);
     }
@@ -782,7 +820,13 @@ fn test_rhythms_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -798,9 +842,15 @@ fn test_rhythms_runs_with_config() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "rhythms should succeed with config");
+    assert!(
+        output.status.success(),
+        "rhythms should succeed with config"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity"), "empty DB should show no activity");
+    assert!(
+        stdout.contains("No activity"),
+        "empty DB should show no activity"
+    );
 }
 
 #[test]
@@ -813,7 +863,13 @@ fn test_rhythms_range_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -966,7 +1022,13 @@ fn test_standup_webhook_flag_accepted() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1007,7 +1069,13 @@ fn test_standup_webhook_flag_with_invalid_url_still_prints() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1024,7 +1092,10 @@ fn test_standup_webhook_flag_with_invalid_url_still_prints() {
         .unwrap();
 
     // Should still succeed (webhook failure doesn't crash)
-    assert!(output.status.success(), "standup should not crash on webhook failure");
+    assert!(
+        output.status.success(),
+        "standup should not crash on webhook failure"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("No activity") || stdout.contains("**Today"),
@@ -1055,7 +1126,13 @@ fn test_heatmap_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1071,10 +1148,16 @@ fn test_heatmap_runs_with_config() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "heatmap should succeed with config");
+    assert!(
+        output.status.success(),
+        "heatmap should succeed with config"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity") || stdout.contains("Contribution"),
-        "should show heatmap output, got: {}", stdout);
+    assert!(
+        stdout.contains("No activity") || stdout.contains("Contribution"),
+        "should show heatmap output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1087,7 +1170,13 @@ fn test_heatmap_weeks_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1126,7 +1215,13 @@ fn test_streak_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1144,8 +1239,11 @@ fn test_streak_runs_with_config() {
 
     assert!(output.status.success(), "streak should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No streak") || stdout.contains("Coding Streak"),
-        "should show streak output, got: {}", stdout);
+    assert!(
+        stdout.contains("No streak") || stdout.contains("Coding Streak"),
+        "should show streak output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1193,7 +1291,13 @@ fn test_tickets_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1209,9 +1313,15 @@ fn test_tickets_runs_with_config() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "tickets should succeed with config");
+    assert!(
+        output.status.success(),
+        "tickets should succeed with config"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No ticket"), "empty DB should show no ticket activity");
+    assert!(
+        stdout.contains("No ticket"),
+        "empty DB should show no ticket activity"
+    );
 }
 
 #[test]
@@ -1224,7 +1334,13 @@ fn test_tickets_range_flag() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1263,7 +1379,13 @@ fn test_trends_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1281,8 +1403,11 @@ fn test_trends_runs_with_config() {
 
     assert!(output.status.success(), "trends should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity") || stdout.contains("Activity Trends"),
-        "should show trends output, got: {}", stdout);
+    assert!(
+        stdout.contains("No activity") || stdout.contains("Activity Trends"),
+        "should show trends output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1307,7 +1432,13 @@ fn test_churn_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1325,8 +1456,11 @@ fn test_churn_runs_with_config() {
 
     assert!(output.status.success(), "churn should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No high-churn") || stdout.contains("Code Churn"),
-        "should show churn output, got: {}", stdout);
+    assert!(
+        stdout.contains("No high-churn") || stdout.contains("Code Churn"),
+        "should show churn output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1360,7 +1494,13 @@ fn test_focus_runs_with_config() {
         .unwrap()
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
-        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .args([
+            "init",
+            "--watch-dirs",
+            "/tmp/repos",
+            "--poll-interval",
+            "300",
+        ])
         .assert()
         .success();
 
@@ -1378,8 +1518,11 @@ fn test_focus_runs_with_config() {
 
     assert!(output.status.success(), "focus should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No deep work") || stdout.contains("Deep Work"),
-        "should show focus output, got: {}", stdout);
+    assert!(
+        stdout.contains("No deep work") || stdout.contains("Deep Work"),
+        "should show focus output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1413,13 +1556,17 @@ fn test_retro_runs_with_config() {
     let db_dir = data_dir.join("blackbox");
     fs::create_dir_all(&config_dir).unwrap();
     let config_path = config_dir.join("config.toml");
-    fs::write(&config_path, "watch_dirs = [\"/tmp\"]\npoll_interval = 60\n").unwrap();
+    fs::write(
+        &config_path,
+        "watch_dirs = [\"/tmp\"]\npoll_interval = 60\n",
+    )
+    .unwrap();
     fs::create_dir_all(&db_dir).unwrap();
     let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
 
     let output = Command::cargo_bin("blackbox")
         .unwrap()
-        .env("XDG_CONFIG_HOME", &config_dir.parent().unwrap())
+        .env("XDG_CONFIG_HOME", config_dir.parent().unwrap())
         .env("XDG_DATA_HOME", &data_dir)
         .arg("retro")
         .output()
@@ -1427,8 +1574,11 @@ fn test_retro_runs_with_config() {
 
     assert!(output.status.success(), "retro should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity") || stdout.contains("Sprint Retro"),
-        "should show retro output, got: {}", stdout);
+    assert!(
+        stdout.contains("No activity") || stdout.contains("Sprint Retro"),
+        "should show retro output, got: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -1462,22 +1612,32 @@ fn test_metrics_runs_with_config() {
     let db_dir = data_dir.join("blackbox");
     fs::create_dir_all(&config_dir).unwrap();
     let config_path = config_dir.join("config.toml");
-    fs::write(&config_path, "watch_dirs = [\"/tmp\"]\npoll_interval = 60\n").unwrap();
+    fs::write(
+        &config_path,
+        "watch_dirs = [\"/tmp\"]\npoll_interval = 60\n",
+    )
+    .unwrap();
     fs::create_dir_all(&db_dir).unwrap();
     let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
 
     let output = Command::cargo_bin("blackbox")
         .unwrap()
-        .env("XDG_CONFIG_HOME", &config_dir.parent().unwrap())
+        .env("XDG_CONFIG_HOME", config_dir.parent().unwrap())
         .env("XDG_DATA_HOME", &data_dir)
         .arg("metrics")
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "metrics should succeed with config");
+    assert!(
+        output.status.success(),
+        "metrics should succeed with config"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No metrics") || stdout.contains("DORA-lite"),
-        "should show metrics output, got: {}", stdout);
+    assert!(
+        stdout.contains("No metrics") || stdout.contains("DORA-lite"),
+        "should show metrics output, got: {}",
+        stdout
+    );
 }
 
 #[test]
