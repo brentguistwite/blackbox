@@ -635,6 +635,52 @@ fn render_rhythms_bars_scale_to_max() {
 }
 
 #[test]
+// --- US-010: Streak output tests ---
+
+#[test]
+fn render_streak_empty_shows_no_streak() {
+    colored::control::set_override(false);
+    let info = blackbox::insights::StreakInfo {
+        current_streak: 0,
+        longest_streak: 0,
+        longest_streak_start: None,
+        active_days_30d: 0,
+    };
+    let output = blackbox::output::render_streak(&info);
+    assert!(output.contains("No streak"), "empty streak should say no streak");
+}
+
+#[test]
+fn render_streak_shows_current_and_longest() {
+    colored::control::set_override(false);
+    let info = blackbox::insights::StreakInfo {
+        current_streak: 5,
+        longest_streak: 12,
+        longest_streak_start: Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 1).unwrap()),
+        active_days_30d: 18,
+    };
+    let output = blackbox::output::render_streak(&info);
+    assert!(output.contains("5"), "should show current streak count");
+    assert!(output.contains("12"), "should show longest streak count");
+    assert!(output.contains("2026-02-01"), "should show longest streak start date");
+    assert!(output.contains("18"), "should show active days in 30d");
+}
+
+#[test]
+fn render_streak_longest_without_start_date() {
+    colored::control::set_override(false);
+    let info = blackbox::insights::StreakInfo {
+        current_streak: 3,
+        longest_streak: 3,
+        longest_streak_start: None,
+        active_days_30d: 3,
+    };
+    let output = blackbox::output::render_streak(&info);
+    assert!(output.contains("3"), "should show streak count");
+    // Should not panic when longest_streak_start is None
+}
+
+#[test]
 fn standup_week_header() {
     let summary = ActivitySummary {
         period_label: "This Week".to_string(),

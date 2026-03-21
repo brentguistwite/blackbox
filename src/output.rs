@@ -283,6 +283,43 @@ pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
     lines.join("\n")
 }
 
+/// Render streak info as a concise report.
+pub fn render_streak(info: &crate::insights::StreakInfo) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if info.current_streak == 0 && info.longest_streak == 0 {
+        lines.push("No streak data — start committing to build a streak!".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Coding Streak".bold().cyan().to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "  {} {} days",
+        "Current streak:".bold(),
+        info.current_streak.to_string().green().bold(),
+    ));
+
+    let longest_suffix = match info.longest_streak_start {
+        Some(date) => format!(" (started {})", date),
+        None => String::new(),
+    };
+    lines.push(format!(
+        "  {} {} days{}",
+        "Longest streak:".bold(),
+        info.longest_streak.to_string().yellow().bold(),
+        longest_suffix.dimmed(),
+    ));
+
+    lines.push(format!(
+        "  {} {} days",
+        "Active (last 30d):".bold(),
+        info.active_days_30d,
+    ));
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();

@@ -140,6 +140,21 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Streak => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let epoch = chrono::TimeZone::timestamp_opt(&chrono::Utc, 0, 0).single().expect("epoch");
+            let now = chrono::Utc::now();
+            let repos = blackbox::query::query_activity(
+                &conn, epoch, now, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let as_of = chrono::Local::now().date_naive();
+            let info = blackbox::insights::streak_info(&repos, &config.streak_rest_days, as_of);
+            println!("{}", blackbox::output::render_streak(&info));
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

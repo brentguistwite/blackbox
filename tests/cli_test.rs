@@ -845,3 +845,69 @@ fn test_summarize_flag_accepted_standup() {
         stderr
     );
 }
+
+// --- US-010: Streak command ---
+
+#[test]
+fn test_streak_help() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["streak", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("streak"));
+}
+
+#[test]
+fn test_streak_runs_with_config() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("streak")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "streak should succeed with config");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No streak") || stdout.contains("Coding Streak"),
+        "should show streak output, got: {}", stdout);
+}
+
+#[test]
+fn test_streak_first_run_shows_welcome() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("streak")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Welcome to blackbox"),
+        "streak should trigger first-run when no config, got: {}",
+        stdout
+    );
+}

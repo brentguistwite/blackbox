@@ -141,6 +141,8 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Show coding streak info (current, longest, 30-day active days)
+    Streak,
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard
