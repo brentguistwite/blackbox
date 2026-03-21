@@ -132,6 +132,15 @@ pub enum Commands {
     },
     /// Run health checks and report status
     Doctor,
+    /// Show commit rhythm patterns (hour-of-day and day-of-week)
+    Rhythms {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard

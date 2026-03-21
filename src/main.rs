@@ -115,6 +115,31 @@ fn main() -> anyhow::Result<()> {
             let (range_from, range_to) = blackbox::query::custom_range(&from, &to)?;
             run_query(&format!("{} to {}", from, to), range_from, range_to, format, summarize)?;
         }
+        Commands::Rhythms { range, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range.to_range();
+            let repos = blackbox::query::query_activity(
+                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let hourly = blackbox::insights::hourly_distribution(&repos);
+            let weekly = blackbox::insights::weekly_rhythm(&repos);
+            match format {
+                OutputFormat::Json => {
+                    let obj = serde_json::json!({
+                        "hourly": hourly.to_vec(),
+                        "weekly": weekly.to_vec(),
+                    });
+                    println!("{}", serde_json::to_string_pretty(&obj).unwrap());
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_rhythms(&hourly, &weekly));
+                }
+            }
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

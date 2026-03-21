@@ -582,6 +582,59 @@ fn standup_includes_ai_sessions() {
 }
 
 #[test]
+// --- US-007: Rhythms bar chart tests ---
+
+#[test]
+fn render_rhythms_empty_shows_no_activity() {
+    colored::control::set_override(false);
+    let hourly = [0usize; 24];
+    let weekly = [0usize; 7];
+    let output = blackbox::output::render_rhythms(&hourly, &weekly);
+    assert!(output.contains("No activity"), "empty data should say no activity");
+}
+
+#[test]
+fn render_rhythms_has_24_hour_labels() {
+    colored::control::set_override(false);
+    let mut hourly = [0usize; 24];
+    hourly[10] = 5;
+    let weekly = [0usize; 7];
+    let output = blackbox::output::render_rhythms(&hourly, &weekly);
+    assert!(output.contains("00"), "should have midnight label");
+    assert!(output.contains("23"), "should have 23h label");
+    assert!(output.contains("10"), "should have 10h label");
+}
+
+#[test]
+fn render_rhythms_has_7_day_labels() {
+    colored::control::set_override(false);
+    let hourly = [0usize; 24];
+    let mut weekly = [0usize; 7];
+    weekly[0] = 3;
+    let output = blackbox::output::render_rhythms(&hourly, &weekly);
+    assert!(output.contains("Mon"), "should have Monday label");
+    assert!(output.contains("Sun"), "should have Sunday label");
+}
+
+#[test]
+fn render_rhythms_bars_scale_to_max() {
+    colored::control::set_override(false);
+    let mut hourly = [0usize; 24];
+    hourly[9] = 10;  // max
+    hourly[14] = 5;  // half
+    let weekly = [0usize; 7];
+    let output = blackbox::output::render_rhythms(&hourly, &weekly);
+    // The max value row should have a longer bar than the half value row
+    let lines: Vec<&str> = output.lines().collect();
+    let line_9 = lines.iter().find(|l| l.contains("09")).unwrap();
+    let line_14 = lines.iter().find(|l| l.contains("14")).unwrap();
+    // Count bar chars (█)
+    let bars_9: usize = line_9.chars().filter(|c| *c == '█').count();
+    let bars_14: usize = line_14.chars().filter(|c| *c == '█').count();
+    assert!(bars_9 > bars_14, "max value should have more bar chars: {} vs {}", bars_9, bars_14);
+}
+
+#[test]
 fn standup_week_header() {
     let summary = ActivitySummary {
         period_label: "This Week".to_string(),

@@ -231,6 +231,58 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
     data.trim_end().to_string()
 }
 
+/// Render hour-of-day and day-of-week bar charts as a single ASCII report.
+pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    let hour_max = *hourly.iter().max().unwrap_or(&0);
+    let week_max = *weekly.iter().max().unwrap_or(&0);
+
+    if hour_max == 0 && week_max == 0 {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    let bar_width = 30;
+
+    // Hour-of-day chart
+    lines.push("Commits by hour of day".bold().cyan().to_string());
+    lines.push(String::new());
+    for hour in 0..24 {
+        let count = hourly[hour];
+        let label = format!("{:02}", hour);
+        let bar = if hour_max > 0 {
+            let width = (count as f64 / hour_max as f64 * bar_width as f64).round() as usize;
+            "█".repeat(width)
+        } else {
+            String::new()
+        };
+        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
+        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+    }
+
+    lines.push(String::new());
+
+    // Day-of-week chart
+    let day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    lines.push("Commits by day of week".bold().cyan().to_string());
+    lines.push(String::new());
+    for day in 0..7 {
+        let count = weekly[day];
+        let label = day_labels[day];
+        let bar = if week_max > 0 {
+            let width = (count as f64 / week_max as f64 * bar_width as f64).round() as usize;
+            "█".repeat(width)
+        } else {
+            String::new()
+        };
+        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
+        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+    }
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();
