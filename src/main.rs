@@ -7,7 +7,8 @@ use blackbox::query::ActivitySummary;
 
 fn run_query(
     period_label: &str,
-    range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>),
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
     format: OutputFormat,
     summarize: bool,
 ) -> anyhow::Result<()> {
@@ -16,8 +17,6 @@ fn run_query(
     let db_path = data_dir.join("blackbox.db");
     let conn = blackbox::db::open_db(&db_path)
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
-
-    let (from, to) = range_fn();
     let mut repos = blackbox::query::query_activity(
         &conn,
         from,
@@ -97,13 +96,16 @@ fn main() -> anyhow::Result<()> {
             blackbox::daemon::daemon_status(&data_dir)?;
         }
         Commands::Today { format, summarize } => {
-            run_query("Today", blackbox::query::today_range, format, summarize)?;
+            let (from, to) = blackbox::query::today_range();
+            run_query("Today", from, to, format, summarize)?;
         }
         Commands::Week { format, summarize } => {
-            run_query("This Week", blackbox::query::week_range, format, summarize)?;
+            let (from, to) = blackbox::query::week_range();
+            run_query("This Week", from, to, format, summarize)?;
         }
         Commands::Month { format, summarize } => {
-            run_query("This Month", blackbox::query::month_range, format, summarize)?;
+            let (from, to) = blackbox::query::month_range();
+            run_query("This Month", from, to, format, summarize)?;
         }
         Commands::Install => {
             blackbox::service::install()?;

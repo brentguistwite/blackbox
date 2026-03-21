@@ -1,9 +1,10 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
     estimate_time, estimate_time_v2, median_commit_gap, merge_intervals, query_activity,
-    query_presence, today_range, week_range, month_range, ActivityEvent, TimeInterval,
+    query_presence, today_range, yesterday_range, custom_range, week_range, month_range,
+    ActivityEvent, TimeInterval,
 };
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Datelike, Duration, Local, TimeZone, Utc};
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, tempfile::NamedTempFile) {
@@ -64,6 +65,39 @@ fn date_ranges_are_valid() {
 
     let (start, end) = month_range();
     assert!(start <= end);
+}
+
+#[test]
+fn yesterday_range_is_24h_ending_at_today_midnight() {
+    let (start, end) = yesterday_range();
+    // Must be exactly 24h
+    assert_eq!(end - start, Duration::hours(24));
+    // end should be today's midnight local (converted to UTC)
+    let local_today = Local::now().date_naive();
+    let today_midnight = local_today.and_hms_opt(0, 0, 0).unwrap();
+    let today_midnight_utc = Local
+        .from_local_datetime(&today_midnight)
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(end, today_midnight_utc);
+}
+
+#[test]
+fn custom_range_parses_valid_dates() {
+    let (from, to) = custom_range("2025-06-01", "2025-06-15").unwrap();
+    assert!(from < to);
+    // Verify the local dates are correct (avoids DST edge cases in assertions)
+    let from_local = from.with_timezone(&Local).date_naive();
+    let to_local = to.with_timezone(&Local).date_naive();
+    assert_eq!(from_local.to_string(), "2025-06-01");
+    // to is next-day midnight (exclusive end)
+    assert_eq!(to_local.to_string(), "2025-06-16");
+}
+
+#[test]
+fn custom_range_rejects_reversed_dates() {
+    let result = custom_range("2025-03-15", "2025-03-01");
+    assert!(result.is_err());
 }
 
 #[test]
