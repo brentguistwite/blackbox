@@ -258,6 +258,34 @@ pub fn streak_info(repos: &[RepoSummary], rest_days: &[u8], as_of: NaiveDate) ->
     }
 }
 
+/// Compute estimated minutes per local calendar date across all repos.
+/// Distributes each repo's estimated_time proportionally by commit count per day.
+pub fn daily_estimated_minutes(repos: &[RepoSummary]) -> BTreeMap<NaiveDate, i64> {
+    let mut result: BTreeMap<NaiveDate, i64> = BTreeMap::new();
+
+    for repo in repos {
+        if repo.commits == 0 {
+            continue;
+        }
+        // Count commits per day for this repo
+        let mut day_counts: BTreeMap<NaiveDate, usize> = BTreeMap::new();
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let date = event.timestamp.with_timezone(&chrono::Local).date_naive();
+                *day_counts.entry(date).or_insert(0) += 1;
+            }
+        }
+        let total_mins = repo.estimated_time.num_minutes();
+        let total_commits = repo.commits as i64;
+        for (date, count) in &day_counts {
+            let mins = (total_mins * *count as i64) / total_commits;
+            *result.entry(*date).or_insert(0) += mins;
+        }
+    }
+
+    result
+}
+
 #[derive(Debug, Clone)]
 pub struct TicketSummary {
     pub ticket_id: String,

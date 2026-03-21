@@ -216,6 +216,37 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Trends { format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let now = chrono::Utc::now();
+            let from = now - chrono::Duration::days(31);
+            let repos = blackbox::query::query_activity(
+                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let daily = blackbox::insights::daily_estimated_minutes(&repos);
+            match format {
+                OutputFormat::Json => {
+                    let today = chrono::Local::now().date_naive();
+                    let mut entries: Vec<serde_json::Value> = Vec::new();
+                    for i in (0..30).rev() {
+                        let date = today - chrono::Duration::days(i);
+                        let mins = daily.get(&date).copied().unwrap_or(0);
+                        entries.push(serde_json::json!({
+                            "date": date.to_string(),
+                            "estimated_minutes": mins,
+                        }));
+                    }
+                    println!("{}", serde_json::to_string_pretty(&entries).unwrap());
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_trends(&daily));
+                }
+            }
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }

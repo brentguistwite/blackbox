@@ -794,3 +794,46 @@ fn render_tickets_pretty_shows_ticket_info() {
     assert!(output.contains("JIRA-99"), "should show second ticket");
     assert!(output.contains("1 commit"), "singular commit word");
 }
+
+// --- US-015: Sparkline and Trends tests ---
+
+#[test]
+fn sparkline_maps_0_through_7_to_block_chars() {
+    let result = blackbox::output::sparkline(&[0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(result, "▁▂▃▄▅▆▇█");
+}
+
+#[test]
+fn sparkline_all_zeros_returns_all_lowest() {
+    let result = blackbox::output::sparkline(&[0, 0, 0, 0]);
+    assert_eq!(result, "▁▁▁▁");
+}
+
+#[test]
+fn render_trends_empty_shows_no_activity() {
+    colored::control::set_override(false);
+    let daily: std::collections::BTreeMap<chrono::NaiveDate, i64> = std::collections::BTreeMap::new();
+    let output = blackbox::output::render_trends(&daily);
+    assert!(output.contains("No activity"), "empty trends should say no activity");
+}
+
+#[test]
+fn render_trends_with_data_shows_sparkline_avg_peak() {
+    colored::control::set_override(false);
+    let today = chrono::Local::now().date_naive();
+    let mut daily = std::collections::BTreeMap::new();
+    // 3 days of data within last 30 days
+    daily.insert(today - chrono::Duration::days(2), 60i64);
+    daily.insert(today - chrono::Duration::days(1), 120i64);
+    daily.insert(today, 30i64);
+    let output = blackbox::output::render_trends(&daily);
+    // Should contain sparkline chars
+    assert!(output.contains('▁') || output.contains('▂') || output.contains('█'),
+        "should contain sparkline chars");
+    // Should show avg
+    assert!(output.contains("Avg:"), "should show average label");
+    assert!(output.contains("min/day"), "should show min/day unit");
+    // Should show peak
+    assert!(output.contains("Peak:"), "should show peak label");
+    assert!(output.contains("120"), "should show peak value of 120 min");
+}

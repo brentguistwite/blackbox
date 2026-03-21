@@ -1132,3 +1132,47 @@ fn test_tickets_range_flag() {
         .assert()
         .success();
 }
+
+// --- US-015: Trends CLI tests ---
+
+#[test]
+fn test_trends_help() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["trends", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--format"));
+}
+
+#[test]
+fn test_trends_runs_with_config() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("trends")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "trends should succeed with config");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No activity") || stdout.contains("Activity Trends"),
+        "should show trends output, got: {}", stdout);
+}

@@ -360,6 +360,25 @@ pub fn render_heatmap(counts: &BTreeMap<NaiveDate, usize>, weeks: usize) -> Stri
     lines.join("\n")
 }
 
+const SPARK_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Map a slice of values to a Unicode sparkline string.
+/// Each value maps to one of ▁▂▃▄▅▆▇█ (linear interpolation, 0→▁, max→█).
+pub fn sparkline(values: &[usize]) -> String {
+    let max = values.iter().copied().max().unwrap_or(0);
+    values
+        .iter()
+        .map(|&v| {
+            if v == 0 || max == 0 {
+                SPARK_CHARS[0]
+            } else {
+                let idx = ((v as f64 / max as f64) * 7.0).min(7.0) as usize;
+                SPARK_CHARS[idx]
+            }
+        })
+        .collect()
+}
+
 fn intensity_char(count: usize, max: usize) -> char {
     if count == 0 || max == 0 {
         return '·';
@@ -405,6 +424,60 @@ pub fn render_tickets(tickets: &[crate::insights::TicketSummary]) -> String {
             lines.push(format!("    repos:    {}", t.repos.join(", ").dimmed()));
         }
     }
+
+    lines.join("\n")
+}
+
+/// Render 30-day activity trends sparkline with avg/peak stats.
+/// `daily_minutes` maps dates to estimated minutes of work.
+pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if daily_minutes.is_empty() {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    // Build 30-day array ending at today
+    let today = Local::now().date_naive();
+    let mut days: Vec<(NaiveDate, i64)> = Vec::new();
+    for i in (0..30).rev() {
+        let date = today - Duration::days(i);
+        let mins = daily_minutes.get(&date).copied().unwrap_or(0);
+        days.push((date, mins));
+    }
+
+    let values: Vec<usize> = days.iter().map(|(_, m)| *m as usize).collect();
+    let spark = sparkline(&values);
+
+    let total: i64 = days.iter().map(|(_, m)| *m).sum();
+    let active_days = days.iter().filter(|(_, m)| *m > 0).count();
+    let avg = if active_days > 0 { total / active_days as i64 } else { 0 };
+    let (peak_date, peak_mins) = days
+        .iter()
+        .max_by_key(|(_, m)| *m)
+        .map(|(d, m)| (*d, *m))
+        .unwrap();
+
+    let start_date = days.first().unwrap().0;
+    let end_date = days.last().unwrap().0;
+
+    lines.push("Activity Trends (30 days)".bold().cyan().to_string());
+    lines.push(String::new());
+    lines.push(format!("  {} {}", start_date.format("%b %-d").to_string().dimmed(), spark));
+    lines.push(format!("  {}", end_date.format("%b %-d").to_string().dimmed()));
+    lines.push(String::new());
+    lines.push(format!(
+        "  {} {} min/day",
+        "Avg:".bold(),
+        avg.to_string().green(),
+    ));
+    lines.push(format!(
+        "  {} {} min ({})",
+        "Peak:".bold(),
+        peak_mins.to_string().yellow().bold(),
+        peak_date.format("%b %-d"),
+    ));
 
     lines.join("\n")
 }
