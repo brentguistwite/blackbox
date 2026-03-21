@@ -1,6 +1,6 @@
 use crate::query::RepoSummary;
-use chrono::{Datelike, NaiveDate, Timelike};
-use std::collections::BTreeMap;
+use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone)]
 pub struct ContextSwitchMetrics {
@@ -102,4 +102,71 @@ pub fn daily_commit_counts(repos: &[RepoSummary]) -> BTreeMap<NaiveDate, usize> 
 /// Return sorted unique local dates that have at least one commit.
 pub fn active_dates(repos: &[RepoSummary]) -> Vec<NaiveDate> {
     daily_commit_counts(repos).into_keys().collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkHoursAnalysis {
+    pub total_commits: usize,
+    pub after_hours_commits: usize,
+    pub after_hours_pct: f64,
+    pub earliest_commit: Option<NaiveTime>,
+    pub latest_commit: Option<NaiveTime>,
+    pub weekend_days_active: usize,
+}
+
+/// Analyze commit activity relative to configured work hours.
+/// `work_start`/`work_end` are local hours (0..=23). Commits outside [start, end) are "after hours".
+pub fn work_hours_analysis(repos: &[RepoSummary], work_start: u8, work_end: u8) -> WorkHoursAnalysis {
+    let mut total = 0usize;
+    let mut after_hours = 0usize;
+    let mut earliest: Option<NaiveTime> = None;
+    let mut latest: Option<NaiveTime> = None;
+    let mut weekend_dates: HashSet<NaiveDate> = HashSet::new();
+
+    for repo in repos {
+        for event in &repo.events {
+            if event.event_type != "commit" {
+                continue;
+            }
+            let local = event.timestamp.with_timezone(&chrono::Local);
+            let hour = local.hour() as u8;
+            let time = local.time();
+            let date = local.date_naive();
+
+            total += 1;
+
+            if hour < work_start || hour >= work_end {
+                after_hours += 1;
+            }
+
+            earliest = Some(match earliest {
+                Some(e) if e <= time => e,
+                _ => time,
+            });
+            latest = Some(match latest {
+                Some(l) if l >= time => l,
+                _ => time,
+            });
+
+            let weekday = local.weekday();
+            if weekday == Weekday::Sat || weekday == Weekday::Sun {
+                weekend_dates.insert(date);
+            }
+        }
+    }
+
+    let pct = if total > 0 {
+        (after_hours as f64 / total as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    WorkHoursAnalysis {
+        total_commits: total,
+        after_hours_commits: after_hours,
+        after_hours_pct: pct,
+        earliest_commit: earliest,
+        latest_commit: latest,
+        weekend_days_active: weekend_dates.len(),
+    }
 }

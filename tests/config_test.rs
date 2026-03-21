@@ -216,3 +216,62 @@ fn test_default_config_worktree_dir_name() {
     let cfg = Config::default();
     assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
 }
+
+// --- US-008: work_hours config fields ---
+
+#[test]
+fn test_default_config_work_hours() {
+    let cfg = Config::default();
+    assert_eq!(cfg.work_hours_start, 8);
+    assert_eq!(cfg.work_hours_end, 18);
+}
+
+#[test]
+fn test_parse_work_hours_missing_uses_defaults() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.work_hours_start, 8);
+    assert_eq!(cfg.work_hours_end, 18);
+}
+
+#[test]
+fn test_parse_work_hours_custom_values() {
+    let toml_str = r#"
+        watch_dirs = []
+        work_hours_start = 9
+        work_hours_end = 17
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.work_hours_start, 9);
+    assert_eq!(cfg.work_hours_end, 17);
+}
+
+#[test]
+fn test_validate_work_hours_start_too_high() {
+    let cfg = Config {
+        work_hours_start: 24,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_validate_work_hours_end_too_high() {
+    let cfg = Config {
+        work_hours_end: 25,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_validate_work_hours_23_is_ok() {
+    let cfg = Config {
+        work_hours_start: 0,
+        work_hours_end: 23,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_ok());
+}

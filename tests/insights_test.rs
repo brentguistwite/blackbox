@@ -1,6 +1,6 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, ContextSwitchMetrics};
-use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, ContextSwitchMetrics};
+use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 /// Create an ActivityEvent with given type, N minutes before now.
 fn make_event(event_type: &str, minutes_ago: i64) -> ActivityEvent {
@@ -223,4 +223,62 @@ fn active_dates_sorted_unique_across_repos() {
     let mar11 = NaiveDate::from_ymd_opt(2025, 3, 11).unwrap();
     let mar12 = NaiveDate::from_ymd_opt(2025, 3, 12).unwrap();
     assert_eq!(dates, vec![mar10, mar11, mar12]);
+}
+
+// --- US-008: work_hours_analysis ---
+
+#[test]
+fn work_hours_analysis_empty_returns_zeros() {
+    let result = work_hours_analysis(&[], 8, 18);
+    assert_eq!(result.total_commits, 0);
+    assert_eq!(result.after_hours_commits, 0);
+    assert!((result.after_hours_pct - 0.0).abs() < f64::EPSILON);
+    assert!(result.earliest_commit.is_none());
+    assert!(result.latest_commit.is_none());
+    assert_eq!(result.weekend_days_active, 0);
+}
+
+#[test]
+fn work_hours_analysis_counts_after_hours_commits() {
+    // Work hours 9-17. Commits at 8am (before), 12pm (during), 20pm (after)
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 8),  // Mon 8am — before work
+        make_event_at("commit", 2025, 3, 10, 12), // Mon 12pm — during work
+        make_event_at("commit", 2025, 3, 10, 20), // Mon 8pm — after work
+        make_event_at("branch_switch", 2025, 3, 10, 21), // ignored (not commit)
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let result = work_hours_analysis(&repos, 9, 17);
+    assert_eq!(result.total_commits, 3);
+    assert_eq!(result.after_hours_commits, 2); // 8am and 8pm
+    // 2/3 ≈ 66.7%
+    assert!((result.after_hours_pct - 66.666).abs() < 1.0);
+}
+
+#[test]
+fn work_hours_analysis_earliest_latest_commit_times() {
+    // Commits at 6am, 10am, 22pm
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 6),
+        make_event_at("commit", 2025, 3, 10, 10),
+        make_event_at("commit", 2025, 3, 10, 22),
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let result = work_hours_analysis(&repos, 8, 18);
+    assert_eq!(result.earliest_commit.unwrap().hour(), 6);
+    assert_eq!(result.latest_commit.unwrap().hour(), 22);
+}
+
+#[test]
+fn work_hours_analysis_weekend_days_counts_unique_dates() {
+    // Sat Mar 8 with 3 commits, Sun Mar 9 with 1 commit = 2 weekend days
+    let events = vec![
+        make_event_at("commit", 2025, 3, 8, 10),  // Sat
+        make_event_at("commit", 2025, 3, 8, 14),  // Sat (same day)
+        make_event_at("commit", 2025, 3, 8, 18),  // Sat (same day)
+        make_event_at("commit", 2025, 3, 9, 11),  // Sun
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let result = work_hours_analysis(&repos, 8, 18);
+    assert_eq!(result.weekend_days_active, 2);
 }

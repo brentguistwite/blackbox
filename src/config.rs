@@ -18,6 +18,12 @@ fn default_first_commit() -> u64 {
 fn default_worktree_dir_name() -> Option<String> {
     Some(".worktrees".to_string())
 }
+fn default_work_hours_start() -> u8 {
+    8
+}
+fn default_work_hours_end() -> u8 {
+    18
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -41,6 +47,10 @@ pub struct Config {
     pub scan_dirs: Option<Vec<PathBuf>>,
     #[serde(default = "default_worktree_dir_name")]
     pub worktree_dir_name: Option<String>,
+    #[serde(default = "default_work_hours_start")]
+    pub work_hours_start: u8,
+    #[serde(default = "default_work_hours_end")]
+    pub work_hours_end: u8,
 }
 
 impl Default for Config {
@@ -56,6 +66,8 @@ impl Default for Config {
             llm_base_url: None,
             scan_dirs: None,
             worktree_dir_name: default_worktree_dir_name(),
+            work_hours_start: default_work_hours_start(),
+            work_hours_end: default_work_hours_end(),
         }
     }
 }
@@ -64,6 +76,12 @@ impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.poll_interval_secs < 10 {
             anyhow::bail!("poll_interval_secs must be >= 10, got {}", self.poll_interval_secs);
+        }
+        if self.work_hours_start > 23 {
+            anyhow::bail!("work_hours_start must be 0..=23, got {}", self.work_hours_start);
+        }
+        if self.work_hours_end > 23 {
+            anyhow::bail!("work_hours_end must be 0..=23, got {}", self.work_hours_end);
         }
         Ok(())
     }
