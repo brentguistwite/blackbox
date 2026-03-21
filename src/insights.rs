@@ -1,4 +1,6 @@
 use crate::query::RepoSummary;
+use chrono::NaiveDate;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct ContextSwitchMetrics {
@@ -50,4 +52,24 @@ pub fn context_switches(repos: &[RepoSummary]) -> ContextSwitchMetrics {
         repo_switches,
         focus_score,
     }
+}
+
+/// Count commits per local calendar date across all repos.
+/// Converts UTC timestamps to Local timezone before extracting date.
+pub fn daily_commit_counts(repos: &[RepoSummary]) -> BTreeMap<NaiveDate, usize> {
+    let mut counts = BTreeMap::new();
+    for repo in repos {
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let local_date = event.timestamp.with_timezone(&chrono::Local).date_naive();
+                *counts.entry(local_date).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// Return sorted unique local dates that have at least one commit.
+pub fn active_dates(repos: &[RepoSummary]) -> Vec<NaiveDate> {
+    daily_commit_counts(repos).into_keys().collect()
 }

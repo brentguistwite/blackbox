@@ -1,6 +1,6 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, ContextSwitchMetrics};
-use chrono::{Duration, Utc};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, ContextSwitchMetrics};
+use chrono::{Duration, Local, NaiveDate, TimeZone, Utc};
 
 /// Create an ActivityEvent with given type, N minutes before now.
 fn make_event(event_type: &str, minutes_ago: i64) -> ActivityEvent {
@@ -87,4 +87,70 @@ fn focus_score_decreases_with_more_switches() {
     let result = context_switches(&repos);
     let expected = 1.0 / (1.0 + 2.0); // 0.333...
     assert!((result.focus_score - expected).abs() < 0.001);
+}
+
+#[test]
+fn daily_commit_counts_empty_returns_empty() {
+    let result = daily_commit_counts(&[]);
+    assert!(result.is_empty());
+}
+
+/// Create event at a specific local date+hour (for deterministic date-bucketing tests).
+fn make_event_at(event_type: &str, year: i32, month: u32, day: u32, hour: u32) -> ActivityEvent {
+    let local_dt = Local.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
+    ActivityEvent {
+        event_type: event_type.to_string(),
+        branch: None,
+        commit_hash: None,
+        message: None,
+        timestamp: local_dt.with_timezone(&Utc),
+    }
+}
+
+#[test]
+fn daily_commit_counts_groups_by_local_date() {
+    // 2 commits on Mar 10, 1 on Mar 11, branch_switch ignored
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),
+        make_event_at("commit", 2025, 3, 10, 17),
+        make_event_at("branch_switch", 2025, 3, 10, 12),
+        make_event_at("commit", 2025, 3, 11, 10),
+    ];
+    let repos = vec![make_repo("repo-a", events, 60)];
+    let counts = daily_commit_counts(&repos);
+
+    let mar10 = NaiveDate::from_ymd_opt(2025, 3, 10).unwrap();
+    let mar11 = NaiveDate::from_ymd_opt(2025, 3, 11).unwrap();
+    assert_eq!(counts[&mar10], 2);
+    assert_eq!(counts[&mar11], 1);
+    assert_eq!(counts.len(), 2); // no entry for branch_switch-only dates
+}
+
+#[test]
+fn active_dates_empty_returns_empty() {
+    let result = active_dates(&[]);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn active_dates_sorted_unique_across_repos() {
+    // repo-a has commits on Mar 10 and Mar 12
+    // repo-b has commits on Mar 10 and Mar 11
+    // result should be [Mar 10, Mar 11, Mar 12] — sorted, deduplicated
+    let repos = vec![
+        make_repo("repo-a", vec![
+            make_event_at("commit", 2025, 3, 10, 9),
+            make_event_at("commit", 2025, 3, 12, 14),
+        ], 30),
+        make_repo("repo-b", vec![
+            make_event_at("commit", 2025, 3, 10, 15),
+            make_event_at("commit", 2025, 3, 11, 10),
+        ], 30),
+    ];
+    let dates = active_dates(&repos);
+
+    let mar10 = NaiveDate::from_ymd_opt(2025, 3, 10).unwrap();
+    let mar11 = NaiveDate::from_ymd_opt(2025, 3, 11).unwrap();
+    let mar12 = NaiveDate::from_ymd_opt(2025, 3, 12).unwrap();
+    assert_eq!(dates, vec![mar10, mar11, mar12]);
 }
