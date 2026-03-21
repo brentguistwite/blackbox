@@ -867,3 +867,38 @@ fn render_churn_shows_file_and_count() {
     assert!(output.contains("myrepo"), "should show repo name");
     assert!(output.contains("src/lib.rs"), "should show second file");
 }
+
+#[test]
+fn render_focus_empty_shows_no_sessions() {
+    colored::control::set_override(false);
+    let output = blackbox::output::render_focus(&[], 0);
+    assert!(output.contains("No deep work sessions"), "empty should show message");
+}
+
+#[test]
+fn render_focus_shows_session_details() {
+    colored::control::set_override(false);
+    let sessions = vec![
+        blackbox::insights::DeepWorkSession {
+            repo_name: "myrepo".to_string(),
+            branch: "feature/auth".to_string(),
+            duration_minutes: 120,
+            commit_count: 8,
+        },
+        blackbox::insights::DeepWorkSession {
+            repo_name: "myrepo".to_string(),
+            branch: "main".to_string(),
+            duration_minutes: 75,
+            commit_count: 3,
+        },
+    ];
+    let total_minutes = 300; // 5 hours total work
+    let output = blackbox::output::render_focus(&sessions, total_minutes);
+    assert!(output.contains("Deep Work"), "should have header");
+    assert!(output.contains("2"), "should show session count");
+    assert!(output.contains("myrepo"), "should show repo name");
+    assert!(output.contains("feature/auth"), "should show branch");
+    assert!(output.contains("120"), "should show longest duration");
+    assert!(output.contains("195"), "should show total deep work mins (120+75)");
+    assert!(output.contains("65"), "should show percentage (195/300=65%)");
+}

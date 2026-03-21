@@ -507,6 +507,58 @@ pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
     lines.join("\n")
 }
 
+/// Render deep work focus report.
+/// `sessions` is sorted by duration descending. `total_estimated_minutes` is total work time for percentage calc.
+pub fn render_focus(sessions: &[crate::insights::DeepWorkSession], total_estimated_minutes: i64) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if sessions.is_empty() {
+        lines.push("No deep work sessions found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Deep Work".bold().cyan().to_string());
+    lines.push(String::new());
+
+    let session_word = if sessions.len() == 1 { "session" } else { "sessions" };
+    lines.push(format!(
+        "  {} {} {}",
+        "Sessions:".bold(),
+        sessions.len().to_string().green().bold(),
+        session_word,
+    ));
+
+    // Longest session (first, since sorted desc)
+    let longest = &sessions[0];
+    lines.push(format!(
+        "  {} {} min on {} ({})",
+        "Longest:".bold(),
+        longest.duration_minutes.to_string().yellow().bold(),
+        longest.branch.green(),
+        longest.repo_name.dimmed(),
+    ));
+
+    let total_deep: i64 = sessions.iter().map(|s| s.duration_minutes).sum();
+    lines.push(format!(
+        "  {} {} min",
+        "Total deep work:".bold(),
+        total_deep.to_string().green(),
+    ));
+
+    let pct = if total_estimated_minutes > 0 {
+        (total_deep as f64 / total_estimated_minutes as f64 * 100.0).round() as i64
+    } else {
+        0
+    };
+    lines.push(format!(
+        "  {} {}% of total work time",
+        "Focus ratio:".bold(),
+        pct.to_string().yellow(),
+    ));
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();

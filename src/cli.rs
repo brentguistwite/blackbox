@@ -170,6 +170,15 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Show deep work sessions (sustained single-branch focus)
+    Focus {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show 30-day activity trends sparkline
     Trends {
         /// Output format: pretty, json

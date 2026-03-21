@@ -259,6 +259,43 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Focus { range, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let (from, to) = range.to_range();
+            let repos = blackbox::query::query_activity(
+                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let sessions = blackbox::insights::deep_work_sessions(&repos, config.deep_work_threshold_minutes as i64);
+            let total_minutes: i64 = repos.iter().map(|r| r.estimated_time.num_minutes()).sum();
+            match format {
+                OutputFormat::Json => {
+                    let json: Vec<serde_json::Value> = sessions.iter().map(|s| {
+                        serde_json::json!({
+                            "repo_name": s.repo_name,
+                            "branch": s.branch,
+                            "duration_minutes": s.duration_minutes,
+                            "commit_count": s.commit_count,
+                        })
+                    }).collect();
+                    let wrapper = serde_json::json!({
+                        "sessions": json,
+                        "total_deep_work_minutes": sessions.iter().map(|s| s.duration_minutes).sum::<i64>(),
+                        "total_estimated_minutes": total_minutes,
+                        "focus_pct": if total_minutes > 0 {
+                            (sessions.iter().map(|s| s.duration_minutes).sum::<i64>() as f64 / total_minutes as f64 * 100.0).round()
+                        } else { 0.0 },
+                    });
+                    println!("{}", serde_json::to_string_pretty(&wrapper).unwrap());
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_focus(&sessions, total_minutes));
+                }
+            }
+        }
         Commands::Trends { format } => {
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;
