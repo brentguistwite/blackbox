@@ -559,6 +559,85 @@ pub fn render_focus(sessions: &[crate::insights::DeepWorkSession], total_estimat
     lines.join("\n")
 }
 
+/// Render sprint retrospective summary.
+pub fn render_retro(retro: &crate::insights::RetroSummary, sprint_label: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if retro.total_commits == 0 {
+        lines.push("No activity in this sprint.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push(format!("Sprint Retro ({})", sprint_label).bold().cyan().to_string());
+    lines.push(String::new());
+
+    // Activity overview
+    let repo_word = if retro.active_repos == 1 { "repo" } else { "repos" };
+    lines.push(format!(
+        "  {} {} commits, {} reviews across {} {}",
+        "Activity:".bold(),
+        retro.total_commits.to_string().green().bold(),
+        retro.total_reviews,
+        retro.active_repos,
+        repo_word,
+    ));
+    lines.push(format!(
+        "  {} {}",
+        "Time:".bold(),
+        format_duration(Duration::minutes(retro.total_estimated_minutes)).yellow(),
+    ));
+    if retro.total_ai_session_minutes > 0 {
+        lines.push(format!(
+            "  {} {}",
+            "AI sessions:".bold(),
+            format_duration(Duration::minutes(retro.total_ai_session_minutes)).magenta(),
+        ));
+    }
+    lines.push(String::new());
+
+    // Focus & deep work
+    lines.push(format!(
+        "  {} {} sessions, {} min total",
+        "Deep work:".bold(),
+        retro.deep_work_session_count.to_string().green(),
+        retro.total_deep_work_minutes.to_string().green(),
+    ));
+    lines.push(format!(
+        "  {} {:.0} (branch: {}, repo: {})",
+        "Focus score:".bold(),
+        retro.focus_score,
+        retro.branch_switches,
+        retro.repo_switches,
+    ));
+    lines.push(String::new());
+
+    // Work patterns
+    lines.push(format!(
+        "  {} {:.0}% after-hours, {} weekend days",
+        "Work-life:".bold(),
+        retro.after_hours_pct,
+        retro.weekend_days_active,
+    ));
+    if let Some(day) = retro.busiest_day {
+        lines.push(format!(
+            "  {} {} ({} commits)",
+            "Busiest day:".bold(),
+            day.to_string().yellow(),
+            retro.busiest_day_commits,
+        ));
+    }
+    if let Some(hour) = retro.peak_hour {
+        lines.push(format!(
+            "  {} {:02}:00 ({} commits)",
+            "Peak hour:".bold(),
+            hour,
+            retro.peak_hour_commits,
+        ));
+    }
+
+    lines.join("\n")
+}
+
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"
 pub fn format_duration(d: Duration) -> String {
     let total_minutes = d.num_minutes();

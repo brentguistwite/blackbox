@@ -185,6 +185,15 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Sprint retrospective summary combining all insights
+    Retro {
+        /// Sprint length: 1w, 2w, 3w, 4w
+        #[arg(long, default_value = "2w")]
+        sprint: String,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard

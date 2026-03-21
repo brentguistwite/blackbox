@@ -902,3 +902,62 @@ fn render_focus_shows_session_details() {
     assert!(output.contains("195"), "should show total deep work mins (120+75)");
     assert!(output.contains("65"), "should show percentage (195/300=65%)");
 }
+
+// --- US-021: render_retro ---
+
+#[test]
+fn render_retro_empty_shows_no_activity() {
+    colored::control::set_override(false);
+    let retro = blackbox::insights::RetroSummary {
+        total_commits: 0,
+        total_reviews: 0,
+        total_estimated_minutes: 0,
+        total_ai_session_minutes: 0,
+        active_repos: 0,
+        branch_switches: 0,
+        repo_switches: 0,
+        focus_score: 1.0,
+        deep_work_session_count: 0,
+        total_deep_work_minutes: 0,
+        after_hours_pct: 0.0,
+        weekend_days_active: 0,
+        busiest_day: None,
+        busiest_day_commits: 0,
+        peak_hour: None,
+        peak_hour_commits: 0,
+    };
+    let output = blackbox::output::render_retro(&retro, "2w");
+    assert!(output.contains("No activity"), "should show no activity message");
+}
+
+#[test]
+fn render_retro_populated_shows_all_sections() {
+    colored::control::set_override(false);
+    let retro = blackbox::insights::RetroSummary {
+        total_commits: 42,
+        total_reviews: 5,
+        total_estimated_minutes: 480,
+        total_ai_session_minutes: 120,
+        active_repos: 3,
+        branch_switches: 8,
+        repo_switches: 4,
+        focus_score: 0.5,
+        deep_work_session_count: 2,
+        total_deep_work_minutes: 180,
+        after_hours_pct: 15.0,
+        weekend_days_active: 1,
+        busiest_day: Some(chrono::NaiveDate::from_ymd_opt(2025, 3, 12).unwrap()),
+        busiest_day_commits: 12,
+        peak_hour: Some(14),
+        peak_hour_commits: 8,
+    };
+    let output = blackbox::output::render_retro(&retro, "2w");
+    assert!(output.contains("Sprint Retro"), "should have header");
+    assert!(output.contains("42"), "should show commits");
+    assert!(output.contains("5"), "should show reviews");
+    assert!(output.contains("3 repos"), "should show active repos");
+    assert!(output.contains("180"), "should show deep work minutes");
+    assert!(output.contains("15"), "should show after-hours pct");
+    assert!(output.contains("14:00"), "should show peak hour");
+    assert!(output.contains("2025-03-12"), "should show busiest day");
+}

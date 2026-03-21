@@ -1,6 +1,7 @@
-use crate::query::RepoSummary;
+use crate::query::{ActivitySummary, RepoSummary};
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike, Weekday};
 use regex::Regex;
+use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone)]
@@ -398,6 +399,76 @@ pub fn extract_ticket_ids(branches: &[String], patterns: &[String]) -> Vec<Strin
     }
 
     ids
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RetroSummary {
+    pub total_commits: usize,
+    pub total_reviews: usize,
+    pub total_estimated_minutes: i64,
+    pub total_ai_session_minutes: i64,
+    pub active_repos: usize,
+    pub branch_switches: usize,
+    pub repo_switches: usize,
+    pub focus_score: f64,
+    pub deep_work_session_count: usize,
+    pub total_deep_work_minutes: i64,
+    pub after_hours_pct: f64,
+    pub weekend_days_active: usize,
+    pub busiest_day: Option<NaiveDate>,
+    pub busiest_day_commits: usize,
+    pub peak_hour: Option<usize>,
+    pub peak_hour_commits: usize,
+}
+
+/// Compose all insight functions into a sprint retrospective summary.
+/// Pure function — no DB access. All data comes from pre-fetched ActivitySummary.
+pub fn retro_summary(
+    summary: &ActivitySummary,
+    work_start: u8,
+    work_end: u8,
+    deep_work_threshold: i64,
+) -> RetroSummary {
+    let ctx = context_switches(&summary.repos);
+    let sessions = deep_work_sessions(&summary.repos, deep_work_threshold);
+    let work_hours = work_hours_analysis(&summary.repos, work_start, work_end);
+    let hourly = hourly_distribution(&summary.repos);
+    let daily = daily_commit_counts(&summary.repos);
+
+    let total_deep_work_minutes: i64 = sessions.iter().map(|s| s.duration_minutes).sum();
+
+    let (busiest_day, busiest_day_commits) = daily
+        .iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(date, count)| (Some(*date), *count))
+        .unwrap_or((None, 0));
+
+    let (peak_hour, peak_hour_commits) = hourly
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, count)| *count)
+        .filter(|(_, count)| **count > 0)
+        .map(|(hour, count)| (Some(hour), *count))
+        .unwrap_or((None, 0));
+
+    RetroSummary {
+        total_commits: summary.total_commits,
+        total_reviews: summary.total_reviews,
+        total_estimated_minutes: summary.total_estimated_time.num_minutes(),
+        total_ai_session_minutes: summary.total_ai_session_time.num_minutes(),
+        active_repos: summary.total_repos,
+        branch_switches: ctx.branch_switches,
+        repo_switches: ctx.repo_switches,
+        focus_score: ctx.focus_score,
+        deep_work_session_count: sessions.len(),
+        total_deep_work_minutes,
+        after_hours_pct: work_hours.after_hours_pct,
+        weekend_days_active: work_hours.weekend_days_active,
+        busiest_day,
+        busiest_day_commits,
+        peak_hour,
+        peak_hour_commits,
+    }
 }
 
 /// Aggregate estimated time per ticket across repos.

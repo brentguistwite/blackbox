@@ -1,5 +1,6 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, ContextSwitchMetrics};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, retro_summary, ContextSwitchMetrics};
+use blackbox::query::ActivitySummary;
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
 
 /// Create an ActivityEvent with given type, N minutes before now.
@@ -544,4 +545,92 @@ fn deep_work_sessions_sorted_by_duration_desc() {
     assert_eq!(sessions.len(), 2);
     assert_eq!(sessions[0].repo_name, "repo-a"); // 120min first
     assert_eq!(sessions[1].repo_name, "repo-b"); // 90min second
+}
+
+// --- US-021: retro_summary ---
+
+fn make_empty_summary() -> ActivitySummary {
+    ActivitySummary {
+        period_label: "Sprint".to_string(),
+        total_commits: 0,
+        total_reviews: 0,
+        total_repos: 0,
+        total_estimated_time: Duration::zero(),
+        total_ai_session_time: Duration::zero(),
+        repos: vec![],
+    }
+}
+
+fn make_summary_with_repos(repos: Vec<RepoSummary>) -> ActivitySummary {
+    let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
+    let total_time: Duration = repos.iter().map(|r| r.estimated_time).fold(Duration::zero(), |a, b| a + b);
+    let total_ai_time: Duration = repos.iter().flat_map(|r| &r.ai_sessions).map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+    ActivitySummary {
+        period_label: "Sprint".to_string(),
+        total_commits,
+        total_reviews,
+        total_repos: repos.len(),
+        total_estimated_time: total_time,
+        total_ai_session_time: total_ai_time,
+        repos,
+    }
+}
+
+#[test]
+fn retro_summary_empty_returns_zeros() {
+    let summary = make_empty_summary();
+    let retro = retro_summary(&summary, 8, 18, 60);
+    assert_eq!(retro.total_commits, 0);
+    assert_eq!(retro.total_reviews, 0);
+    assert_eq!(retro.total_estimated_minutes, 0);
+    assert_eq!(retro.total_ai_session_minutes, 0);
+    assert_eq!(retro.active_repos, 0);
+    assert_eq!(retro.deep_work_session_count, 0);
+    assert_eq!(retro.total_deep_work_minutes, 0);
+    assert!((retro.after_hours_pct - 0.0).abs() < f64::EPSILON);
+    assert!(retro.busiest_day.is_none());
+    assert!(retro.peak_hour.is_none());
+    assert!((retro.focus_score - 1.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn retro_summary_populated_computes_aggregates() {
+    // 3 commits on Mon Mar 10, 2 on Tue Mar 11 at different hours
+    let events = vec![
+        make_event_at("commit", 2025, 3, 10, 9),
+        make_event_at("commit", 2025, 3, 10, 10),
+        make_event_at("commit", 2025, 3, 10, 10), // 2 at hour 10
+        make_event_at("commit", 2025, 3, 11, 14),
+        make_event_at("commit", 2025, 3, 11, 22), // after hours
+    ];
+    let repos = vec![make_repo("repo-a", events, 120)];
+    let summary = make_summary_with_repos(repos);
+    let retro = retro_summary(&summary, 8, 18, 60);
+
+    assert_eq!(retro.total_commits, 5);
+    assert_eq!(retro.active_repos, 1);
+    assert_eq!(retro.total_estimated_minutes, 120);
+
+    // Busiest day: Mar 10 with 3 commits
+    let mar10 = NaiveDate::from_ymd_opt(2025, 3, 10).unwrap();
+    assert_eq!(retro.busiest_day, Some(mar10));
+    assert_eq!(retro.busiest_day_commits, 3);
+
+    // Peak hour: 10 with 2 commits
+    assert_eq!(retro.peak_hour, Some(10));
+    assert_eq!(retro.peak_hour_commits, 2);
+
+    // After hours: 1 of 5 commits at 22:00 = 20%
+    assert!((retro.after_hours_pct - 20.0).abs() < 1.0);
+}
+
+#[test]
+fn retro_summary_serializes_to_json() {
+    let summary = make_empty_summary();
+    let retro = retro_summary(&summary, 8, 18, 60);
+    let json = serde_json::to_string(&retro).unwrap();
+    assert!(json.contains("total_commits"));
+    assert!(json.contains("focus_score"));
+    assert!(json.contains("busiest_day"));
 }

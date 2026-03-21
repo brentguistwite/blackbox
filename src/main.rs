@@ -327,6 +327,59 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Retro { sprint, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+            // Parse sprint: strip 'w' suffix, multiply by 7
+            let weeks: i64 = sprint.trim_end_matches('w').parse()
+                .map_err(|_| anyhow::anyhow!("Invalid sprint format '{}'. Use 1w, 2w, 3w, or 4w.", sprint))?;
+            let now = chrono::Utc::now();
+            let from = now - chrono::Duration::weeks(weeks);
+
+            let mut repos = blackbox::query::query_activity(
+                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            blackbox::enrichment::enrich_with_prs(&mut repos);
+
+            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+            let total_reviews: usize = repos.iter().map(|r| {
+                r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
+            }).sum();
+            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
+                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
+            });
+
+            let summary = ActivitySummary {
+                period_label: format!("Sprint ({})", sprint),
+                total_commits,
+                total_reviews,
+                total_repos: repos.len(),
+                total_estimated_time: total_time,
+                total_ai_session_time,
+                repos,
+            };
+
+            let retro = blackbox::insights::retro_summary(
+                &summary,
+                config.work_hours_start,
+                config.work_hours_end,
+                config.deep_work_threshold_minutes as i64,
+            );
+
+            match format {
+                OutputFormat::Json => {
+                    println!("{}", serde_json::to_string_pretty(&retro).unwrap());
+                }
+                _ => {
+                    println!("{}", blackbox::output::render_retro(&retro, &sprint));
+                }
+            }
+        }
         Commands::Install => {
             blackbox::service::install()?;
         }
