@@ -140,6 +140,21 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Heatmap { weeks } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            // Query enough history to cover the requested weeks
+            let now = chrono::Utc::now();
+            let from = now - chrono::Duration::weeks(weeks as i64 + 1);
+            let repos = blackbox::query::query_activity(
+                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
+            )?;
+            let counts = blackbox::insights::daily_commit_counts(&repos);
+            println!("{}", blackbox::output::render_heatmap(&counts, weeks));
+        }
         Commands::Streak => {
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;

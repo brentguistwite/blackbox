@@ -681,6 +681,56 @@ fn render_streak_longest_without_start_date() {
 }
 
 #[test]
+// --- US-012: Heatmap output tests ---
+
+#[test]
+fn render_heatmap_empty_no_panic() {
+    colored::control::set_override(false);
+    let counts = std::collections::BTreeMap::new();
+    let output = blackbox::output::render_heatmap(&counts, 26);
+    assert!(!output.is_empty(), "empty heatmap should produce output");
+    assert!(output.contains("No activity") || output.contains("·"), "should handle empty gracefully");
+}
+
+#[test]
+fn render_heatmap_has_7_rows_with_day_labels() {
+    colored::control::set_override(false);
+    let mut counts = std::collections::BTreeMap::new();
+    // Populate a Monday to ensure grid renders
+    let monday = chrono::NaiveDate::from_ymd_opt(2026, 3, 16).unwrap(); // a Monday
+    counts.insert(monday, 3);
+    let output = blackbox::output::render_heatmap(&counts, 4);
+    // Should have Mon, Wed, Fri labels (alternating rows)
+    assert!(output.contains("Mon"), "should have Mon label");
+    assert!(output.contains("Wed"), "should have Wed label");
+    assert!(output.contains("Fri"), "should have Fri label");
+    // Should NOT have Tue, Thu, Sat as labels (blank spacers)
+    // Count lines with day content (after header)
+    let grid_lines: Vec<&str> = output.lines()
+        .filter(|l| l.contains('·') || l.contains('░') || l.contains('▒') || l.contains('▓') || l.contains('█'))
+        .collect();
+    assert_eq!(grid_lines.len(), 7, "should have exactly 7 grid rows, got {}", grid_lines.len());
+}
+
+#[test]
+fn render_heatmap_intensity_scales_to_max() {
+    colored::control::set_override(false);
+    let mut counts = std::collections::BTreeMap::new();
+    // Use dates in a known week
+    let mon = chrono::NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
+    counts.insert(mon, 10);                                                    // 100% → █
+    counts.insert(mon + chrono::Duration::days(1), 1);                         // 10% → ░
+    counts.insert(mon + chrono::Duration::days(2), 5);                         // 50% → ▒
+    counts.insert(mon + chrono::Duration::days(3), 7);                         // 70% → ▓
+    let output = blackbox::output::render_heatmap(&counts, 4);
+    assert!(output.contains('█'), "should have full block for max");
+    assert!(output.contains('░'), "should have light shade for low");
+    assert!(output.contains('▒'), "should have medium shade for mid");
+    assert!(output.contains('▓'), "should have dark shade for high-mid");
+    assert!(output.contains('·'), "should have dot for zero-count days");
+}
+
+#[test]
 fn standup_week_header() {
     let summary = ActivitySummary {
         period_label: "This Week".to_string(),

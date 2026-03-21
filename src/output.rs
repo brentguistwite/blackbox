@@ -1,6 +1,6 @@
 use crate::enrichment::PrInfo;
 use crate::query::ActivitySummary;
-use chrono::{Datelike, Duration, Local};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 use colored::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -318,6 +318,62 @@ pub fn render_streak(info: &crate::insights::StreakInfo) -> String {
     ));
 
     lines.join("\n")
+}
+
+/// Render a GitHub-style ASCII contribution heatmap.
+/// 7 rows (Mon-Sun) x `weeks` columns. Intensity: · (0), ░ (1-25%), ▒ (26-50%), ▓ (51-75%), █ (76-100%).
+pub fn render_heatmap(counts: &BTreeMap<NaiveDate, usize>, weeks: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if counts.is_empty() {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    let max_count = *counts.values().max().unwrap_or(&0);
+
+    // Determine the end date (most recent Sunday) working back from today
+    let today = Local::now().date_naive();
+    // Find next Sunday (or today if Sunday) to be the last column's Sunday
+    let days_until_sun = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+    let end_sunday = today + chrono::Duration::days(days_until_sun);
+    // Start Monday is `weeks` weeks before end_sunday's Monday
+    let start_monday = end_sunday - chrono::Duration::days(weeks as i64 * 7 - 1);
+
+    let day_labels = ["Mon", "   ", "Wed", "   ", "Fri", "   ", "Sun"];
+
+    lines.push("Contribution Heatmap".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for row in 0..7 {
+        let label = day_labels[row];
+        let mut cells = String::new();
+        for w in 0..weeks {
+            let date = start_monday + chrono::Duration::days(w as i64 * 7 + row as i64);
+            let count = counts.get(&date).copied().unwrap_or(0);
+            let ch = intensity_char(count, max_count);
+            cells.push_str(&format!("{}", ch.to_string().green()));
+        }
+        lines.push(format!("  {} {}", label.dimmed(), cells));
+    }
+
+    lines.join("\n")
+}
+
+fn intensity_char(count: usize, max: usize) -> char {
+    if count == 0 || max == 0 {
+        return '·';
+    }
+    let pct = (count as f64 / max as f64) * 100.0;
+    if pct <= 25.0 {
+        '░'
+    } else if pct <= 50.0 {
+        '▒'
+    } else if pct <= 75.0 {
+        '▓'
+    } else {
+        '█'
+    }
 }
 
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"

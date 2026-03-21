@@ -143,6 +143,12 @@ pub enum Commands {
     },
     /// Show coding streak info (current, longest, 30-day active days)
     Streak,
+    /// Show GitHub-style contribution heatmap
+    Heatmap {
+        /// Number of weeks to display
+        #[arg(long, default_value = "26")]
+        weeks: usize,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard
