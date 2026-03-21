@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, ContextSwitchMetrics};
+use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, ContextSwitchMetrics};
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
 
 /// Create an ActivityEvent with given type, N minutes before now.
@@ -468,4 +468,80 @@ fn aggregate_time_per_ticket_sorted_by_time_desc() {
     let result = aggregate_time_per_ticket(&repos, &patterns);
     assert_eq!(result[0].ticket_id, "BBB-2"); // 80 min first
     assert_eq!(result[1].ticket_id, "AAA-1"); // 20 min second
+}
+
+// --- US-019: deep_work_sessions ---
+
+/// Create an event with a specific branch, N minutes before now.
+fn make_branched_event(event_type: &str, branch: &str, minutes_ago: i64) -> ActivityEvent {
+    ActivityEvent {
+        event_type: event_type.to_string(),
+        branch: Some(branch.to_string()),
+        commit_hash: None,
+        message: None,
+        timestamp: Utc::now() - Duration::minutes(minutes_ago),
+    }
+}
+
+#[test]
+fn deep_work_90min_single_branch_detected() {
+    // 90min of commits on "main" branch → qualifies at threshold=60
+    let events = vec![
+        make_branched_event("commit", "main", 90),
+        make_branched_event("commit", "main", 60),
+        make_branched_event("commit", "main", 30),
+        make_branched_event("commit", "main", 0),
+    ];
+    let repos = vec![make_repo("repo-a", events, 90)];
+    let sessions = deep_work_sessions(&repos, 60);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].repo_name, "repo-a");
+    assert_eq!(sessions[0].branch, "main");
+    assert!(sessions[0].duration_minutes >= 90);
+    assert_eq!(sessions[0].commit_count, 4);
+}
+
+#[test]
+fn deep_work_branch_switch_splits_into_short_runs() {
+    // 90 min total, but branch_switch at 45min splits into two 45min runs → no deep work
+    let events = vec![
+        make_branched_event("commit", "main", 90),
+        make_branched_event("commit", "main", 60),
+        make_branched_event("branch_switch", "feature", 45),
+        make_branched_event("commit", "feature", 30),
+        make_branched_event("commit", "feature", 0),
+    ];
+    let repos = vec![make_repo("repo-a", events, 90)];
+    let sessions = deep_work_sessions(&repos, 60);
+    assert_eq!(sessions.len(), 0); // both runs < 60 min
+}
+
+#[test]
+fn deep_work_single_commit_not_counted() {
+    // One commit = 0 duration, never qualifies
+    let events = vec![
+        make_branched_event("commit", "main", 0),
+    ];
+    let repos = vec![make_repo("repo-a", events, 10)];
+    let sessions = deep_work_sessions(&repos, 60);
+    assert_eq!(sessions.len(), 0);
+}
+
+#[test]
+fn deep_work_sessions_sorted_by_duration_desc() {
+    // Two repos: repo-a has 120min session, repo-b has 90min session
+    let repos = vec![
+        make_repo("repo-b", vec![
+            make_branched_event("commit", "feat", 90),
+            make_branched_event("commit", "feat", 0),
+        ], 90),
+        make_repo("repo-a", vec![
+            make_branched_event("commit", "main", 120),
+            make_branched_event("commit", "main", 0),
+        ], 120),
+    ];
+    let sessions = deep_work_sessions(&repos, 60);
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].repo_name, "repo-a"); // 120min first
+    assert_eq!(sessions[1].repo_name, "repo-b"); // 90min second
 }

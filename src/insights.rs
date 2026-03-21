@@ -295,6 +295,87 @@ pub struct TicketSummary {
     pub estimated_minutes: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct DeepWorkSession {
+    pub repo_name: String,
+    pub branch: String,
+    pub duration_minutes: i64,
+    pub commit_count: usize,
+}
+
+/// Detect deep work sessions per repo. A "run" is a sequence of events on the same branch.
+/// branch_switch or different-branch commit ends the run. Runs >= threshold with >= 1 commit qualify.
+/// Open-ended runs end at last event timestamp. Results sorted by duration descending.
+pub fn deep_work_sessions(repos: &[RepoSummary], threshold_minutes: i64) -> Vec<DeepWorkSession> {
+    let mut sessions = Vec::new();
+
+    for repo in repos {
+        let mut events: Vec<&crate::query::ActivityEvent> = repo.events.iter().collect();
+        events.sort_by_key(|e| e.timestamp);
+
+        if events.is_empty() {
+            continue;
+        }
+
+        let mut run_branch: Option<&str> = None;
+        let mut run_start = events[0].timestamp;
+        let mut run_commits = 0usize;
+
+        for event in &events {
+            let event_branch = event.branch.as_deref().unwrap_or("");
+
+            match run_branch {
+                None => {
+                    // Start new run
+                    run_branch = Some(event.branch.as_deref().unwrap_or(""));
+                    run_start = event.timestamp;
+                    run_commits = if event.event_type == "commit" { 1 } else { 0 };
+                }
+                Some(current) => {
+                    let breaks = event.event_type == "branch_switch" || event_branch != current;
+                    if breaks {
+                        // End current run, check if qualifies
+                        let duration = (event.timestamp - run_start).num_minutes();
+                        if duration >= threshold_minutes && run_commits >= 1 {
+                            sessions.push(DeepWorkSession {
+                                repo_name: repo.repo_name.clone(),
+                                branch: current.to_string(),
+                                duration_minutes: duration,
+                                commit_count: run_commits,
+                            });
+                        }
+                        // Start new run
+                        run_branch = Some(event.branch.as_deref().unwrap_or(""));
+                        run_start = event.timestamp;
+                        run_commits = if event.event_type == "commit" { 1 } else { 0 };
+                    } else {
+                        if event.event_type == "commit" {
+                            run_commits += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Close final run
+        if let Some(current) = run_branch {
+            let last_ts = events.last().unwrap().timestamp;
+            let duration = (last_ts - run_start).num_minutes();
+            if duration >= threshold_minutes && run_commits >= 1 {
+                sessions.push(DeepWorkSession {
+                    repo_name: repo.repo_name.clone(),
+                    branch: current.to_string(),
+                    duration_minutes: duration,
+                    commit_count: run_commits,
+                });
+            }
+        }
+    }
+
+    sessions.sort_by(|a, b| b.duration_minutes.cmp(&a.duration_minutes));
+    sessions
+}
+
 /// Extract unique ticket IDs from branch names using configurable regex patterns.
 pub fn extract_ticket_ids(branches: &[String], patterns: &[String]) -> Vec<String> {
     let regexes: Vec<Regex> = patterns

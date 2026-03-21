@@ -380,3 +380,30 @@ fn test_parse_track_file_changes_true() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert!(cfg.track_file_changes);
 }
+
+// --- US-019: deep_work_threshold_minutes ---
+
+#[test]
+fn test_default_config_deep_work_threshold() {
+    let cfg = Config::default();
+    assert_eq!(cfg.deep_work_threshold_minutes, 60);
+}
+
+#[test]
+fn test_parse_deep_work_threshold_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.deep_work_threshold_minutes, 60);
+}
+
+#[test]
+fn test_parse_deep_work_threshold_custom() {
+    let toml_str = r#"
+        watch_dirs = []
+        deep_work_threshold_minutes = 90
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.deep_work_threshold_minutes, 90);
+}

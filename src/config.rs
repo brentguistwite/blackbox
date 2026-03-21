@@ -30,6 +30,9 @@ fn default_streak_rest_days() -> Vec<u8> {
 fn default_ticket_patterns() -> Vec<String> {
     vec![r"[A-Z]+-\d+".to_string()]
 }
+fn default_deep_work_threshold_minutes() -> u64 {
+    60
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -65,6 +68,8 @@ pub struct Config {
     pub ticket_patterns: Vec<String>,
     #[serde(default)]
     pub track_file_changes: bool,
+    #[serde(default = "default_deep_work_threshold_minutes")]
+    pub deep_work_threshold_minutes: u64,
 }
 
 impl Default for Config {
@@ -86,6 +91,7 @@ impl Default for Config {
             standup_webhook_url: None,
             ticket_patterns: default_ticket_patterns(),
             track_file_changes: false,
+            deep_work_threshold_minutes: default_deep_work_threshold_minutes(),
         }
     }
 }
