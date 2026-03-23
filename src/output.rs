@@ -335,7 +335,7 @@ pub fn render_heatmap(counts: &BTreeMap<NaiveDate, usize>, weeks: usize) -> Stri
     // Determine the end date (most recent Sunday) working back from today
     let today = Local::now().date_naive();
     // Find next Sunday (or today if Sunday) to be the last column's Sunday
-    let days_until_sun = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+    let days_until_sun = (6 - today.weekday().num_days_from_monday() as i64 + 7) % 7;
     let end_sunday = today + chrono::Duration::days(days_until_sun);
     // Start Monday is `weeks` weeks before end_sunday's Monday
     let start_monday = end_sunday - chrono::Duration::days(weeks as i64 * 7 - 1);
@@ -472,7 +472,7 @@ pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
         days.push((date, mins));
     }
 
-    let values: Vec<usize> = days.iter().map(|(_, m)| *m as usize).collect();
+    let values: Vec<usize> = days.iter().map(|(_, m)| (*m).max(0) as usize).collect();
     let spark = sparkline(&values);
 
     let total: i64 = days.iter().map(|(_, m)| *m).sum();

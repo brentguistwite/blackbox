@@ -195,14 +195,12 @@ pub fn insert_file_change(
     repo_path: &str,
     commit_hash: &str,
     file_path: &str,
-    lines_added: i64,
-    lines_removed: i64,
     timestamp: &str,
 ) -> anyhow::Result<bool> {
     match conn.execute(
-        "INSERT OR IGNORE INTO file_changes (repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp],
+        "INSERT OR IGNORE INTO file_changes (repo_path, commit_hash, file_path, timestamp)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![repo_path, commit_hash, file_path, timestamp],
     ) {
         Ok(0) => Ok(false),
         Ok(_) => Ok(true),

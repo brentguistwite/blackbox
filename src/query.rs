@@ -1,5 +1,6 @@
 use crate::enrichment::PrInfo;
 use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
+use clap::ValueEnum;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -258,6 +259,32 @@ pub fn estimate_time(
     }
 
     total
+}
+
+/// Shared time range for analytics commands.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum QueryRange {
+    Today,
+    Yesterday,
+    Week,
+    #[default]
+    Month,
+    All,
+}
+
+impl QueryRange {
+    pub fn to_range(&self) -> (DateTime<Utc>, DateTime<Utc>) {
+        match self {
+            QueryRange::Today => today_range(),
+            QueryRange::Yesterday => yesterday_range(),
+            QueryRange::Week => week_range(),
+            QueryRange::Month => month_range(),
+            QueryRange::All => {
+                let epoch = Utc.timestamp_opt(0, 0).single().expect("epoch");
+                (epoch, Utc::now())
+            }
+        }
+    }
 }
 
 /// Returns (start_of_today_local_as_utc, now_utc)

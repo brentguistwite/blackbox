@@ -635,26 +635,22 @@ fn test_insert_file_change() {
         "/tmp/repo",
         "abc123",
         "src/main.rs",
-        10,
-        3,
         "2026-03-21T12:00:00Z",
     )
     .unwrap();
     assert!(inserted);
 
-    let (repo, hash, fpath, added, removed, ts): (String, String, String, i64, i64, String) = conn
+    let (repo, hash, fpath, ts): (String, String, String, String) = conn
         .query_row(
-            "SELECT repo_path, commit_hash, file_path, lines_added, lines_removed, timestamp FROM file_changes WHERE id = 1",
+            "SELECT repo_path, commit_hash, file_path, timestamp FROM file_changes WHERE id = 1",
             [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .unwrap();
 
     assert_eq!(repo, "/tmp/repo");
     assert_eq!(hash, "abc123");
     assert_eq!(fpath, "src/main.rs");
-    assert_eq!(added, 10);
-    assert_eq!(removed, 3);
     assert_eq!(ts, "2026-03-21T12:00:00Z");
 }
 
@@ -665,19 +661,19 @@ fn test_insert_file_change_dedup() {
     let conn = db::open_db(&db_path).unwrap();
 
     let first = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/main.rs", 10, 3, "2026-03-21T12:00:00Z",
+        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
     ).unwrap();
     assert!(first);
 
     // Same (repo_path, commit_hash, file_path) → ignored
     let second = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/main.rs", 20, 5, "2026-03-21T12:00:00Z",
+        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
     ).unwrap();
     assert!(!second);
 
     // Different file_path → not a duplicate
     let third = db::insert_file_change(
-        &conn, "/tmp/repo", "abc123", "src/lib.rs", 5, 1, "2026-03-21T12:00:00Z",
+        &conn, "/tmp/repo", "abc123", "src/lib.rs", "2026-03-21T12:00:00Z",
     ).unwrap();
     assert!(third);
 
@@ -695,9 +691,9 @@ fn test_query_churn_returns_files_above_threshold() {
 
     // src/main.rs modified in 3 commits, src/lib.rs in 1
     for hash in ["aaa", "bbb", "ccc"] {
-        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", "2026-03-01T10:00:00Z").unwrap();
     }
-    db::insert_file_change(&conn, "/repo", "aaa", "src/lib.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+    db::insert_file_change(&conn, "/repo", "aaa", "src/lib.rs", "2026-03-01T10:00:00Z").unwrap();
 
     let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
     assert_eq!(results.len(), 1);
@@ -717,7 +713,7 @@ fn test_query_churn_ordered_by_count_desc_limited_to_20() {
         let fname = format!("file_{:02}.rs", i);
         for j in 0..i {
             let hash = format!("h{}_{}", i, j);
-            db::insert_file_change(&conn, "/repo", &hash, &fname, 0, 0, "2026-03-01T10:00:00Z").unwrap();
+            db::insert_file_change(&conn, "/repo", &hash, &fname, "2026-03-01T10:00:00Z").unwrap();
         }
     }
 
@@ -740,11 +736,11 @@ fn test_query_churn_respects_time_range() {
 
     // 3 changes in range
     for hash in ["a1", "a2", "a3"] {
-        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", 0, 0, "2026-03-01T10:00:00Z").unwrap();
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", "2026-03-01T10:00:00Z").unwrap();
     }
     // 2 changes outside range
     for hash in ["b1", "b2"] {
-        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", 0, 0, "2026-02-28T10:00:00Z").unwrap();
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", "2026-02-28T10:00:00Z").unwrap();
     }
 
     // Threshold 4: only 3 in range, should return empty

@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
-use blackbox::{cli::QueryRange, config, db};
+use blackbox::{query::QueryRange, config, db};
 use chrono::{TimeZone, Utc};
 
 #[test]

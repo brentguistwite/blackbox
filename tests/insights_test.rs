@@ -640,7 +640,8 @@ fn retro_summary_serializes_to_json() {
 #[test]
 fn dora_lite_metrics_empty_returns_zeros() {
     let summary = make_empty_summary();
-    let m = dora_lite_metrics(&summary, 7);
+    let today = Local::now().date_naive();
+    let m = dora_lite_metrics(&summary, 7, today - chrono::Duration::days(7), today);
     assert!((m.commits_per_day - 0.0).abs() < f64::EPSILON);
     assert!((m.prs_merged_per_week - 0.0).abs() < f64::EPSILON);
     assert!((m.velocity_trend - 0.0).abs() < f64::EPSILON);
@@ -652,7 +653,8 @@ fn dora_lite_metrics_commits_per_day() {
     let events: Vec<ActivityEvent> = (0..10).map(|i| make_event("commit", i * 10)).collect();
     let repos = vec![make_repo("repo-a", events, 60)];
     let summary = make_summary_with_repos(repos);
-    let m = dora_lite_metrics(&summary, 5);
+    let today = Local::now().date_naive();
+    let m = dora_lite_metrics(&summary, 5, today - chrono::Duration::days(5), today);
     assert!((m.commits_per_day - 2.0).abs() < f64::EPSILON);
 }
 
@@ -668,7 +670,8 @@ fn dora_lite_metrics_prs_merged_per_week() {
         PrInfo { number: 4, title: "d".into(), state: "OPEN".into(), head_ref_name: "main".into() },
     ]);
     let summary = make_summary_with_repos(vec![repo]);
-    let m = dora_lite_metrics(&summary, 14);
+    let today = Local::now().date_naive();
+    let m = dora_lite_metrics(&summary, 14, today - chrono::Duration::days(14), today);
     assert!((m.prs_merged_per_week - 1.5).abs() < f64::EPSILON);
 }
 
@@ -699,7 +702,7 @@ fn dora_lite_metrics_velocity_trend_positive() {
     all_events.extend(second_half_events);
     let repos = vec![make_repo("repo-a", all_events, 120)];
     let summary = make_summary_with_repos(repos);
-    let m = dora_lite_metrics(&summary, 10);
+    let m = dora_lite_metrics(&summary, 10, today - chrono::Duration::days(10), today);
     assert!(m.velocity_trend > 0.0, "trend should be positive, got {}", m.velocity_trend);
 }
 
@@ -710,7 +713,8 @@ fn dora_lite_metrics_velocity_trend_zero_when_first_half_empty() {
     let repos = vec![make_repo("repo-a", events, 60)];
     let summary = make_summary_with_repos(repos);
     // 30-day period, all events are "now" (minutes ago) → all in second half
-    let m = dora_lite_metrics(&summary, 30);
+    let today = Local::now().date_naive();
+    let m = dora_lite_metrics(&summary, 30, today - chrono::Duration::days(30), today);
     assert!((m.velocity_trend - 0.0).abs() < f64::EPSILON,
         "trend should be 0.0 when first half empty, got {}", m.velocity_trend);
 }

@@ -5,28 +5,25 @@ use blackbox::cli::{Cli, Commands};
 use blackbox::output::OutputFormat;
 use blackbox::query::ActivitySummary;
 
-fn run_query(
-    period_label: &str,
+fn build_summary(
+    label: &str,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
-    format: OutputFormat,
-    summarize: bool,
-) -> anyhow::Result<()> {
+    all_prs: bool,
+) -> anyhow::Result<(blackbox::config::Config, ActivitySummary)> {
     let config = blackbox::config::load_config()?;
     let data_dir = blackbox::config::data_dir()?;
     let db_path = data_dir.join("blackbox.db");
     let conn = blackbox::db::open_db(&db_path)
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
     let mut repos = blackbox::query::query_activity(
-        &conn,
-        from,
-        to,
-        config.session_gap_minutes,
-        config.first_commit_minutes,
+        &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
     )?;
-
-    blackbox::enrichment::enrich_with_prs(&mut repos);
-
+    if all_prs {
+        blackbox::enrichment::enrich_with_all_prs(&mut repos);
+    } else {
+        blackbox::enrichment::enrich_with_prs(&mut repos);
+    }
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
     let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
@@ -35,9 +32,8 @@ fn run_query(
     let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
         acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
     });
-
     let summary = ActivitySummary {
-        period_label: period_label.to_string(),
+        period_label: label.to_string(),
         total_commits,
         total_reviews,
         total_repos: repos.len(),
@@ -45,6 +41,17 @@ fn run_query(
         total_ai_session_time,
         repos,
     };
+    Ok((config, summary))
+}
+
+fn run_query(
+    period_label: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    format: OutputFormat,
+    summarize: bool,
+) -> anyhow::Result<()> {
+    let (config, summary) = build_summary(period_label, from, to, false)?;
 
     if summarize {
         let llm_config = blackbox::llm::build_llm_config(&config)?;
@@ -196,6 +203,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 OutputFormat::Csv => {
                     let mut wtr = csv::Writer::from_writer(vec![]);
+                    wtr.write_record(["ticket_id", "branches", "repos", "commits", "estimated_minutes"]).unwrap();
                     for t in &tickets {
                         wtr.write_record([
                             &t.ticket_id,
@@ -204,9 +212,6 @@ fn main() -> anyhow::Result<()> {
                             &t.commits.to_string(),
                             &t.estimated_minutes.to_string(),
                         ]).unwrap();
-                    }
-                    if tickets.is_empty() {
-                        wtr.write_record(["ticket_id", "branches", "repos", "commits", "estimated_minutes"]).unwrap();
                     }
                     let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
                     print!("{}", data);
@@ -241,15 +246,13 @@ fn main() -> anyhow::Result<()> {
                 }
                 OutputFormat::Csv => {
                     let mut wtr = csv::Writer::from_writer(vec![]);
+                    wtr.write_record(["file_path", "change_count", "repo_path"]).unwrap();
                     for e in &entries {
                         wtr.write_record([
                             &e.file_path,
                             &e.change_count.to_string(),
                             &e.repo_path,
                         ]).unwrap();
-                    }
-                    if entries.is_empty() {
-                        wtr.write_record(["file_path", "change_count", "repo_path"]).unwrap();
                     }
                     let data = String::from_utf8(wtr.into_inner().unwrap()).unwrap();
                     print!("{}", data);
@@ -328,41 +331,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Retro { sprint, format } => {
-            let config = blackbox::config::load_config()?;
-            let data_dir = blackbox::config::data_dir()?;
-            let db_path = data_dir.join("blackbox.db");
-            let conn = blackbox::db::open_db(&db_path)
-                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
-
             // Parse sprint: strip 'w' suffix, multiply by 7
             let weeks: i64 = sprint.trim_end_matches('w').parse()
                 .map_err(|_| anyhow::anyhow!("Invalid sprint format '{}'. Use 1w, 2w, 3w, or 4w.", sprint))?;
             let now = chrono::Utc::now();
             let from = now - chrono::Duration::weeks(weeks);
 
-            let mut repos = blackbox::query::query_activity(
-                &conn, from, now, config.session_gap_minutes, config.first_commit_minutes,
-            )?;
-            blackbox::enrichment::enrich_with_prs(&mut repos);
-
-            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
-            let total_reviews: usize = repos.iter().map(|r| {
-                r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
-            }).sum();
-            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
-            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
-                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
-            });
-
-            let summary = ActivitySummary {
-                period_label: format!("Sprint ({})", sprint),
-                total_commits,
-                total_reviews,
-                total_repos: repos.len(),
-                total_estimated_time: total_time,
-                total_ai_session_time,
-                repos,
-            };
+            let (config, summary) = build_summary(&format!("Sprint ({})", sprint), from, now, false)?;
 
             let retro = blackbox::insights::retro_summary(
                 &summary,
@@ -381,39 +356,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Metrics { range, format } => {
-            let config = blackbox::config::load_config()?;
-            let data_dir = blackbox::config::data_dir()?;
-            let db_path = data_dir.join("blackbox.db");
-            let conn = blackbox::db::open_db(&db_path)
-                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range.to_range();
             let period_days = (to - from).num_days();
-            let mut repos = blackbox::query::query_activity(
-                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
-            )?;
-            // Use enrich_with_all_prs so merged PRs are visible
-            blackbox::enrichment::enrich_with_all_prs(&mut repos);
+            let (_config, summary) = build_summary("Metrics", from, to, true)?;
 
-            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
-            let total_reviews: usize = repos.iter().map(|r| {
-                r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
-            }).sum();
-            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
-            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
-                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
-            });
-
-            let summary = ActivitySummary {
-                period_label: "Metrics".to_string(),
-                total_commits,
-                total_reviews,
-                total_repos: repos.len(),
-                total_estimated_time: total_time,
-                total_ai_session_time,
-                repos,
-            };
-
-            let metrics = blackbox::insights::dora_lite_metrics(&summary, period_days);
+            let metrics = blackbox::insights::dora_lite_metrics(&summary, period_days, from.date_naive(), to.date_naive());
             match format {
                 OutputFormat::Json => {
                     let json = serde_json::json!({
@@ -467,42 +414,13 @@ fn main() -> anyhow::Result<()> {
             blackbox::tui::run_live()?;
         }
         Commands::Standup { week, summarize, webhook } => {
-            let label;
-            let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
-            if week {
-                label = "This Week";
-                range_fn = blackbox::query::week_range;
+            let (label, range_fn): (&str, fn() -> (DateTime<Utc>, DateTime<Utc>)) = if week {
+                ("This Week", blackbox::query::week_range)
             } else {
-                label = "Today";
-                range_fn = blackbox::query::today_range;
-            }
-            let config = blackbox::config::load_config()?;
-            let data_dir = blackbox::config::data_dir()?;
-            let db_path = data_dir.join("blackbox.db");
-            let conn = blackbox::db::open_db(&db_path)
-                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
-            let (from, to) = range_fn();
-            let mut repos = blackbox::query::query_activity(
-                &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
-            )?;
-            blackbox::enrichment::enrich_with_prs(&mut repos);
-            let total_commits: usize = repos.iter().map(|r| r.commits).sum();
-            let total_reviews: usize = repos.iter().map(|r| {
-        r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
-    }).sum();
-            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
-            let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
-                acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
-            });
-            let summary = ActivitySummary {
-                period_label: label.to_string(),
-                total_commits,
-                total_reviews,
-                total_repos: repos.len(),
-                total_estimated_time: total_time,
-                total_ai_session_time,
-                repos,
+                ("Today", blackbox::query::today_range)
             };
+            let (from, to) = range_fn();
+            let (config, summary) = build_summary(label, from, to, false)?;
             if summarize {
                 let llm_config = blackbox::llm::build_llm_config(&config)?;
                 let json = blackbox::output::render_json(&summary);

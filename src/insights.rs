@@ -185,6 +185,16 @@ pub struct StreakInfo {
 /// `rest_days` uses chrono weekday numbering: 0=Mon, 5=Sat, 6=Sun.
 /// Rest days are skipped (don't break streak, don't count toward it).
 pub fn streak_info(repos: &[RepoSummary], rest_days: &[u8], as_of: NaiveDate) -> StreakInfo {
+    // Guard: if all 7 weekdays are rest days, no working days exist — return zeros
+    if rest_days.len() >= 7 {
+        return StreakInfo {
+            current_streak: 0,
+            longest_streak: 0,
+            longest_streak_start: None,
+            active_days_30d: 0,
+        };
+    }
+
     let dates = active_dates(repos);
     if dates.is_empty() {
         return StreakInfo {
@@ -482,7 +492,12 @@ pub struct DoraLiteMetrics {
 /// `period_days` is the number of days in the analysis window.
 /// velocity_trend: compare commit counts in first half vs second half of period.
 /// Positive = accelerating, negative = decelerating, 0.0 = flat or no first-half data.
-pub fn dora_lite_metrics(summary: &ActivitySummary, period_days: i64) -> DoraLiteMetrics {
+pub fn dora_lite_metrics(
+    summary: &ActivitySummary,
+    period_days: i64,
+    period_start: NaiveDate,
+    period_end: NaiveDate,
+) -> DoraLiteMetrics {
     if period_days <= 0 || summary.repos.is_empty() {
         return DoraLiteMetrics {
             commits_per_day: 0.0,
@@ -505,16 +520,14 @@ pub fn dora_lite_metrics(summary: &ActivitySummary, period_days: i64) -> DoraLit
 
     // Velocity trend: first half vs second half commit counts via daily_commit_counts
     let daily = daily_commit_counts(&summary.repos);
-    let now = chrono::Local::now().date_naive();
-    let period_start = now - chrono::Duration::days(period_days);
-    let midpoint = now - chrono::Duration::days(period_days / 2);
+    let midpoint = period_start + chrono::Duration::days(period_days / 2);
 
     let first_half: usize = daily.iter()
         .filter(|(d, _)| **d >= period_start && **d < midpoint)
         .map(|(_, c)| *c)
         .sum();
     let second_half: usize = daily.iter()
-        .filter(|(d, _)| **d >= midpoint && **d <= now)
+        .filter(|(d, _)| **d >= midpoint && **d <= period_end)
         .map(|(_, c)| *c)
         .sum();
 

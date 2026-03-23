@@ -76,7 +76,7 @@ fn record_file_changes(
             .or_else(|| delta.old_file().path())
             .map(|p| p.to_string_lossy().to_string());
         if let Some(fp) = file_path {
-            let _ = db::insert_file_change(conn, db_repo_path, commit_hash, &fp, 0, 0, timestamp);
+            let _ = db::insert_file_change(conn, db_repo_path, commit_hash, &fp, timestamp);
         }
     }
 }
