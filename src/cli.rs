@@ -1,7 +1,7 @@
-use clap::{Parser, Subcommand};
-use clap_complete::Shell;
 use crate::output::OutputFormat;
 use crate::query::QueryRange;
+use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser)]
 #[command(name = "blackbox", version, about = "Flight recorder for your dev day")]

@@ -3,16 +3,16 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
+    DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Sparkline, Table},
-    DefaultTerminal, Frame,
 };
 
-use crate::query::{AiSessionInfo, RepoSummary};
 #[cfg(test)]
 use crate::query::ActivityEvent;
+use crate::query::{AiSessionInfo, RepoSummary};
 
 /// A flattened event for the recent-events feed.
 #[derive(Debug, Clone)]
@@ -75,6 +75,7 @@ pub struct App {
     pub total_time_mins: i64,
     pub active_repo: Option<String>,
     pub sparkline_data: Vec<u64>,
+    pub event_timestamps: Vec<DateTime<Utc>>,
     // Sort
     pub sort_mode: SortMode,
     // Scroll
@@ -97,6 +98,7 @@ impl Default for App {
             total_time_mins: 0,
             active_repo: None,
             sparkline_data: vec![0; 16],
+            event_timestamps: Vec::new(),
             sort_mode: SortMode::Commits,
             events_state: ListState::default(),
             db_path: None,
@@ -150,9 +152,7 @@ impl App {
 
         // Sort repos by selected mode
         match self.sort_mode {
-            SortMode::Recent => repos.sort_by(|a, b| {
-                latest_timestamp(b).cmp(&latest_timestamp(a))
-            }),
+            SortMode::Recent => repos.sort_by_key(|b| std::cmp::Reverse(latest_timestamp(b))),
             SortMode::Time => repos.sort_by(|a, b| b.estimated_time.cmp(&a.estimated_time)),
             SortMode::Commits => repos.sort_by(|a, b| b.commits.cmp(&a.commits)),
         };
@@ -197,12 +197,23 @@ impl App {
 
         // Total time — global merge avoids double-counting concurrent repo work
         let total_time = crate::query::global_estimated_time(
-            &repos, self.session_gap_minutes, self.first_commit_minutes,
+            &repos,
+            self.session_gap_minutes,
+            self.first_commit_minutes,
         );
         self.total_time_mins = total_time.num_minutes();
 
-        // Sparkline: 8 hours in 30-min buckets = 16 buckets
-        self.sparkline_data = build_sparkline(&repos, from);
+        // Collect all event timestamps for sparkline (rendered dynamically based on width)
+        let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+        for repo in &repos {
+            for ev in &repo.events {
+                timestamps.push(ev.timestamp);
+            }
+            for ses in &repo.ai_sessions {
+                timestamps.push(ses.started_at);
+            }
+        }
+        self.event_timestamps = timestamps;
 
         self.repos = repos;
         self.feed_events = feed;
@@ -292,31 +303,43 @@ fn collapse_similar_events(mut events: Vec<FeedEvent>) -> Vec<FeedEvent> {
     collapsed
 }
 
-/// Build sparkline data: 16 buckets of 30min over the past 8 hours.
-fn build_sparkline(repos: &[RepoSummary], range_start: DateTime<Utc>) -> Vec<u64> {
+/// Build sparkline data: distribute event timestamps into N buckets over the past 8 hours.
+fn build_sparkline_buckets(timestamps: &[DateTime<Utc>], num_buckets: usize) -> Vec<u64> {
     let now = Utc::now();
-    // Use 8 hours ago or range_start, whichever is later
     let eight_hours_ago = now - chrono::Duration::hours(8);
-    let start = if eight_hours_ago > range_start {
-        eight_hours_ago
-    } else {
-        range_start
-    };
-    let bucket_secs = 1800i64; // 30 minutes
-    let mut buckets = vec![0u64; 16];
+    let total_secs = (now - eight_hours_ago).num_seconds() as f64;
+    let mut buckets = vec![0u64; num_buckets];
 
-    for repo in repos {
-        for ev in &repo.events {
-            let offset = (ev.timestamp - start).num_seconds();
-            if offset >= 0 {
-                let idx = (offset / bucket_secs) as usize;
-                if idx < 16 {
-                    buckets[idx] += 1;
-                }
+    for ts in timestamps {
+        let offset = (*ts - eight_hours_ago).num_seconds();
+        if offset >= 0 {
+            let idx = ((offset as f64 / total_secs) * num_buckets as f64) as usize;
+            if idx < num_buckets {
+                buckets[idx] += 1;
             }
         }
     }
-    buckets
+    // Gaussian blur: spread each event into neighboring buckets
+    let radius = (num_buckets / 40).max(2); // ~2.5% of width per side
+    let sigma = radius as f64 / 2.0;
+    let mut blurred = vec![0.0f64; num_buckets];
+    for (i, &val) in buckets.iter().enumerate() {
+        if val == 0 {
+            continue;
+        }
+        for offset in 0..=radius {
+            let weight = (-(offset as f64).powi(2) / (2.0 * sigma * sigma)).exp();
+            let contribution = val as f64 * weight;
+            if i + offset < num_buckets {
+                blurred[i + offset] += contribution;
+            }
+            if offset > 0 && i >= offset {
+                blurred[i - offset] += contribution;
+            }
+        }
+    }
+
+    blurred.iter().map(|v| v.round() as u64).collect()
 }
 
 /// Entry point: initialize terminal, run event loop, restore on exit.
@@ -439,26 +462,18 @@ fn render_body(frame: &mut Frame, area: Rect, app: &mut App) {
     if let Some(ref err) = app.error {
         let content = vec![
             Line::raw(""),
-            Line::styled(
-                format!("  Error: {err}"),
-                Style::default().fg(Color::Red),
-            ),
+            Line::styled(format!("  Error: {err}"), Style::default().fg(Color::Red)),
             Line::raw(""),
             Line::raw("  Run 'blackbox setup' to configure, or check your data directory."),
         ];
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Activity ");
+        let block = Block::default().borders(Borders::ALL).title(" Activity ");
         frame.render_widget(Paragraph::new(content).block(block), area);
         return;
     }
 
     // Split body: top for panels, bottom for sparkline
-    let [panels_area, sparkline_area] = Layout::vertical([
-        Constraint::Min(1),
-        Constraint::Length(4),
-    ])
-    .areas(area);
+    let [panels_area, sparkline_area] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).areas(area);
 
     // Split panels: left 40%, right 60%
     let [left_area, right_area] =
@@ -512,11 +527,7 @@ fn render_repo_table(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 format!("~{m}m")
             };
-            Row::new(vec![
-                r.repo_name.clone(),
-                r.commits.to_string(),
-                time_str,
-            ])
+            Row::new(vec![r.repo_name.clone(), r.commits.to_string(), time_str])
         })
         .collect();
 
@@ -542,10 +553,7 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
     if app.feed_events.is_empty() {
         let msg = vec![
             Line::raw(""),
-            Line::styled(
-                "  No events yet",
-                Style::default().fg(Color::DarkGray),
-            ),
+            Line::styled("  No events yet", Style::default().fg(Color::DarkGray)),
         ];
         frame.render_widget(Paragraph::new(msg).block(block), area);
         return;
@@ -596,19 +604,25 @@ fn render_events_feed(frame: &mut Frame, area: Rect, app: &mut App) {
         })
         .collect();
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let list = List::new(items).block(block).highlight_style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 
     frame.render_stateful_widget(list, area, &mut app.events_state);
 }
 
-fn render_sparkline(frame: &mut Frame, area: Rect, app: &App) {
+fn render_sparkline(frame: &mut Frame, area: Rect, app: &mut App) {
+    // Available width minus borders = one sparkline bar per column
+    let num_buckets = (area.width.saturating_sub(2)) as usize;
+    if num_buckets == 0 {
+        return;
+    }
+
+    app.sparkline_data = build_sparkline_buckets(&app.event_timestamps, num_buckets);
+
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Activity (8h) ");
@@ -652,6 +666,7 @@ mod tests {
         assert_eq!(app.total_time_mins, 0);
         assert!(app.active_repo.is_none());
         assert_eq!(app.sparkline_data.len(), 16);
+        assert!(app.event_timestamps.is_empty());
     }
 
     #[test]
@@ -834,8 +849,8 @@ mod tests {
 
     #[test]
     fn test_build_sparkline_empty() {
-        let data = build_sparkline(&[], Utc::now() - chrono::Duration::hours(8));
-        assert_eq!(data.len(), 16);
+        let data = build_sparkline_buckets(&[], 100);
+        assert_eq!(data.len(), 100);
         assert!(data.iter().all(|&v| v == 0));
     }
 

@@ -71,7 +71,10 @@ pub fn check_watch_dirs(config: &crate::config::Config) -> Vec<CheckResult> {
                     name: format!("Watch dir: {}", dir.display()),
                     passed: false,
                     detail: "Not found".into(),
-                    suggestion: Some(format!("Create it or update config: mkdir -p {}", dir.display())),
+                    suggestion: Some(format!(
+                        "Create it or update config: mkdir -p {}",
+                        dir.display()
+                    )),
                 }
             }
         })
@@ -277,12 +280,12 @@ pub fn parse_launchctl_output(success: bool, stdout: &str) -> Option<u32> {
     // launchctl list <label> output contains "PID" = <number>; if running
     for line in stdout.lines() {
         let trimmed = line.trim().trim_end_matches(';');
-        if trimmed.starts_with("\"PID\"") {
-            if let Some(val) = trimmed.split('=').nth(1) {
-                let val = val.trim().trim_matches('"');
-                if let Ok(pid) = val.parse::<u32>() {
-                    return Some(pid);
-                }
+        if trimmed.starts_with("\"PID\"")
+            && let Some(val) = trimmed.split('=').nth(1)
+        {
+            let val = val.trim().trim_matches('"');
+            if let Ok(pid) = val.parse::<u32>() {
+                return Some(pid);
             }
         }
     }
@@ -331,29 +334,28 @@ pub fn run_doctor() -> anyhow::Result<bool> {
     results.push(db_result);
 
     // Work-hours warning: query last 7 days if both config and DB are available
-    if let Some(ref config) = loaded_config {
-        if db_ok {
-            if let Ok(data_dir) = crate::config::data_dir() {
-                let db_path = data_dir.join("blackbox.db");
-                if let Ok(conn) = crate::db::open_db(&db_path) {
-                    let now = chrono::Utc::now();
-                    let week_ago = now - chrono::Duration::days(7);
-                    if let Ok(repos) = crate::query::query_activity(
-                        &conn,
-                        week_ago,
-                        now,
-                        config.session_gap_minutes,
-                        config.first_commit_minutes,
-                    ) {
-                        let analysis = crate::insights::work_hours_analysis(
-                            &repos,
-                            config.work_hours_start,
-                            config.work_hours_end,
-                        );
-                        if analysis.total_commits > 0 {
-                            results.push(check_work_hours(analysis.after_hours_pct));
-                        }
-                    }
+    if let Some(ref config) = loaded_config
+        && db_ok
+        && let Ok(data_dir) = crate::config::data_dir()
+    {
+        let db_path = data_dir.join("blackbox.db");
+        if let Ok(conn) = crate::db::open_db(&db_path) {
+            let now = chrono::Utc::now();
+            let week_ago = now - chrono::Duration::days(7);
+            if let Ok(repos) = crate::query::query_activity(
+                &conn,
+                week_ago,
+                now,
+                config.session_gap_minutes,
+                config.first_commit_minutes,
+            ) {
+                let analysis = crate::insights::work_hours_analysis(
+                    &repos,
+                    config.work_hours_start,
+                    config.work_hours_end,
+                );
+                if analysis.total_commits > 0 {
+                    results.push(check_work_hours(analysis.after_hours_pct));
                 }
             }
         }
@@ -380,10 +382,7 @@ pub fn run_doctor() -> anyhow::Result<bool> {
         println!("{}", "All checks passed!".green().bold());
     } else {
         let fail_count = results.iter().filter(|r| !r.passed).count();
-        println!(
-            "{}",
-            format!("{fail_count} check(s) failed").red().bold()
-        );
+        println!("{}", format!("{fail_count} check(s) failed").red().bold());
     }
 
     Ok(all_passed)
@@ -395,8 +394,14 @@ pub fn check_work_hours(after_hours_pct: f64) -> CheckResult {
         CheckResult {
             name: "Work-life balance".into(),
             passed: false,
-            detail: format!("{:.0}% of commits in last 7 days were outside work hours", after_hours_pct),
-            suggestion: Some("Consider adjusting work_hours_start/work_hours_end in config, or take a break!".into()),
+            detail: format!(
+                "{:.0}% of commits in last 7 days were outside work hours",
+                after_hours_pct
+            ),
+            suggestion: Some(
+                "Consider adjusting work_hours_start/work_hours_end in config, or take a break!"
+                    .into(),
+            ),
         }
     } else {
         CheckResult {

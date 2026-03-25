@@ -1,7 +1,11 @@
-use blackbox::query::{ActivityEvent, RepoSummary};
-use blackbox::insights::{context_switches, daily_commit_counts, active_dates, hourly_distribution, weekly_rhythm, work_hours_analysis, streak_info, extract_ticket_ids, aggregate_time_per_ticket, deep_work_sessions, retro_summary, dora_lite_metrics, ContextSwitchMetrics};
+use blackbox::insights::{
+    active_dates, aggregate_time_per_ticket, context_switches, daily_commit_counts,
+    deep_work_sessions, dora_lite_metrics, extract_ticket_ids, hourly_distribution, retro_summary,
+    streak_info, weekly_rhythm, work_hours_analysis,
+};
 use blackbox::query::ActivitySummary;
-use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Datelike};
+use blackbox::query::{ActivityEvent, RepoSummary};
+use chrono::{Datelike, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 
 /// Create an ActivityEvent with given type, N minutes before now.
 fn make_event(event_type: &str, minutes_ago: i64) -> ActivityEvent {
@@ -57,17 +61,17 @@ fn counts_repo_switches_chronologically() {
     // Timeline: repo-a@60m, repo-b@50m, repo-b@40m, repo-a@30m, repo-c@20m
     // Transitions: a→b (1), b→a (2), a→c (3) = 3 repo switches
     let repos = vec![
-        make_repo("repo-a", vec![
-            make_event("commit", 60),
-            make_event("commit", 30),
-        ], 30),
-        make_repo("repo-b", vec![
-            make_event("commit", 50),
-            make_event("commit", 40),
-        ], 20),
-        make_repo("repo-c", vec![
-            make_event("commit", 20),
-        ], 10),
+        make_repo(
+            "repo-a",
+            vec![make_event("commit", 60), make_event("commit", 30)],
+            30,
+        ),
+        make_repo(
+            "repo-b",
+            vec![make_event("commit", 50), make_event("commit", 40)],
+            20,
+        ),
+        make_repo("repo-c", vec![make_event("commit", 20)], 10),
     ];
     let result = context_switches(&repos);
     assert_eq!(result.repo_switches, 3);
@@ -98,7 +102,9 @@ fn daily_commit_counts_empty_returns_empty() {
 
 /// Create event at a specific local date+hour (for deterministic date-bucketing tests).
 fn make_event_at(event_type: &str, year: i32, month: u32, day: u32, hour: u32) -> ActivityEvent {
-    let local_dt = Local.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
+    let local_dt = Local
+        .with_ymd_and_hms(year, month, day, hour, 0, 0)
+        .unwrap();
     ActivityEvent {
         event_type: event_type.to_string(),
         branch: None,
@@ -209,14 +215,22 @@ fn active_dates_sorted_unique_across_repos() {
     // repo-b has commits on Mar 10 and Mar 11
     // result should be [Mar 10, Mar 11, Mar 12] — sorted, deduplicated
     let repos = vec![
-        make_repo("repo-a", vec![
-            make_event_at("commit", 2025, 3, 10, 9),
-            make_event_at("commit", 2025, 3, 12, 14),
-        ], 30),
-        make_repo("repo-b", vec![
-            make_event_at("commit", 2025, 3, 10, 15),
-            make_event_at("commit", 2025, 3, 11, 10),
-        ], 30),
+        make_repo(
+            "repo-a",
+            vec![
+                make_event_at("commit", 2025, 3, 10, 9),
+                make_event_at("commit", 2025, 3, 12, 14),
+            ],
+            30,
+        ),
+        make_repo(
+            "repo-b",
+            vec![
+                make_event_at("commit", 2025, 3, 10, 15),
+                make_event_at("commit", 2025, 3, 11, 10),
+            ],
+            30,
+        ),
     ];
     let dates = active_dates(&repos);
 
@@ -243,7 +257,7 @@ fn work_hours_analysis_empty_returns_zeros() {
 fn work_hours_analysis_counts_after_hours_commits() {
     // Work hours 9-17. Commits at 8am (before), 12pm (during), 20pm (after)
     let events = vec![
-        make_event_at("commit", 2025, 3, 10, 8),  // Mon 8am — before work
+        make_event_at("commit", 2025, 3, 10, 8), // Mon 8am — before work
         make_event_at("commit", 2025, 3, 10, 12), // Mon 12pm — during work
         make_event_at("commit", 2025, 3, 10, 20), // Mon 8pm — after work
         make_event_at("branch_switch", 2025, 3, 10, 21), // ignored (not commit)
@@ -274,10 +288,10 @@ fn work_hours_analysis_earliest_latest_commit_times() {
 fn work_hours_analysis_weekend_days_counts_unique_dates() {
     // Sat Mar 8 with 3 commits, Sun Mar 9 with 1 commit = 2 weekend days
     let events = vec![
-        make_event_at("commit", 2025, 3, 8, 10),  // Sat
-        make_event_at("commit", 2025, 3, 8, 14),  // Sat (same day)
-        make_event_at("commit", 2025, 3, 8, 18),  // Sat (same day)
-        make_event_at("commit", 2025, 3, 9, 11),  // Sun
+        make_event_at("commit", 2025, 3, 8, 10), // Sat
+        make_event_at("commit", 2025, 3, 8, 14), // Sat (same day)
+        make_event_at("commit", 2025, 3, 8, 18), // Sat (same day)
+        make_event_at("commit", 2025, 3, 9, 11), // Sun
     ];
     let repos = vec![make_repo("repo-a", events, 60)];
     let result = work_hours_analysis(&repos, 8, 18);
@@ -300,11 +314,11 @@ fn streak_info_empty_returns_zeros() {
 fn streak_weekday_activity_with_weekend_rest() {
     // Mon Mar 10 – Fri Mar 14, 2025: all weekdays active, rest=[Sat,Sun]
     let events = vec![
-        make_event_at("commit", 2025, 3, 10, 9),  // Mon
-        make_event_at("commit", 2025, 3, 11, 9),  // Tue
-        make_event_at("commit", 2025, 3, 12, 9),  // Wed
-        make_event_at("commit", 2025, 3, 13, 9),  // Thu
-        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+        make_event_at("commit", 2025, 3, 10, 9), // Mon
+        make_event_at("commit", 2025, 3, 11, 9), // Tue
+        make_event_at("commit", 2025, 3, 12, 9), // Wed
+        make_event_at("commit", 2025, 3, 13, 9), // Thu
+        make_event_at("commit", 2025, 3, 14, 9), // Fri
     ];
     let repos = vec![make_repo("repo-a", events, 60)];
     let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
@@ -316,11 +330,11 @@ fn streak_weekday_activity_with_weekend_rest() {
 fn streak_missing_weekday_breaks_streak() {
     // Mon, Tue active; Wed missing; Thu, Fri active → current = 2
     let events = vec![
-        make_event_at("commit", 2025, 3, 10, 9),  // Mon
-        make_event_at("commit", 2025, 3, 11, 9),  // Tue
+        make_event_at("commit", 2025, 3, 10, 9), // Mon
+        make_event_at("commit", 2025, 3, 11, 9), // Tue
         // Wed Mar 12 missing
-        make_event_at("commit", 2025, 3, 13, 9),  // Thu
-        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+        make_event_at("commit", 2025, 3, 13, 9), // Thu
+        make_event_at("commit", 2025, 3, 14, 9), // Fri
     ];
     let repos = vec![make_repo("repo-a", events, 60)];
     let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
@@ -333,34 +347,37 @@ fn streak_longest_separate_from_current() {
     // Week 1 Mon-Fri (5 days), weekend rest, Week 2 Mon missing, Tue-Fri (4 days)
     // longest=5 (week 1), current=4 (week 2 Tue-Fri)
     let events = vec![
-        make_event_at("commit", 2025, 3, 3, 9),   // Mon W1
-        make_event_at("commit", 2025, 3, 4, 9),   // Tue
-        make_event_at("commit", 2025, 3, 5, 9),   // Wed
-        make_event_at("commit", 2025, 3, 6, 9),   // Thu
-        make_event_at("commit", 2025, 3, 7, 9),   // Fri
+        make_event_at("commit", 2025, 3, 3, 9), // Mon W1
+        make_event_at("commit", 2025, 3, 4, 9), // Tue
+        make_event_at("commit", 2025, 3, 5, 9), // Wed
+        make_event_at("commit", 2025, 3, 6, 9), // Thu
+        make_event_at("commit", 2025, 3, 7, 9), // Fri
         // Sat 8, Sun 9 = rest
         // Mon 10 = missing (breaks)
-        make_event_at("commit", 2025, 3, 11, 9),  // Tue W2
-        make_event_at("commit", 2025, 3, 12, 9),  // Wed
-        make_event_at("commit", 2025, 3, 13, 9),  // Thu
-        make_event_at("commit", 2025, 3, 14, 9),  // Fri
+        make_event_at("commit", 2025, 3, 11, 9), // Tue W2
+        make_event_at("commit", 2025, 3, 12, 9), // Wed
+        make_event_at("commit", 2025, 3, 13, 9), // Thu
+        make_event_at("commit", 2025, 3, 14, 9), // Fri
     ];
     let repos = vec![make_repo("repo-a", events, 120)];
     let friday = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
     let result = streak_info(&repos, &[5, 6], friday);
     assert_eq!(result.current_streak, 4);
     assert_eq!(result.longest_streak, 5);
-    assert_eq!(result.longest_streak_start, Some(NaiveDate::from_ymd_opt(2025, 3, 3).unwrap()));
+    assert_eq!(
+        result.longest_streak_start,
+        Some(NaiveDate::from_ymd_opt(2025, 3, 3).unwrap())
+    );
 }
 
 #[test]
 fn streak_active_days_30d_counts_recent() {
     let today = NaiveDate::from_ymd_opt(2025, 3, 14).unwrap();
     let events = vec![
-        make_event_at("commit", 2025, 2, 1, 9),   // 41 days ago — outside
-        make_event_at("commit", 2025, 3, 1, 9),   // 13 days ago — inside
-        make_event_at("commit", 2025, 3, 10, 9),  // 4 days ago — inside
-        make_event_at("commit", 2025, 3, 14, 9),  // today — inside
+        make_event_at("commit", 2025, 2, 1, 9), // 41 days ago — outside
+        make_event_at("commit", 2025, 3, 1, 9), // 13 days ago — inside
+        make_event_at("commit", 2025, 3, 10, 9), // 4 days ago — inside
+        make_event_at("commit", 2025, 3, 14, 9), // today — inside
     ];
     let repos = vec![make_repo("repo-a", events, 60)];
     let result = streak_info(&repos, &[5, 6], today);
@@ -397,7 +414,12 @@ fn extract_ticket_ids_deduplicates_across_branches() {
 }
 
 /// Helper: make_repo with specific branches
-fn make_repo_with_branches(name: &str, branches: Vec<String>, events: Vec<ActivityEvent>, est_minutes: i64) -> RepoSummary {
+fn make_repo_with_branches(
+    name: &str,
+    branches: Vec<String>,
+    events: Vec<ActivityEvent>,
+    est_minutes: i64,
+) -> RepoSummary {
     RepoSummary {
         repo_path: format!("/tmp/{}", name),
         repo_name: name.to_string(),
@@ -416,14 +438,18 @@ fn aggregate_time_per_ticket_groups_by_ticket() {
     // Two repos on same ticket JIRA-123
     let patterns = vec![r"[A-Z]+-\d+".to_string()];
     let repos = vec![
-        make_repo_with_branches("repo-a",
+        make_repo_with_branches(
+            "repo-a",
             vec!["feature/JIRA-123-auth".to_string()],
             vec![make_event("commit", 30)],
-            60),
-        make_repo_with_branches("repo-b",
+            60,
+        ),
+        make_repo_with_branches(
+            "repo-b",
             vec!["feature/JIRA-123-tests".to_string()],
             vec![make_event("commit", 20)],
-            40),
+            40,
+        ),
     ];
     let result = aggregate_time_per_ticket(&repos, &patterns);
     assert_eq!(result.len(), 1);
@@ -436,12 +462,12 @@ fn aggregate_time_per_ticket_groups_by_ticket() {
 fn aggregate_time_per_ticket_splits_time_for_multi_ticket_repo() {
     // One repo matches two tickets → time split equally
     let patterns = vec![r"[A-Z]+-\d+".to_string()];
-    let repos = vec![
-        make_repo_with_branches("repo-a",
-            vec!["feature/JIRA-10-and-JIRA-20".to_string()],
-            vec![make_event("commit", 30), make_event("commit", 20)],
-            60),
-    ];
+    let repos = vec![make_repo_with_branches(
+        "repo-a",
+        vec!["feature/JIRA-10-and-JIRA-20".to_string()],
+        vec![make_event("commit", 30), make_event("commit", 20)],
+        60,
+    )];
     let result = aggregate_time_per_ticket(&repos, &patterns);
     assert_eq!(result.len(), 2);
     // Each ticket gets 60/2 = 30 minutes, 2/2 = 1 commit each
@@ -457,14 +483,18 @@ fn aggregate_time_per_ticket_splits_time_for_multi_ticket_repo() {
 fn aggregate_time_per_ticket_sorted_by_time_desc() {
     let patterns = vec![r"[A-Z]+-\d+".to_string()];
     let repos = vec![
-        make_repo_with_branches("repo-a",
+        make_repo_with_branches(
+            "repo-a",
             vec!["feature/AAA-1".to_string()],
             vec![make_event("commit", 10)],
-            20),
-        make_repo_with_branches("repo-b",
+            20,
+        ),
+        make_repo_with_branches(
+            "repo-b",
             vec!["feature/BBB-2".to_string()],
             vec![make_event("commit", 10)],
-            80),
+            80,
+        ),
     ];
     let result = aggregate_time_per_ticket(&repos, &patterns);
     assert_eq!(result[0].ticket_id, "BBB-2"); // 80 min first
@@ -520,9 +550,7 @@ fn deep_work_branch_switch_splits_into_short_runs() {
 #[test]
 fn deep_work_single_commit_not_counted() {
     // One commit = 0 duration, never qualifies
-    let events = vec![
-        make_branched_event("commit", "main", 0),
-    ];
+    let events = vec![make_branched_event("commit", "main", 0)];
     let repos = vec![make_repo("repo-a", events, 10)];
     let sessions = deep_work_sessions(&repos, 60);
     assert_eq!(sessions.len(), 0);
@@ -532,14 +560,22 @@ fn deep_work_single_commit_not_counted() {
 fn deep_work_sessions_sorted_by_duration_desc() {
     // Two repos: repo-a has 120min session, repo-b has 90min session
     let repos = vec![
-        make_repo("repo-b", vec![
-            make_branched_event("commit", "feat", 90),
-            make_branched_event("commit", "feat", 0),
-        ], 90),
-        make_repo("repo-a", vec![
-            make_branched_event("commit", "main", 120),
-            make_branched_event("commit", "main", 0),
-        ], 120),
+        make_repo(
+            "repo-b",
+            vec![
+                make_branched_event("commit", "feat", 90),
+                make_branched_event("commit", "feat", 0),
+            ],
+            90,
+        ),
+        make_repo(
+            "repo-a",
+            vec![
+                make_branched_event("commit", "main", 120),
+                make_branched_event("commit", "main", 0),
+            ],
+            120,
+        ),
     ];
     let sessions = deep_work_sessions(&repos, 60);
     assert_eq!(sessions.len(), 2);
@@ -564,8 +600,15 @@ fn make_empty_summary() -> ActivitySummary {
 fn make_summary_with_repos(repos: Vec<RepoSummary>) -> ActivitySummary {
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
     let total_reviews: usize = repos.iter().map(|r| r.reviews.len()).sum();
-    let total_time: Duration = repos.iter().map(|r| r.estimated_time).fold(Duration::zero(), |a, b| a + b);
-    let total_ai_time: Duration = repos.iter().flat_map(|r| &r.ai_sessions).map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+    let total_time: Duration = repos
+        .iter()
+        .map(|r| r.estimated_time)
+        .fold(Duration::zero(), |a, b| a + b);
+    let total_ai_time: Duration = repos
+        .iter()
+        .flat_map(|r| &r.ai_sessions)
+        .map(|s| s.duration)
+        .fold(Duration::zero(), |a, b| a + b);
     ActivitySummary {
         period_label: "Sprint".to_string(),
         total_commits,
@@ -664,10 +707,30 @@ fn dora_lite_metrics_prs_merged_per_week() {
     // 3 merged PRs + 1 open over 14 days (2 weeks) = 1.5 merged/week
     let mut repo = make_repo("repo-a", vec![make_event("commit", 10)], 60);
     repo.pr_info = Some(vec![
-        PrInfo { number: 1, title: "a".into(), state: "MERGED".into(), head_ref_name: "main".into() },
-        PrInfo { number: 2, title: "b".into(), state: "MERGED".into(), head_ref_name: "main".into() },
-        PrInfo { number: 3, title: "c".into(), state: "MERGED".into(), head_ref_name: "main".into() },
-        PrInfo { number: 4, title: "d".into(), state: "OPEN".into(), head_ref_name: "main".into() },
+        PrInfo {
+            number: 1,
+            title: "a".into(),
+            state: "MERGED".into(),
+            head_ref_name: "main".into(),
+        },
+        PrInfo {
+            number: 2,
+            title: "b".into(),
+            state: "MERGED".into(),
+            head_ref_name: "main".into(),
+        },
+        PrInfo {
+            number: 3,
+            title: "c".into(),
+            state: "MERGED".into(),
+            head_ref_name: "main".into(),
+        },
+        PrInfo {
+            number: 4,
+            title: "d".into(),
+            state: "OPEN".into(),
+            head_ref_name: "main".into(),
+        },
     ]);
     let summary = make_summary_with_repos(vec![repo]);
     let today = Local::now().date_naive();
@@ -680,30 +743,46 @@ fn dora_lite_metrics_velocity_trend_positive() {
     // 10-day period. 2 commits in first half (days -10..-5), 6 in second half (days -5..0)
     // trend = (6-2)/2 = 2.0
     let today = Local::now().date_naive();
-    let first_half_events: Vec<ActivityEvent> = (0..2).map(|i| {
-        let d = today - chrono::Duration::days(8 - i);
-        let local_dt = Local.with_ymd_and_hms(d.year(), d.month(), d.day(), 10, 0, 0).unwrap();
-        ActivityEvent {
-            event_type: "commit".to_string(),
-            branch: None, commit_hash: None, message: None,
-            timestamp: local_dt.with_timezone(&Utc),
-        }
-    }).collect();
-    let second_half_events: Vec<ActivityEvent> = (0..6).map(|i| {
-        let d = today - chrono::Duration::days(3 - i % 3);
-        let local_dt = Local.with_ymd_and_hms(d.year(), d.month(), d.day(), 10 + i as u32, 0, 0).unwrap();
-        ActivityEvent {
-            event_type: "commit".to_string(),
-            branch: None, commit_hash: None, message: None,
-            timestamp: local_dt.with_timezone(&Utc),
-        }
-    }).collect();
+    let first_half_events: Vec<ActivityEvent> = (0..2)
+        .map(|i| {
+            let d = today - chrono::Duration::days(8 - i);
+            let local_dt = Local
+                .with_ymd_and_hms(d.year(), d.month(), d.day(), 10, 0, 0)
+                .unwrap();
+            ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: None,
+                timestamp: local_dt.with_timezone(&Utc),
+            }
+        })
+        .collect();
+    let second_half_events: Vec<ActivityEvent> = (0..6)
+        .map(|i| {
+            let d = today - chrono::Duration::days(3 - i % 3);
+            let local_dt = Local
+                .with_ymd_and_hms(d.year(), d.month(), d.day(), 10 + i as u32, 0, 0)
+                .unwrap();
+            ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: None,
+                timestamp: local_dt.with_timezone(&Utc),
+            }
+        })
+        .collect();
     let mut all_events = first_half_events;
     all_events.extend(second_half_events);
     let repos = vec![make_repo("repo-a", all_events, 120)];
     let summary = make_summary_with_repos(repos);
     let m = dora_lite_metrics(&summary, 10, today - chrono::Duration::days(10), today);
-    assert!(m.velocity_trend > 0.0, "trend should be positive, got {}", m.velocity_trend);
+    assert!(
+        m.velocity_trend > 0.0,
+        "trend should be positive, got {}",
+        m.velocity_trend
+    );
 }
 
 #[test]
@@ -715,6 +794,9 @@ fn dora_lite_metrics_velocity_trend_zero_when_first_half_empty() {
     // 30-day period, all events are "now" (minutes ago) → all in second half
     let today = Local::now().date_naive();
     let m = dora_lite_metrics(&summary, 30, today - chrono::Duration::days(30), today);
-    assert!((m.velocity_trend - 0.0).abs() < f64::EPSILON,
-        "trend should be 0.0 when first half empty, got {}", m.velocity_trend);
+    assert!(
+        (m.velocity_trend - 0.0).abs() < f64::EPSILON,
+        "trend should be 0.0 when first half empty, got {}",
+        m.velocity_trend
+    );
 }

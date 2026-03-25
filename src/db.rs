@@ -1,6 +1,6 @@
-use std::path::Path;
 use rusqlite::Connection;
-use rusqlite_migration::{Migrations, M};
+use rusqlite_migration::{M, Migrations};
+use std::path::Path;
 
 /// A file that was modified multiple times in a given period (code churn).
 #[derive(Debug)]
@@ -183,7 +183,8 @@ pub fn session_exists(conn: &Connection, session_id: &str) -> anyhow::Result<boo
 /// Get session IDs that are still active (no ended_at).
 pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
     let mut stmt = conn.prepare("SELECT session_id FROM ai_sessions WHERE ended_at IS NULL")?;
-    let ids = stmt.query_map([], |row| row.get(0))?
+    let ids = stmt
+        .query_map([], |row| row.get(0))?
         .filter_map(|r| r.ok())
         .collect();
     Ok(ids)
@@ -211,6 +212,7 @@ pub fn insert_file_change(
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
 /// (commits, merges) to leverage the partial unique index. Branch switch events
 /// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_activity(
     conn: &Connection,
     repo_path: &str,
@@ -231,7 +233,16 @@ pub fn insert_activity(
     };
     let rows = conn.execute(
         sql,
-        rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
+        rusqlite::params![
+            repo_path,
+            event_type,
+            branch,
+            source_branch,
+            commit_hash,
+            author,
+            message,
+            timestamp
+        ],
     )?;
     Ok(rows > 0)
 }
@@ -251,16 +262,17 @@ pub fn query_churn(
          GROUP BY repo_path, file_path
          HAVING COUNT(*) >= ?3
          ORDER BY change_count DESC
-         LIMIT 20"
+         LIMIT 20",
     )?;
-    let entries = stmt.query_map(rusqlite::params![from, to, threshold], |row| {
-        Ok(ChurnEntry {
-            file_path: row.get(0)?,
-            repo_path: row.get(1)?,
-            change_count: row.get(2)?,
-        })
-    })?
-    .filter_map(|r| r.ok())
-    .collect();
+    let entries = stmt
+        .query_map(rusqlite::params![from, to, threshold], |row| {
+            Ok(ChurnEntry {
+                file_path: row.get(0)?,
+                repo_path: row.get(1)?,
+                change_count: row.get(2)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(entries)
 }

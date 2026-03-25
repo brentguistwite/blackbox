@@ -165,7 +165,8 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 pr_number: pr_num.clone(),
                 pr_title: pr_title.clone(),
             };
-            wtr.serialize(row).expect("CSV serialization should not fail");
+            wtr.serialize(row)
+                .expect("CSV serialization should not fail");
         }
         // Add review rows
         for review in &repo.reviews {
@@ -186,24 +187,34 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 pr_number: review.pr_number.to_string(),
                 pr_title: review.pr_title.clone(),
             };
-            wtr.serialize(row).expect("CSV serialization should not fail");
+            wtr.serialize(row)
+                .expect("CSV serialization should not fail");
         }
         // Add AI session rows
         for session in &repo.ai_sessions {
-            let status = if session.ended_at.is_some() { "ended" } else { "active" };
+            let status = if session.ended_at.is_some() {
+                "ended"
+            } else {
+                "active"
+            };
             let row = CsvRow {
                 period: summary.period_label.clone(),
                 repo_name: repo.repo_name.clone(),
                 event_type: "ai_session".to_string(),
                 branch: String::new(),
                 commit_hash: String::new(),
-                message: format!("Claude Code session ({}, {}m)", status, session.duration.num_minutes()),
+                message: format!(
+                    "Claude Code session ({}, {}m)",
+                    status,
+                    session.duration.num_minutes()
+                ),
                 timestamp: session.started_at.to_rfc3339(),
                 repo_estimated_minutes: repo.estimated_time.num_minutes(),
                 pr_number: String::new(),
                 pr_title: String::new(),
             };
-            wtr.serialize(row).expect("CSV serialization should not fail");
+            wtr.serialize(row)
+                .expect("CSV serialization should not fail");
         }
     }
     // If no rows written, still need header
@@ -248,8 +259,7 @@ pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
     // Hour-of-day chart
     lines.push("Commits by hour of day".bold().cyan().to_string());
     lines.push(String::new());
-    for hour in 0..24 {
-        let count = hourly[hour];
+    for (hour, &count) in hourly.iter().enumerate().take(24) {
         let label = format!("{:02}", hour);
         let bar = if hour_max > 0 {
             let width = (count as f64 / hour_max as f64 * bar_width as f64).round() as usize;
@@ -257,8 +267,17 @@ pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
         } else {
             String::new()
         };
-        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
-        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+        let count_str = if count > 0 {
+            format!(" {}", count)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "  {} {}{}",
+            label.dimmed(),
+            bar.green(),
+            count_str.dimmed()
+        ));
     }
 
     lines.push(String::new());
@@ -276,8 +295,17 @@ pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
         } else {
             String::new()
         };
-        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
-        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+        let count_str = if count > 0 {
+            format!(" {}", count)
+        } else {
+            String::new()
+        };
+        lines.push(format!(
+            "  {} {}{}",
+            label.dimmed(),
+            bar.green(),
+            count_str.dimmed()
+        ));
     }
 
     lines.join("\n")
@@ -288,7 +316,11 @@ pub fn render_streak(info: &crate::insights::StreakInfo) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if info.current_streak == 0 && info.longest_streak == 0 {
-        lines.push("No streak data — start committing to build a streak!".dimmed().to_string());
+        lines.push(
+            "No streak data — start committing to build a streak!"
+                .dimmed()
+                .to_string(),
+        );
         return lines.join("\n");
     }
 
@@ -345,8 +377,7 @@ pub fn render_heatmap(counts: &BTreeMap<NaiveDate, usize>, weeks: usize) -> Stri
     lines.push("Contribution Heatmap".bold().cyan().to_string());
     lines.push(String::new());
 
-    for row in 0..7 {
-        let label = day_labels[row];
+    for (row, label) in day_labels.iter().enumerate() {
         let mut cells = String::new();
         for w in 0..weeks {
             let date = start_monday + chrono::Duration::days(w as i64 * 7 + row as i64);
@@ -441,7 +472,11 @@ pub fn render_churn(entries: &[crate::db::ChurnEntry]) -> String {
     lines.push(String::new());
 
     for entry in entries {
-        let repo_name = entry.repo_path.rsplit('/').next().unwrap_or(&entry.repo_path);
+        let repo_name = entry
+            .repo_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&entry.repo_path);
         lines.push(format!(
             "  {} ({} changes, {})",
             entry.file_path.bold().green(),
@@ -477,7 +512,11 @@ pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
 
     let total: i64 = days.iter().map(|(_, m)| *m).sum();
     let active_days = days.iter().filter(|(_, m)| *m > 0).count();
-    let avg = if active_days > 0 { total / active_days as i64 } else { 0 };
+    let avg = if active_days > 0 {
+        total / active_days as i64
+    } else {
+        0
+    };
     let (peak_date, peak_mins) = days
         .iter()
         .max_by_key(|(_, m)| *m)
@@ -489,8 +528,15 @@ pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
 
     lines.push("Activity Trends (30 days)".bold().cyan().to_string());
     lines.push(String::new());
-    lines.push(format!("  {} {}", start_date.format("%b %-d").to_string().dimmed(), spark));
-    lines.push(format!("  {}", end_date.format("%b %-d").to_string().dimmed()));
+    lines.push(format!(
+        "  {} {}",
+        start_date.format("%b %-d").to_string().dimmed(),
+        spark
+    ));
+    lines.push(format!(
+        "  {}",
+        end_date.format("%b %-d").to_string().dimmed()
+    ));
     lines.push(String::new());
     lines.push(format!(
         "  {} {} min/day",
@@ -509,7 +555,10 @@ pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
 
 /// Render deep work focus report.
 /// `sessions` is sorted by duration descending. `total_estimated_minutes` is total work time for percentage calc.
-pub fn render_focus(sessions: &[crate::insights::DeepWorkSession], total_estimated_minutes: i64) -> String {
+pub fn render_focus(
+    sessions: &[crate::insights::DeepWorkSession],
+    total_estimated_minutes: i64,
+) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if sessions.is_empty() {
@@ -520,7 +569,11 @@ pub fn render_focus(sessions: &[crate::insights::DeepWorkSession], total_estimat
     lines.push("Deep Work".bold().cyan().to_string());
     lines.push(String::new());
 
-    let session_word = if sessions.len() == 1 { "session" } else { "sessions" };
+    let session_word = if sessions.len() == 1 {
+        "session"
+    } else {
+        "sessions"
+    };
     lines.push(format!(
         "  {} {} {}",
         "Sessions:".bold(),
@@ -568,11 +621,20 @@ pub fn render_retro(retro: &crate::insights::RetroSummary, sprint_label: &str) -
         return lines.join("\n");
     }
 
-    lines.push(format!("Sprint Retro ({})", sprint_label).bold().cyan().to_string());
+    lines.push(
+        format!("Sprint Retro ({})", sprint_label)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
     lines.push(String::new());
 
     // Activity overview
-    let repo_word = if retro.active_repos == 1 { "repo" } else { "repos" };
+    let repo_word = if retro.active_repos == 1 {
+        "repo"
+    } else {
+        "repos"
+    };
     lines.push(format!(
         "  {} {} commits, {} reviews across {} {}",
         "Activity:".bold(),
@@ -662,9 +724,15 @@ pub fn render_metrics(metrics: &crate::insights::DoraLiteMetrics) -> String {
     ));
 
     let (arrow, trend_label) = if metrics.velocity_trend > 0.05 {
-        ("▲".green().to_string(), format!("+{:.0}%", metrics.velocity_trend * 100.0))
+        (
+            "▲".green().to_string(),
+            format!("+{:.0}%", metrics.velocity_trend * 100.0),
+        )
     } else if metrics.velocity_trend < -0.05 {
-        ("▼".red().to_string(), format!("{:.0}%", metrics.velocity_trend * 100.0))
+        (
+            "▼".red().to_string(),
+            format!("{:.0}%", metrics.velocity_trend * 100.0),
+        )
     } else {
         ("→".yellow().to_string(), "flat".to_string())
     };
@@ -721,18 +789,30 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     }
 
     // Header
-    lines.push(format!("=== {} ===", summary.period_label).bold().cyan().to_string());
+    lines.push(
+        format!("=== {} ===", summary.period_label)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
     lines.push(String::new());
 
     // Summary line
-    let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
+    let repo_word = if summary.total_repos == 1 {
+        "repo"
+    } else {
+        "repos"
+    };
     let review_suffix = if summary.total_reviews > 0 {
         format!(", {} reviews", summary.total_reviews)
     } else {
         String::new()
     };
     let ai_suffix = if summary.total_ai_session_time > Duration::zero() {
-        format!(", AI sessions: {}", format_duration(summary.total_ai_session_time))
+        format!(
+            ", AI sessions: {}",
+            format_duration(summary.total_ai_session_time)
+        )
     } else {
         String::new()
     };
@@ -817,16 +897,18 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                 let icon = review_action_icon(&review.action);
                 lines.push(format!(
                     "    {} PR #{}: {}",
-                    icon,
-                    review.pr_number,
-                    review.pr_title,
+                    icon, review.pr_number, review.pr_title,
                 ));
             }
         }
 
         // AI Sessions
         if !repo.ai_sessions.is_empty() {
-            let total_session_time: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+            let total_session_time: Duration = repo
+                .ai_sessions
+                .iter()
+                .map(|s| s.duration)
+                .fold(Duration::zero(), |a, b| a + b);
             lines.push(format!(
                 "  {} {} Claude Code sessions ({})",
                 "~".dimmed(),
@@ -839,13 +921,11 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                 } else {
                     format_duration(session.duration)
                 };
-                let turns_str = session.turns.map(|t| format!(", {} turns", t)).unwrap_or_default();
-                lines.push(format!(
-                    "    {} {}{}",
-                    "o".magenta(),
-                    status,
-                    turns_str,
-                ));
+                let turns_str = session
+                    .turns
+                    .map(|t| format!(", {} turns", t))
+                    .unwrap_or_default();
+                lines.push(format!("    {} {}{}", "o".magenta(), status, turns_str,));
             }
         }
 
@@ -877,7 +957,10 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if summary.repos.is_empty() {
-        lines.push(format!("No activity recorded for {}.", summary.period_label));
+        lines.push(format!(
+            "No activity recorded for {}.",
+            summary.period_label
+        ));
         return lines.join("\n");
     }
 
@@ -886,7 +969,12 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     let header = if summary.period_label == "This Week" {
         let weekday = now.weekday().num_days_from_monday();
         let monday = now - Duration::days(weekday as i64);
-        format!("**{} ({} - {})**", summary.period_label, monday.format("%b %-d"), now.format("%b %-d"))
+        format!(
+            "**{} ({} - {})**",
+            summary.period_label,
+            monday.format("%b %-d"),
+            now.format("%b %-d")
+        )
     } else {
         format!("**{} ({})**", summary.period_label, now.format("%b %-d"))
     };
@@ -894,7 +982,11 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     lines.push(String::new());
 
     for repo in &summary.repos {
-        lines.push(format!("\u{2022} {} (~{})", repo.repo_name, format_duration_plain(repo.estimated_time)));
+        lines.push(format!(
+            "\u{2022} {} (~{})",
+            repo.repo_name,
+            format_duration_plain(repo.estimated_time)
+        ));
 
         // Group commits by branch
         let mut branch_commits: BTreeMap<&str, usize> = BTreeMap::new();
@@ -912,7 +1004,11 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
         // PR info
         if let Some(prs) = &repo.pr_info {
             for pr in prs {
-                let action = if pr.state == "MERGED" { "Merged" } else { "Opened" };
+                let action = if pr.state == "MERGED" {
+                    "Merged"
+                } else {
+                    "Opened"
+                };
                 lines.push(format!("  - {} PR #{}", action, pr.number));
             }
         }
@@ -920,7 +1016,9 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
         // Reviews — deduplicate by PR number
         if !repo.reviews.is_empty() {
             let mut seen = std::collections::BTreeSet::new();
-            let unique: Vec<String> = repo.reviews.iter()
+            let unique: Vec<String> = repo
+                .reviews
+                .iter()
                 .filter(|r| seen.insert(r.pr_number))
                 .map(|r| format!("PR #{}", r.pr_number))
                 .collect();
@@ -929,16 +1027,38 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
 
         // AI Sessions
         if !repo.ai_sessions.is_empty() {
-            let total: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
-            let word = if repo.ai_sessions.len() == 1 { "session" } else { "sessions" };
-            lines.push(format!("  - {} Claude Code {} ({})", repo.ai_sessions.len(), word, format_duration_plain(total)));
+            let total: Duration = repo
+                .ai_sessions
+                .iter()
+                .map(|s| s.duration)
+                .fold(Duration::zero(), |a, b| a + b);
+            let word = if repo.ai_sessions.len() == 1 {
+                "session"
+            } else {
+                "sessions"
+            };
+            lines.push(format!(
+                "  - {} Claude Code {} ({})",
+                repo.ai_sessions.len(),
+                word,
+                format_duration_plain(total)
+            ));
         }
     }
 
     // Total summary
     lines.push(String::new());
-    let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
-    lines.push(format!("Total: ~{} across {} {}", format_duration_plain(summary.total_estimated_time), summary.total_repos, repo_word));
+    let repo_word = if summary.total_repos == 1 {
+        "repo"
+    } else {
+        "repos"
+    };
+    lines.push(format!(
+        "Total: ~{} across {} {}",
+        format_duration_plain(summary.total_estimated_time),
+        summary.total_repos,
+        repo_word
+    ));
 
     lines.join("\n")
 }

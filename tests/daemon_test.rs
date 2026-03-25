@@ -75,7 +75,11 @@ fn test_start_stop_integration() {
     cmd.env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir);
     let output = cmd.arg("start").output().unwrap();
-    assert!(output.status.success(), "start failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "start failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // PID file should exist
     let pid_file = data_dir.join("blackbox").join("blackbox.pid");
@@ -100,7 +104,11 @@ fn test_start_stop_integration() {
     cmd.env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir);
     let output = cmd.arg("stop").output().unwrap();
-    assert!(output.status.success(), "stop failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stop failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // PID file should be gone
     std::thread::sleep(std::time::Duration::from_millis(200));
@@ -147,7 +155,10 @@ fn test_e2e_daemon_records_commit() {
     std::fs::create_dir_all(&bb_config).unwrap();
     let config_content = format!(
         "watch_dirs = [\"{}\"]\npoll_interval_secs = 10\n",
-        tmp.path().join("repos").to_string_lossy().replace('\\', "/")
+        tmp.path()
+            .join("repos")
+            .to_string_lossy()
+            .replace('\\', "/")
     );
     std::fs::write(bb_config.join("config.toml"), &config_content).unwrap();
 

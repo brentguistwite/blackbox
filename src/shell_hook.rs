@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 /// Generate a shell hook script for the given shell.
 /// The script calls `blackbox _notify-dir $PWD` on directory change.

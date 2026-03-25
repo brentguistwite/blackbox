@@ -155,10 +155,11 @@ impl RepoWatcher {
             // Check if this event is from a worktree parent dir
             if self.is_worktree_parent_event(path) {
                 // New entry in worktree parent dir — check if it's a valid worktree
-                if path.is_dir() && repo_scanner::is_worktree(path).is_some() {
-                    if !new_worktrees.contains(path) {
-                        new_worktrees.push(path.clone());
-                    }
+                if path.is_dir()
+                    && repo_scanner::is_worktree(path).is_some()
+                    && !new_worktrees.contains(path)
+                {
+                    new_worktrees.push(path.clone());
                 }
                 continue;
             }
@@ -207,7 +208,9 @@ impl RepoWatcher {
 
         if let Some(resolved_gitdir) = repo_scanner::is_worktree(&canon) {
             if resolved_gitdir.is_dir() {
-                let _ = self.watcher.watch(&resolved_gitdir, RecursiveMode::NonRecursive);
+                let _ = self
+                    .watcher
+                    .watch(&resolved_gitdir, RecursiveMode::NonRecursive);
                 self.watched_to_idx.push((resolved_gitdir, idx));
             }
         } else {
@@ -245,7 +248,11 @@ impl RepoWatcher {
 
     /// Get the directories being watched (for testing/debugging).
     pub fn watched_dirs(&self) -> Vec<&Path> {
-        let mut dirs: Vec<&Path> = self.watched_to_idx.iter().map(|(p, _)| p.as_path()).collect();
+        let mut dirs: Vec<&Path> = self
+            .watched_to_idx
+            .iter()
+            .map(|(p, _)| p.as_path())
+            .collect();
         for wt_dir in &self.worktree_parent_dirs {
             dirs.push(wt_dir.as_path());
         }

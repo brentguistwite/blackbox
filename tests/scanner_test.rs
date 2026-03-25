@@ -88,7 +88,10 @@ fn test_discover_multiple_watch_dirs() {
     init_repo(&tmp1.path().join("repo1"));
     init_repo(&tmp2.path().join("repo2"));
 
-    let repos = discover_repos(&[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()], None);
+    let repos = discover_repos(
+        &[tmp1.path().to_path_buf(), tmp2.path().to_path_buf()],
+        None,
+    );
     assert_eq!(repos.len(), 2);
 }
 
@@ -104,7 +107,10 @@ fn test_auto_scan_finds_repos_in_well_known_dirs() {
     let results = auto_scan_repos_from(home.path());
     assert_eq!(results.len(), 2);
 
-    let doc_entry = results.iter().find(|(p, _)| p.ends_with("Documents")).unwrap();
+    let doc_entry = results
+        .iter()
+        .find(|(p, _)| p.ends_with("Documents"))
+        .unwrap();
     assert_eq!(doc_entry.1.len(), 1);
     assert!(doc_entry.1[0].ends_with("project1"));
 
@@ -155,7 +161,10 @@ fn test_auto_scan_allows_config_and_local() {
 
     let results = auto_scan_repos_from(home.path());
     assert_eq!(results.len(), 2);
-    let names: Vec<String> = results.iter().map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+    let names: Vec<String> = results
+        .iter()
+        .map(|(p, _)| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
     assert!(names.contains(&".config".to_string()));
     assert!(names.contains(&".local".to_string()));
 }
@@ -249,7 +258,8 @@ fn test_walkdir_discovers_worktree_git_files() {
     let sig = git2::Signature::now("Test", "test@test.com").unwrap();
     let tree_id = repo.index().unwrap().write_tree().unwrap();
     let tree = repo.find_tree(tree_id).unwrap();
-    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+        .unwrap();
 
     // Manually create worktree structure
     let wt_path = tmp.path().join("parent/my_worktree");

@@ -45,7 +45,7 @@ fn pr_info_handles_malformed_json_gracefully() {
 
 #[test]
 fn match_prs_to_branch_finds_match() {
-    let prs = vec![
+    let prs = [
         PrInfo {
             number: 1,
             title: "First".to_string(),
@@ -59,7 +59,7 @@ fn match_prs_to_branch_finds_match() {
             head_ref_name: "feature-branch".to_string(),
         },
     ];
-    let branches = vec!["feature-branch".to_string()];
+    let branches = ["feature-branch".to_string()];
     let matched: Vec<&PrInfo> = prs
         .iter()
         .filter(|pr| branches.contains(&pr.head_ref_name))
@@ -70,13 +70,13 @@ fn match_prs_to_branch_finds_match() {
 
 #[test]
 fn match_prs_no_match_returns_empty() {
-    let prs = vec![PrInfo {
+    let prs = [PrInfo {
         number: 1,
         title: "First".to_string(),
         state: "OPEN".to_string(),
         head_ref_name: "other-branch".to_string(),
     }];
-    let branches = vec!["my-branch".to_string()];
+    let branches = ["my-branch".to_string()];
     let matched: Vec<&PrInfo> = prs
         .iter()
         .filter(|pr| branches.contains(&pr.head_ref_name))
@@ -89,7 +89,7 @@ fn match_prs_no_match_returns_empty() {
 #[test]
 fn all_state_prs_match_to_branches() {
     // enrich_with_all_prs fetches OPEN+MERGED+CLOSED — all states should match
-    let prs = vec![
+    let prs = [
         PrInfo {
             number: 1,
             title: "Open PR".to_string(),
@@ -115,7 +115,7 @@ fn all_state_prs_match_to_branches() {
             head_ref_name: "other-branch".to_string(),
         },
     ];
-    let branches = vec!["feature-a".to_string(), "feature-b".to_string()];
+    let branches = ["feature-a".to_string(), "feature-b".to_string()];
     let matched: Vec<&PrInfo> = prs
         .iter()
         .filter(|pr| branches.contains(&pr.head_ref_name))
@@ -183,28 +183,31 @@ fn gh_pr_with_reviews_handles_missing_reviews_field() {
 
 #[test]
 fn gh_review_filters_by_username() {
-    let reviews = vec![
+    let reviews = [
         GhReview {
-            author: GhReviewAuthor { login: "me".to_string() },
+            author: GhReviewAuthor {
+                login: "me".to_string(),
+            },
             state: "APPROVED".to_string(),
             submitted_at: "2026-03-15T10:00:00Z".to_string(),
         },
         GhReview {
-            author: GhReviewAuthor { login: "other".to_string() },
+            author: GhReviewAuthor {
+                login: "other".to_string(),
+            },
             state: "COMMENTED".to_string(),
             submitted_at: "2026-03-15T09:00:00Z".to_string(),
         },
         GhReview {
-            author: GhReviewAuthor { login: "me".to_string() },
+            author: GhReviewAuthor {
+                login: "me".to_string(),
+            },
             state: "CHANGES_REQUESTED".to_string(),
             submitted_at: "2026-03-15T11:00:00Z".to_string(),
         },
     ];
 
-    let mine: Vec<&GhReview> = reviews
-        .iter()
-        .filter(|r| r.author.login == "me")
-        .collect();
+    let mine: Vec<&GhReview> = reviews.iter().filter(|r| r.author.login == "me").collect();
     assert_eq!(mine.len(), 2);
     assert_eq!(mine[0].state, "APPROVED");
     assert_eq!(mine[1].state, "CHANGES_REQUESTED");

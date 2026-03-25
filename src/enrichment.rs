@@ -28,10 +28,7 @@ fn gh_available() -> bool {
 
 /// Fetch PRs for a repo directory with configurable state filter and limit.
 fn fetch_prs_impl(repo_path: &str, state: Option<&str>, limit: u32) -> Option<Vec<PrInfo>> {
-    let mut args = vec![
-        "pr", "list",
-        "--json", "number,title,state,headRefName",
-    ];
+    let mut args = vec!["pr", "list", "--json", "number,title,state,headRefName"];
     let limit_str = limit.to_string();
     if let Some(s) = state {
         args.extend(["--state", s]);
@@ -48,9 +45,7 @@ fn fetch_prs_impl(repo_path: &str, state: Option<&str>, limit: u32) -> Option<Ve
 
     let handle = std::thread::spawn(move || child.wait_with_output());
     match handle.join() {
-        Ok(Ok(output)) if output.status.success() => {
-            serde_json::from_slice(&output.stdout).ok()
-        }
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout).ok(),
         _ => None,
     }
 }
@@ -171,9 +166,7 @@ fn fetch_reviewed_prs(repo_path: &str) -> Option<Vec<GhPrWithReviews>> {
 
     let handle = std::thread::spawn(move || child.wait_with_output());
     match handle.join() {
-        Ok(Ok(output)) if output.status.success() => {
-            serde_json::from_slice(&output.stdout).ok()
-        }
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout).ok(),
         _ => None,
     }
 }

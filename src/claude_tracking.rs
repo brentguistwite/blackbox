@@ -62,11 +62,7 @@ fn find_session_log(projects_dir: &Path, session_cwd: &str, session_id: &str) ->
     let encoded = encode_project_path(session_cwd);
     let project_dir = projects_dir.join(&encoded);
     let jsonl = project_dir.join(format!("{}.jsonl", session_id));
-    if jsonl.exists() {
-        Some(jsonl)
-    } else {
-        None
-    }
+    if jsonl.exists() { Some(jsonl) } else { None }
 }
 
 /// Map a session's cwd to a watched repo path. Returns the repo path if cwd is
@@ -85,10 +81,7 @@ fn map_to_repo(session_cwd: &str, watched_repos: &[PathBuf]) -> String {
 /// Main entry point: poll Claude Code sessions and record to DB.
 /// Reads ~/.claude/sessions/ for active sessions, detects ended sessions,
 /// counts turns from conversation logs.
-pub fn poll_claude_sessions(
-    conn: &Connection,
-    watched_repos: &[PathBuf],
-) {
+pub fn poll_claude_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     poll_claude_sessions_with_paths(conn, watched_repos, None, None);
 }
 
@@ -126,7 +119,11 @@ pub fn poll_claude_sessions_with_paths(
         let started_at = millis_to_rfc3339(session.started_at);
 
         match db::insert_ai_session(conn, &repo_path, &session.session_id, &started_at) {
-            Ok(true) => log::debug!("Recorded new AI session: {} in {}", session.session_id, repo_path),
+            Ok(true) => log::debug!(
+                "Recorded new AI session: {} in {}",
+                session.session_id,
+                repo_path
+            ),
             Ok(false) => {} // already exists
             Err(e) => log::warn!("Failed to insert AI session {}: {}", session.session_id, e),
         }
@@ -159,7 +156,11 @@ pub fn poll_claude_sessions_with_paths(
                 .and_then(|path| count_turns(&path));
 
             match db::update_session_ended(conn, session_id, &ended_at, turns) {
-                Ok(true) => log::debug!("Marked AI session {} as ended (turns: {:?})", session_id, turns),
+                Ok(true) => log::debug!(
+                    "Marked AI session {} as ended (turns: {:?})",
+                    session_id,
+                    turns
+                ),
                 Ok(false) => {} // already ended
                 Err(e) => log::warn!("Failed to update AI session {}: {}", session_id, e),
             }

@@ -8,7 +8,11 @@ fn test_build_llm_config_no_key_errors() {
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("No LLM API key configured"), "got: {}", err);
-    assert!(err.contains("llm_api_key"), "should show config hint, got: {}", err);
+    assert!(
+        err.contains("llm_api_key"),
+        "should show config hint, got: {}",
+        err
+    );
 }
 
 #[test]
@@ -20,7 +24,11 @@ fn test_build_llm_config_anthropic_defaults() {
     let llm_config = llm::build_llm_config(&config).unwrap();
     assert_eq!(llm_config.provider, "anthropic");
     assert_eq!(llm_config.api_key, "sk-test-key");
-    assert!(llm_config.model.contains("claude"), "default model should be claude, got: {}", llm_config.model);
+    assert!(
+        llm_config.model.contains("claude"),
+        "default model should be claude, got: {}",
+        llm_config.model
+    );
     assert!(llm_config.base_url.is_none());
 }
 
@@ -56,7 +64,10 @@ fn test_build_llm_config_custom_base_url() {
         ..Config::default()
     };
     let llm_config = llm::build_llm_config(&config).unwrap();
-    assert_eq!(llm_config.base_url.as_deref(), Some("http://localhost:8080"));
+    assert_eq!(
+        llm_config.base_url.as_deref(),
+        Some("http://localhost:8080")
+    );
 }
 
 #[test]

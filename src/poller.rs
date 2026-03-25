@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -18,18 +18,21 @@ const FULL_SCAN_SECS: u64 = 30 * 60;
 /// Ensure a RepoState entry exists for a repo path, resolving worktrees.
 /// For worktrees, main_repo_path = resolved main repo root.
 /// For regular repos, main_repo_path = repo_path.
-fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoState>) {
-    repo_states.entry(repo_path.clone()).or_insert_with(|| {
-        let main_repo_path = if repo_scanner::is_worktree(repo_path).is_some() {
-            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.clone())
-        } else {
-            repo_path.clone()
-        };
-        RepoState {
-            main_repo_path,
-            ..Default::default()
-        }
-    });
+fn ensure_state(repo_path: &Path, repo_states: &mut HashMap<PathBuf, RepoState>) {
+    repo_states
+        .entry(repo_path.to_path_buf())
+        .or_insert_with(|| {
+            let main_repo_path = if repo_scanner::is_worktree(repo_path).is_some() {
+                repo_scanner::resolve_main_repo(repo_path)
+                    .unwrap_or_else(|_| repo_path.to_path_buf())
+            } else {
+                repo_path.to_path_buf()
+            };
+            RepoState {
+                main_repo_path,
+                ..Default::default()
+            }
+        });
 }
 
 /// Poll all repos for git activity.
@@ -43,7 +46,9 @@ fn poll_all_repos(
         ensure_state(repo_path, repo_states);
         let state = repo_states.get_mut(repo_path).unwrap();
         let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-        if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn, track_file_changes) {
+        if let Err(e) =
+            git_ops::poll_repo(repo_path, &db_repo_path, state, conn, track_file_changes)
+        {
             log::warn!("Error polling {}: {}", repo_path.display(), e);
         }
     }
@@ -74,7 +79,8 @@ fn full_scan(
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
 ) -> Vec<PathBuf> {
-    let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
+    let repos =
+        repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
     poll_all_repos(&repos, repo_states, conn, config.track_file_changes);
     enrichment::collect_reviews(&repos, conn);
     claude_tracking::poll_claude_sessions(conn, &repos);
@@ -111,7 +117,13 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 ensure_state(repo_path, &mut repo_states);
                 let state = repo_states.get_mut(repo_path).unwrap();
                 let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn, config.track_file_changes) {
+                if let Err(e) = git_ops::poll_repo(
+                    repo_path,
+                    &db_repo_path,
+                    state,
+                    &conn,
+                    config.track_file_changes,
+                ) {
                     log::warn!("Error polling {}: {}", repo_path.display(), e);
                 }
             }
@@ -122,7 +134,13 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
                 ensure_state(wt_path, &mut repo_states);
                 let state = repo_states.get_mut(wt_path).unwrap();
                 let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(wt_path, &db_repo_path, state, &conn, config.track_file_changes) {
+                if let Err(e) = git_ops::poll_repo(
+                    wt_path,
+                    &db_repo_path,
+                    state,
+                    &conn,
+                    config.track_file_changes,
+                ) {
                     log::warn!("Error polling new worktree {}: {}", wt_path.display(), e);
                 }
                 watcher.watch_repo(wt_path);
@@ -151,10 +169,7 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
             // Retry watcher setup on each full scan
             watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
             if watcher_opt.is_some() {
-                log::info!(
-                    "File watcher now available, watching {} repos",
-                    repos.len()
-                );
+                log::info!("File watcher now available, watching {} repos", repos.len());
                 last_full_scan = Instant::now();
             }
         }
