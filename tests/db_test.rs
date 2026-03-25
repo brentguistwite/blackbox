@@ -593,3 +593,161 @@ fn test_insert_activity_branch_switch() {
 
     assert_eq!(etype, "branch_switch");
 }
+
+#[test]
+fn test_file_changes_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='file_changes'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["file_changes"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(file_changes)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"commit_hash".to_string()));
+    assert!(columns.contains(&"file_path".to_string()));
+    assert!(columns.contains(&"lines_added".to_string()));
+    assert!(columns.contains(&"lines_removed".to_string()));
+    assert!(columns.contains(&"timestamp".to_string()));
+}
+
+#[test]
+fn test_insert_file_change() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_file_change(
+        &conn,
+        "/tmp/repo",
+        "abc123",
+        "src/main.rs",
+        "2026-03-21T12:00:00Z",
+    )
+    .unwrap();
+    assert!(inserted);
+
+    let (repo, hash, fpath, ts): (String, String, String, String) = conn
+        .query_row(
+            "SELECT repo_path, commit_hash, file_path, timestamp FROM file_changes WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+
+    assert_eq!(repo, "/tmp/repo");
+    assert_eq!(hash, "abc123");
+    assert_eq!(fpath, "src/main.rs");
+    assert_eq!(ts, "2026-03-21T12:00:00Z");
+}
+
+#[test]
+fn test_insert_file_change_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Same (repo_path, commit_hash, file_path) → ignored
+    let second = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/main.rs", "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    // Different file_path → not a duplicate
+    let third = db::insert_file_change(
+        &conn, "/tmp/repo", "abc123", "src/lib.rs", "2026-03-21T12:00:00Z",
+    ).unwrap();
+    assert!(third);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_changes", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 2);
+}
+
+#[test]
+fn test_query_churn_returns_files_above_threshold() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // src/main.rs modified in 3 commits, src/lib.rs in 1
+    for hash in ["aaa", "bbb", "ccc"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/main.rs", "2026-03-01T10:00:00Z").unwrap();
+    }
+    db::insert_file_change(&conn, "/repo", "aaa", "src/lib.rs", "2026-03-01T10:00:00Z").unwrap();
+
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].file_path, "src/main.rs");
+    assert_eq!(results[0].change_count, 3);
+    assert_eq!(results[0].repo_path, "/repo");
+}
+
+#[test]
+fn test_query_churn_ordered_by_count_desc_limited_to_20() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Create 22 files with decreasing change counts (22 down to 1)
+    for i in 1..=22 {
+        let fname = format!("file_{:02}.rs", i);
+        for j in 0..i {
+            let hash = format!("h{}_{}", i, j);
+            db::insert_file_change(&conn, "/repo", &hash, &fname, "2026-03-01T10:00:00Z").unwrap();
+        }
+    }
+
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 1).unwrap();
+    // Should be limited to 20
+    assert_eq!(results.len(), 20);
+    // First result should be file with most changes (22)
+    assert_eq!(results[0].file_path, "file_22.rs");
+    assert_eq!(results[0].change_count, 22);
+    // Last result should be file_03.rs (3 changes; file_02 and file_01 are cut off)
+    assert_eq!(results[19].file_path, "file_03.rs");
+    assert_eq!(results[19].change_count, 3);
+}
+
+#[test]
+fn test_query_churn_respects_time_range() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // 3 changes in range
+    for hash in ["a1", "a2", "a3"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", "2026-03-01T10:00:00Z").unwrap();
+    }
+    // 2 changes outside range
+    for hash in ["b1", "b2"] {
+        db::insert_file_change(&conn, "/repo", hash, "src/hot.rs", "2026-02-28T10:00:00Z").unwrap();
+    }
+
+    // Threshold 4: only 3 in range, should return empty
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 4).unwrap();
+    assert!(results.is_empty());
+
+    // Threshold 3: exactly 3 in range, should return 1
+    let results = db::query_churn(&conn, "2026-03-01T00:00:00Z", "2026-03-02T00:00:00Z", 3).unwrap();
+    assert_eq!(results.len(), 1);
+}

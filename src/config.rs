@@ -18,6 +18,21 @@ fn default_first_commit() -> u64 {
 fn default_worktree_dir_name() -> Option<String> {
     Some(".worktrees".to_string())
 }
+fn default_work_hours_start() -> u8 {
+    8
+}
+fn default_work_hours_end() -> u8 {
+    18
+}
+fn default_streak_rest_days() -> Vec<u8> {
+    vec![5, 6]
+}
+fn default_ticket_patterns() -> Vec<String> {
+    vec![r"[A-Z]+-\d+".to_string()]
+}
+fn default_deep_work_threshold_minutes() -> u64 {
+    60
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -41,6 +56,20 @@ pub struct Config {
     pub scan_dirs: Option<Vec<PathBuf>>,
     #[serde(default = "default_worktree_dir_name")]
     pub worktree_dir_name: Option<String>,
+    #[serde(default = "default_work_hours_start")]
+    pub work_hours_start: u8,
+    #[serde(default = "default_work_hours_end")]
+    pub work_hours_end: u8,
+    #[serde(default = "default_streak_rest_days")]
+    pub streak_rest_days: Vec<u8>,
+    #[serde(default)]
+    pub standup_webhook_url: Option<String>,
+    #[serde(default = "default_ticket_patterns")]
+    pub ticket_patterns: Vec<String>,
+    #[serde(default)]
+    pub track_file_changes: bool,
+    #[serde(default = "default_deep_work_threshold_minutes")]
+    pub deep_work_threshold_minutes: u64,
 }
 
 impl Default for Config {
@@ -56,6 +85,13 @@ impl Default for Config {
             llm_base_url: None,
             scan_dirs: None,
             worktree_dir_name: default_worktree_dir_name(),
+            work_hours_start: default_work_hours_start(),
+            work_hours_end: default_work_hours_end(),
+            streak_rest_days: default_streak_rest_days(),
+            standup_webhook_url: None,
+            ticket_patterns: default_ticket_patterns(),
+            track_file_changes: false,
+            deep_work_threshold_minutes: default_deep_work_threshold_minutes(),
         }
     }
 }
@@ -64,6 +100,18 @@ impl Config {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.poll_interval_secs < 10 {
             anyhow::bail!("poll_interval_secs must be >= 10, got {}", self.poll_interval_secs);
+        }
+        if self.work_hours_start > 23 {
+            anyhow::bail!("work_hours_start must be 0..=23, got {}", self.work_hours_start);
+        }
+        if self.work_hours_end > 23 {
+            anyhow::bail!("work_hours_end must be 0..=23, got {}", self.work_hours_end);
+        }
+        if self.work_hours_start >= self.work_hours_end {
+            anyhow::bail!(
+                "work_hours_start ({}) must be less than work_hours_end ({})",
+                self.work_hours_start, self.work_hours_end
+            );
         }
         Ok(())
     }

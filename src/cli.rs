@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use clap_complete::Shell;
 use crate::output::OutputFormat;
+use crate::query::QueryRange;
 
 #[derive(Parser)]
 #[command(name = "blackbox", version, about = "Flight recorder for your dev day")]
@@ -53,6 +54,30 @@ pub enum Commands {
         #[arg(long)]
         summarize: bool,
     },
+    /// Show yesterday's git activity
+    Yesterday {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
+    },
+    /// Query git activity for a custom date range
+    Query {
+        /// Start date (YYYY-MM-DD)
+        #[arg(long, requires = "to")]
+        from: String,
+        /// End date (YYYY-MM-DD)
+        #[arg(long, requires = "from")]
+        to: String,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Summarize activity using LLM
+        #[arg(long)]
+        summarize: bool,
+    },
     /// Register as OS service (launchd/systemd)
     Install,
     /// Remove OS service registration
@@ -80,6 +105,77 @@ pub enum Commands {
     },
     /// Run health checks and report status
     Doctor,
+    /// Show commit rhythm patterns (hour-of-day and day-of-week)
+    Rhythms {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Show coding streak info (current, longest, 30-day active days)
+    Streak,
+    /// Show GitHub-style contribution heatmap
+    Heatmap {
+        /// Number of weeks to display
+        #[arg(long, default_value = "26")]
+        weeks: usize,
+    },
+    /// Show time spent per ticket (extracted from branch names)
+    Tickets {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Show files with high code churn (frequently modified)
+    Churn {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Minimum change count to report
+        #[arg(long, default_value = "3")]
+        threshold: i64,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Show deep work sessions (sustained single-branch focus)
+    Focus {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Show 30-day activity trends sparkline
+    Trends {
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Sprint retrospective summary combining all insights
+    Retro {
+        /// Sprint length: 1w, 2w, 3w, 4w
+        #[arg(long, default_value = "2w")]
+        sprint: String,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
+    /// Personal DORA-lite metrics (throughput, PRs merged, velocity trend)
+    Metrics {
+        /// Time range to analyze
+        #[arg(long, default_value = "month")]
+        range: QueryRange,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Interactive setup wizard (full onboarding)
     Setup,
     /// Live TUI dashboard
@@ -92,6 +188,9 @@ pub enum Commands {
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
+        /// Webhook URL to POST standup (overrides config standup_webhook_url)
+        #[arg(long)]
+        webhook: Option<String>,
     },
 }
 

@@ -2,6 +2,7 @@ use blackbox::db;
 use blackbox::git_ops::{poll_repo, RepoState};
 use chrono::TimeZone;
 use git2::{Repository, Signature};
+use std::path::Path;
 use tempfile::TempDir;
 
 fn create_test_repo(tmp: &TempDir) -> Repository {
@@ -62,7 +63,7 @@ fn test_first_poll_backfills_todays_commits() {
 
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // State should be seeded
     assert!(state.last_commit_oid.is_some());
@@ -85,13 +86,13 @@ fn test_new_commit_detected() {
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
     // First poll: seed
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Add a commit
     add_commit(&repo, "second commit");
 
     // Second poll: should detect new commit
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // 2 commits: backfilled initial + new "second commit"
     assert_eq!(count_events(&conn, "commit"), 2);
@@ -116,13 +117,13 @@ fn test_branch_switch_detected() {
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
     // First poll: seed on main/master
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Switch to new branch
     create_branch_and_switch(&repo, "feature-x");
 
     // Second poll: should detect branch switch
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     assert_eq!(count_events(&conn, "branch_switch"), 1);
 
@@ -146,7 +147,7 @@ fn test_merge_commit_detected() {
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
     // First poll: seed
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Create a branch, add commit on it, switch back, merge
     let head_commit = repo.head().unwrap().peel_to_commit().unwrap();
@@ -179,7 +180,7 @@ fn test_merge_commit_detected() {
     // Poll again -- detect merge + the feature commit
     // Reset state branch to avoid branch_switch noise from our manual set_head
     state.last_head_branch = Some(default_branch.clone());
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     assert!(count_events(&conn, "merge") >= 1);
 
@@ -203,14 +204,14 @@ fn test_detached_head_handled() {
 
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Detach HEAD
     let head_oid = repo.head().unwrap().target().unwrap();
     repo.set_head_detached(head_oid).unwrap();
 
     // Should not panic
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
     // Branch should now be None
     assert!(state.last_head_branch.is_none());
 }
@@ -264,11 +265,11 @@ fn test_poll_repo_uses_db_repo_path_for_writes() {
     let mut state = RepoState::default();
     let custom_db_path = "/custom/main/repo";
     // Seed
-    poll_repo(repo_tmp.path(), custom_db_path, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), custom_db_path, &mut state, &conn, false).unwrap();
     // Add commit
     add_commit(&repo, "test commit");
     // Poll
-    poll_repo(repo_tmp.path(), custom_db_path, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), custom_db_path, &mut state, &conn, false).unwrap();
 
     let repo_path: String = conn
         .query_row(
@@ -296,7 +297,7 @@ fn test_worktree_commit_attributed_to_main_repo() {
         ..Default::default()
     };
     // Seed
-    poll_repo(&wt_path, &db_repo_path, &mut state, &conn).unwrap();
+    poll_repo(&wt_path, &db_repo_path, &mut state, &conn, false).unwrap();
 
     // Add commit in worktree
     let wt_repo = Repository::open(&wt_path).unwrap();
@@ -308,7 +309,7 @@ fn test_worktree_commit_attributed_to_main_repo() {
         .unwrap();
 
     // Poll
-    poll_repo(&wt_path, &db_repo_path, &mut state, &conn).unwrap();
+    poll_repo(&wt_path, &db_repo_path, &mut state, &conn, false).unwrap();
 
     // DB should have commit under main repo path, not worktree path
     let recorded_path: String = conn
@@ -383,8 +384,8 @@ fn test_two_worktrees_tracked_independently() {
     };
 
     // Seed both
-    poll_repo(&wt_a, &db_path, &mut state_a, &conn).unwrap();
-    poll_repo(&wt_b, &db_path, &mut state_b, &conn).unwrap();
+    poll_repo(&wt_a, &db_path, &mut state_a, &conn, false).unwrap();
+    poll_repo(&wt_b, &db_path, &mut state_b, &conn, false).unwrap();
 
     // Each should track its own branch
     assert_eq!(state_a.last_head_branch.as_deref(), Some("branch-a"));
@@ -398,8 +399,8 @@ fn test_two_worktrees_tracked_independently() {
         .commit(Some("HEAD"), &sig, &sig, "commit in a", &tree_a, &[&head_a])
         .unwrap();
 
-    poll_repo(&wt_a, &db_path, &mut state_a, &conn).unwrap();
-    poll_repo(&wt_b, &db_path, &mut state_b, &conn).unwrap();
+    poll_repo(&wt_a, &db_path, &mut state_a, &conn, false).unwrap();
+    poll_repo(&wt_b, &db_path, &mut state_b, &conn, false).unwrap();
 
     // 2 commits: backfilled initial (deduped across worktrees) + "commit in a"
     assert_eq!(count_events(&conn, "commit"), 2);
@@ -431,9 +432,9 @@ fn test_regular_repo_main_repo_path_equals_key() {
         ..Default::default()
     };
 
-    poll_repo(&path, &path_str, &mut state, &conn).unwrap();
+    poll_repo(&path, &path_str, &mut state, &conn, false).unwrap();
     add_commit(&repo, "regular commit");
-    poll_repo(&path, &path_str, &mut state, &conn).unwrap();
+    poll_repo(&path, &path_str, &mut state, &conn, false).unwrap();
 
     let recorded: String = conn
         .query_row(
@@ -494,7 +495,7 @@ fn test_first_poll_skips_old_commits() {
 
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Old commit should NOT be backfilled
     let total: i64 = conn
@@ -532,7 +533,7 @@ fn test_first_poll_cap_at_50() {
     let conn = open_test_db(&db_tmp);
     let mut state = RepoState::default();
     let path_str = repo_tmp.path().to_string_lossy();
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     let total: i64 = conn
         .query_row(
@@ -570,7 +571,7 @@ fn test_first_poll_dedup_existing() {
     .unwrap();
 
     let mut state = RepoState::default();
-    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
 
     // Should still be only 1 record (INSERT OR IGNORE dedup)
     let total: i64 = conn
@@ -581,4 +582,90 @@ fn test_first_poll_dedup_existing() {
         )
         .unwrap();
     assert_eq!(total, 1);
+}
+
+// --- File change tracking tests (US-017) ---
+
+/// Add a file to the repo workdir, stage it, and commit. Returns the new commit OID.
+fn add_file_and_commit(repo: &Repository, filename: &str, content: &str, message: &str) -> git2::Oid {
+    let sig = Signature::now("Test", "test@test.com").unwrap();
+    let workdir = repo.workdir().unwrap().to_path_buf();
+    std::fs::write(workdir.join(filename), content).unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(Path::new(filename)).unwrap();
+    index.write().unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_id).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head]).unwrap()
+}
+
+fn count_file_changes(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row("SELECT COUNT(*) FROM file_changes", [], |row| row.get(0)).unwrap()
+}
+
+#[test]
+fn test_file_changes_recorded_when_enabled() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // Seed with tracking disabled
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
+
+    // Add a commit with actual file changes
+    add_file_and_commit(&repo, "hello.txt", "hello world", "add hello");
+
+    // Poll with tracking enabled
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, true).unwrap();
+
+    // file_changes should have at least 1 entry for hello.txt
+    assert!(count_file_changes(&conn) >= 1);
+    let file_path: String = conn.query_row(
+        "SELECT file_path FROM file_changes LIMIT 1", [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(file_path, "hello.txt");
+}
+
+#[test]
+fn test_file_changes_not_recorded_when_disabled() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // Seed
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
+
+    // Add a commit with actual file changes
+    add_file_and_commit(&repo, "hello.txt", "hello world", "add hello");
+
+    // Poll with tracking disabled
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, false).unwrap();
+
+    // No file_changes should be recorded
+    assert_eq!(count_file_changes(&conn), 0);
+}
+
+#[test]
+fn test_file_changes_recorded_during_backfill() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    // Add a file commit before first poll (will be backfilled)
+    add_file_and_commit(&repo, "setup.txt", "setup content", "add setup");
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // First poll with tracking enabled — should backfill file changes too
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn, true).unwrap();
+
+    assert!(count_file_changes(&conn) >= 1);
 }

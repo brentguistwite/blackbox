@@ -1,5 +1,6 @@
 use crate::enrichment::PrInfo;
 use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
+use clap::ValueEnum;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -260,6 +261,32 @@ pub fn estimate_time(
     total
 }
 
+/// Shared time range for analytics commands.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum QueryRange {
+    Today,
+    Yesterday,
+    Week,
+    #[default]
+    Month,
+    All,
+}
+
+impl QueryRange {
+    pub fn to_range(&self) -> (DateTime<Utc>, DateTime<Utc>) {
+        match self {
+            QueryRange::Today => today_range(),
+            QueryRange::Yesterday => yesterday_range(),
+            QueryRange::Week => week_range(),
+            QueryRange::Month => month_range(),
+            QueryRange::All => {
+                let epoch = Utc.timestamp_opt(0, 0).single().expect("epoch");
+                (epoch, Utc::now())
+            }
+        }
+    }
+}
+
 /// Returns (start_of_today_local_as_utc, now_utc)
 pub fn today_range() -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();
@@ -272,6 +299,52 @@ pub fn today_range() -> (DateTime<Utc>, DateTime<Utc>) {
         .unwrap()
         .with_timezone(&Utc);
     (start_utc, now)
+}
+
+/// Returns (yesterday_midnight_local_as_utc, today_midnight_local_as_utc)
+pub fn yesterday_range() -> (DateTime<Utc>, DateTime<Utc>) {
+    let local_today = Local::now().date_naive();
+    let yesterday = local_today - Duration::days(1);
+    let start_local = yesterday.and_hms_opt(0, 0, 0).unwrap();
+    let end_local = local_today.and_hms_opt(0, 0, 0).unwrap();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+    let end_utc = Local
+        .from_local_datetime(&end_local)
+        .unwrap()
+        .with_timezone(&Utc);
+    (start_utc, end_utc)
+}
+
+/// Parse YYYY-MM-DD strings into UTC range. End is next-day midnight (exclusive).
+pub fn custom_range(from: &str, to: &str) -> anyhow::Result<(DateTime<Utc>, DateTime<Utc>)> {
+    use chrono::NaiveDate;
+    let from_date = NaiveDate::parse_from_str(from, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("Invalid from date '{}': {}", from, e))?;
+    let to_date = NaiveDate::parse_from_str(to, "%Y-%m-%d")
+        .map_err(|e| anyhow::anyhow!("Invalid to date '{}': {}", to, e))?;
+
+    if to_date < from_date {
+        anyhow::bail!("'from' date ({}) must be before 'to' date ({})", from, to);
+    }
+
+    let start_local = from_date.and_hms_opt(0, 0, 0).unwrap();
+    // Exclusive end: next day midnight
+    let end_date = to_date + Duration::days(1);
+    let end_local = end_date.and_hms_opt(0, 0, 0).unwrap();
+
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+    let end_utc = Local
+        .from_local_datetime(&end_local)
+        .unwrap()
+        .with_timezone(&Utc);
+
+    Ok((start_utc, end_utc))
 }
 
 /// Returns (monday_midnight_local_as_utc, now_utc)

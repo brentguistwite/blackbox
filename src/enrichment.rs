@@ -26,26 +26,27 @@ fn gh_available() -> bool {
     })
 }
 
-/// Fetch PRs for a repo directory. Returns None on any failure.
-fn fetch_prs(repo_path: &str) -> Option<Vec<PrInfo>> {
+/// Fetch PRs for a repo directory with configurable state filter and limit.
+fn fetch_prs_impl(repo_path: &str, state: Option<&str>, limit: u32) -> Option<Vec<PrInfo>> {
+    let mut args = vec![
+        "pr", "list",
+        "--json", "number,title,state,headRefName",
+    ];
+    let limit_str = limit.to_string();
+    if let Some(s) = state {
+        args.extend(["--state", s]);
+    }
+    args.extend(["--limit", &limit_str]);
+
     let child = Command::new("gh")
-        .args([
-            "pr",
-            "list",
-            "--json",
-            "number,title,state,headRefName",
-            "--limit",
-            "5",
-        ])
+        .args(&args)
         .current_dir(repo_path)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .ok()?;
 
-    // Wait with timeout via thread
     let handle = std::thread::spawn(move || child.wait_with_output());
-
     match handle.join() {
         Ok(Ok(output)) if output.status.success() => {
             serde_json::from_slice(&output.stdout).ok()
@@ -54,16 +55,15 @@ fn fetch_prs(repo_path: &str) -> Option<Vec<PrInfo>> {
     }
 }
 
-/// Enrich repo summaries with PR info from gh CLI.
-/// Silently returns on any failure (no gh, not authenticated, not GitHub repo, timeout).
-pub fn enrich_with_prs(repos: &mut [RepoSummary]) {
+/// Enrich repos with PRs, matching by branch. `state`/`limit` control the gh query.
+fn enrich_repos_with_prs(repos: &mut [RepoSummary], state: Option<&str>, limit: u32) {
     if !gh_available() {
         log::debug!("gh CLI not available, skipping PR enrichment");
         return;
     }
 
     for repo in repos.iter_mut() {
-        let prs = match fetch_prs(&repo.repo_path) {
+        let prs = match fetch_prs_impl(&repo.repo_path, state, limit) {
             Some(prs) => prs,
             None => {
                 log::debug!("Failed to fetch PRs for {}", repo.repo_path);
@@ -71,16 +71,33 @@ pub fn enrich_with_prs(repos: &mut [RepoSummary]) {
             }
         };
 
-        // Match PRs to repo branches
         let matched: Vec<PrInfo> = prs
             .into_iter()
             .filter(|pr| repo.branches.contains(&pr.head_ref_name))
             .collect();
 
         if !matched.is_empty() {
-            repo.pr_info = Some(matched);
+            if let Some(existing) = &mut repo.pr_info {
+                for pr in matched {
+                    if !existing.iter().any(|p| p.number == pr.number) {
+                        existing.push(pr);
+                    }
+                }
+            } else {
+                repo.pr_info = Some(matched);
+            }
         }
     }
+}
+
+/// Enrich repo summaries with open PRs from gh CLI.
+pub fn enrich_with_prs(repos: &mut [RepoSummary]) {
+    enrich_repos_with_prs(repos, None, 5);
+}
+
+/// Enrich repo summaries with all PRs (open+merged+closed) from gh CLI.
+pub fn enrich_with_all_prs(repos: &mut [RepoSummary]) {
+    enrich_repos_with_prs(repos, Some("all"), 30);
 }
 
 // --- Review activity tracking ---

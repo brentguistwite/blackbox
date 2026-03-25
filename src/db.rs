@@ -2,6 +2,14 @@ use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
 
+/// A file that was modified multiple times in a given period (code churn).
+#[derive(Debug)]
+pub struct ChurnEntry {
+    pub file_path: String,
+    pub change_count: i64,
+    pub repo_path: String,
+}
+
 pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -70,6 +78,19 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
                 SELECT MIN(id) FROM git_activity WHERE commit_hash IS NOT NULL GROUP BY repo_path, commit_hash
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
+        ),
+        // US-016: file_changes table for code churn tracking
+        M::up(
+            "CREATE TABLE IF NOT EXISTS file_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_added INTEGER NOT NULL DEFAULT 0,
+                lines_removed INTEGER NOT NULL DEFAULT 0,
+                timestamp TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_file_changes_dedup ON file_changes(repo_path, commit_hash, file_path);"
         ),
     ]);
     migrations.to_latest(&mut conn)?;
@@ -168,6 +189,25 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Insert a file change record. Returns true if inserted, false if duplicate.
+pub fn insert_file_change(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+    timestamp: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO file_changes (repo_path, commit_hash, file_path, timestamp)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![repo_path, commit_hash, file_path, timestamp],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
 /// (commits, merges) to leverage the partial unique index. Branch switch events
 /// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
@@ -194,4 +234,33 @@ pub fn insert_activity(
         rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
     )?;
     Ok(rows > 0)
+}
+
+/// Query files with high churn (modified >= threshold times) in a time range.
+/// Returns up to 20 results ordered by change count descending.
+pub fn query_churn(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+    threshold: i64,
+) -> anyhow::Result<Vec<ChurnEntry>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_path, repo_path, COUNT(*) as change_count
+         FROM file_changes
+         WHERE timestamp >= ?1 AND timestamp < ?2
+         GROUP BY repo_path, file_path
+         HAVING COUNT(*) >= ?3
+         ORDER BY change_count DESC
+         LIMIT 20"
+    )?;
+    let entries = stmt.query_map(rusqlite::params![from, to, threshold], |row| {
+        Ok(ChurnEntry {
+            file_path: row.get(0)?,
+            repo_path: row.get(1)?,
+            change_count: row.get(2)?,
+        })
+    })?
+    .filter_map(|r| r.ok())
+    .collect();
+    Ok(entries)
 }

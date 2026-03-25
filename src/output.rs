@@ -1,6 +1,6 @@
 use crate::enrichment::PrInfo;
 use crate::query::ActivitySummary;
-use chrono::{Datelike, Duration, Local};
+use chrono::{Datelike, Duration, Local, NaiveDate};
 use colored::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -229,6 +229,454 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
     }
     let data = String::from_utf8(wtr.into_inner().expect("flush")).expect("utf8");
     data.trim_end().to_string()
+}
+
+/// Render hour-of-day and day-of-week bar charts as a single ASCII report.
+pub fn render_rhythms(hourly: &[usize; 24], weekly: &[usize; 7]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    let hour_max = *hourly.iter().max().unwrap_or(&0);
+    let week_max = *weekly.iter().max().unwrap_or(&0);
+
+    if hour_max == 0 && week_max == 0 {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    let bar_width = 30;
+
+    // Hour-of-day chart
+    lines.push("Commits by hour of day".bold().cyan().to_string());
+    lines.push(String::new());
+    for hour in 0..24 {
+        let count = hourly[hour];
+        let label = format!("{:02}", hour);
+        let bar = if hour_max > 0 {
+            let width = (count as f64 / hour_max as f64 * bar_width as f64).round() as usize;
+            "█".repeat(width)
+        } else {
+            String::new()
+        };
+        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
+        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+    }
+
+    lines.push(String::new());
+
+    // Day-of-week chart
+    let day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    lines.push("Commits by day of week".bold().cyan().to_string());
+    lines.push(String::new());
+    for day in 0..7 {
+        let count = weekly[day];
+        let label = day_labels[day];
+        let bar = if week_max > 0 {
+            let width = (count as f64 / week_max as f64 * bar_width as f64).round() as usize;
+            "█".repeat(width)
+        } else {
+            String::new()
+        };
+        let count_str = if count > 0 { format!(" {}", count) } else { String::new() };
+        lines.push(format!("  {} {}{}", label.dimmed(), bar.green(), count_str.dimmed()));
+    }
+
+    lines.join("\n")
+}
+
+/// Render streak info as a concise report.
+pub fn render_streak(info: &crate::insights::StreakInfo) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if info.current_streak == 0 && info.longest_streak == 0 {
+        lines.push("No streak data — start committing to build a streak!".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Coding Streak".bold().cyan().to_string());
+    lines.push(String::new());
+    lines.push(format!(
+        "  {} {} days",
+        "Current streak:".bold(),
+        info.current_streak.to_string().green().bold(),
+    ));
+
+    let longest_suffix = match info.longest_streak_start {
+        Some(date) => format!(" (started {})", date),
+        None => String::new(),
+    };
+    lines.push(format!(
+        "  {} {} days{}",
+        "Longest streak:".bold(),
+        info.longest_streak.to_string().yellow().bold(),
+        longest_suffix.dimmed(),
+    ));
+
+    lines.push(format!(
+        "  {} {} days",
+        "Active (last 30d):".bold(),
+        info.active_days_30d,
+    ));
+
+    lines.join("\n")
+}
+
+/// Render a GitHub-style ASCII contribution heatmap.
+/// 7 rows (Mon-Sun) x `weeks` columns. Intensity: · (0), ░ (1-25%), ▒ (26-50%), ▓ (51-75%), █ (76-100%).
+pub fn render_heatmap(counts: &BTreeMap<NaiveDate, usize>, weeks: usize) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if counts.is_empty() {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    let max_count = *counts.values().max().unwrap_or(&0);
+
+    // Determine the end date (most recent Sunday) working back from today
+    let today = Local::now().date_naive();
+    // Find next Sunday (or today if Sunday) to be the last column's Sunday
+    let days_until_sun = (6 - today.weekday().num_days_from_monday() as i64 + 7) % 7;
+    let end_sunday = today + chrono::Duration::days(days_until_sun);
+    // Start Monday is `weeks` weeks before end_sunday's Monday
+    let start_monday = end_sunday - chrono::Duration::days(weeks as i64 * 7 - 1);
+
+    let day_labels = ["Mon", "   ", "Wed", "   ", "Fri", "   ", "Sun"];
+
+    lines.push("Contribution Heatmap".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for row in 0..7 {
+        let label = day_labels[row];
+        let mut cells = String::new();
+        for w in 0..weeks {
+            let date = start_monday + chrono::Duration::days(w as i64 * 7 + row as i64);
+            let count = counts.get(&date).copied().unwrap_or(0);
+            let ch = intensity_char(count, max_count);
+            cells.push_str(&format!("{}", ch.to_string().green()));
+        }
+        lines.push(format!("  {} {}", label.dimmed(), cells));
+    }
+
+    lines.join("\n")
+}
+
+const SPARK_CHARS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Map a slice of values to a Unicode sparkline string.
+/// Each value maps to one of ▁▂▃▄▅▆▇█ (linear interpolation, 0→▁, max→█).
+pub fn sparkline(values: &[usize]) -> String {
+    let max = values.iter().copied().max().unwrap_or(0);
+    values
+        .iter()
+        .map(|&v| {
+            if v == 0 || max == 0 {
+                SPARK_CHARS[0]
+            } else {
+                let idx = ((v as f64 / max as f64) * 7.0).min(7.0) as usize;
+                SPARK_CHARS[idx]
+            }
+        })
+        .collect()
+}
+
+fn intensity_char(count: usize, max: usize) -> char {
+    if count == 0 || max == 0 {
+        return '·';
+    }
+    let pct = (count as f64 / max as f64) * 100.0;
+    if pct <= 25.0 {
+        '░'
+    } else if pct <= 50.0 {
+        '▒'
+    } else if pct <= 75.0 {
+        '▓'
+    } else {
+        '█'
+    }
+}
+
+/// Render per-ticket summary table.
+pub fn render_tickets(tickets: &[crate::insights::TicketSummary]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if tickets.is_empty() {
+        lines.push("No ticket activity found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Ticket Summary".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for t in tickets {
+        let time = format_duration(Duration::minutes(t.estimated_minutes));
+        let commit_word = if t.commits == 1 { "commit" } else { "commits" };
+        lines.push(format!(
+            "  {} ({}, {} {})",
+            t.ticket_id.bold().green(),
+            time.yellow(),
+            t.commits,
+            commit_word,
+        ));
+        if !t.branches.is_empty() {
+            lines.push(format!("    branches: {}", t.branches.join(", ").dimmed()));
+        }
+        if !t.repos.is_empty() {
+            lines.push(format!("    repos:    {}", t.repos.join(", ").dimmed()));
+        }
+    }
+
+    lines.join("\n")
+}
+
+/// Render code churn report showing frequently modified files.
+pub fn render_churn(entries: &[crate::db::ChurnEntry]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if entries.is_empty() {
+        lines.push("No high-churn files found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Code Churn".bold().cyan().to_string());
+    lines.push(String::new());
+
+    for entry in entries {
+        let repo_name = entry.repo_path.rsplit('/').next().unwrap_or(&entry.repo_path);
+        lines.push(format!(
+            "  {} ({} changes, {})",
+            entry.file_path.bold().green(),
+            entry.change_count.to_string().yellow(),
+            repo_name.dimmed(),
+        ));
+    }
+
+    lines.join("\n")
+}
+
+/// Render 30-day activity trends sparkline with avg/peak stats.
+/// `daily_minutes` maps dates to estimated minutes of work.
+pub fn render_trends(daily_minutes: &BTreeMap<NaiveDate, i64>) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if daily_minutes.is_empty() {
+        lines.push("No activity in this range.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    // Build 30-day array ending at today
+    let today = Local::now().date_naive();
+    let mut days: Vec<(NaiveDate, i64)> = Vec::new();
+    for i in (0..30).rev() {
+        let date = today - Duration::days(i);
+        let mins = daily_minutes.get(&date).copied().unwrap_or(0);
+        days.push((date, mins));
+    }
+
+    let values: Vec<usize> = days.iter().map(|(_, m)| (*m).max(0) as usize).collect();
+    let spark = sparkline(&values);
+
+    let total: i64 = days.iter().map(|(_, m)| *m).sum();
+    let active_days = days.iter().filter(|(_, m)| *m > 0).count();
+    let avg = if active_days > 0 { total / active_days as i64 } else { 0 };
+    let (peak_date, peak_mins) = days
+        .iter()
+        .max_by_key(|(_, m)| *m)
+        .map(|(d, m)| (*d, *m))
+        .unwrap();
+
+    let start_date = days.first().unwrap().0;
+    let end_date = days.last().unwrap().0;
+
+    lines.push("Activity Trends (30 days)".bold().cyan().to_string());
+    lines.push(String::new());
+    lines.push(format!("  {} {}", start_date.format("%b %-d").to_string().dimmed(), spark));
+    lines.push(format!("  {}", end_date.format("%b %-d").to_string().dimmed()));
+    lines.push(String::new());
+    lines.push(format!(
+        "  {} {} min/day",
+        "Avg:".bold(),
+        avg.to_string().green(),
+    ));
+    lines.push(format!(
+        "  {} {} min ({})",
+        "Peak:".bold(),
+        peak_mins.to_string().yellow().bold(),
+        peak_date.format("%b %-d"),
+    ));
+
+    lines.join("\n")
+}
+
+/// Render deep work focus report.
+/// `sessions` is sorted by duration descending. `total_estimated_minutes` is total work time for percentage calc.
+pub fn render_focus(sessions: &[crate::insights::DeepWorkSession], total_estimated_minutes: i64) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if sessions.is_empty() {
+        lines.push("No deep work sessions found.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("Deep Work".bold().cyan().to_string());
+    lines.push(String::new());
+
+    let session_word = if sessions.len() == 1 { "session" } else { "sessions" };
+    lines.push(format!(
+        "  {} {} {}",
+        "Sessions:".bold(),
+        sessions.len().to_string().green().bold(),
+        session_word,
+    ));
+
+    // Longest session (first, since sorted desc)
+    let longest = &sessions[0];
+    lines.push(format!(
+        "  {} {} min on {} ({})",
+        "Longest:".bold(),
+        longest.duration_minutes.to_string().yellow().bold(),
+        longest.branch.green(),
+        longest.repo_name.dimmed(),
+    ));
+
+    let total_deep: i64 = sessions.iter().map(|s| s.duration_minutes).sum();
+    lines.push(format!(
+        "  {} {} min",
+        "Total deep work:".bold(),
+        total_deep.to_string().green(),
+    ));
+
+    let pct = if total_estimated_minutes > 0 {
+        (total_deep as f64 / total_estimated_minutes as f64 * 100.0).round() as i64
+    } else {
+        0
+    };
+    lines.push(format!(
+        "  {} {}% of total work time",
+        "Focus ratio:".bold(),
+        pct.to_string().yellow(),
+    ));
+
+    lines.join("\n")
+}
+
+/// Render sprint retrospective summary.
+pub fn render_retro(retro: &crate::insights::RetroSummary, sprint_label: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if retro.total_commits == 0 {
+        lines.push("No activity in this sprint.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push(format!("Sprint Retro ({})", sprint_label).bold().cyan().to_string());
+    lines.push(String::new());
+
+    // Activity overview
+    let repo_word = if retro.active_repos == 1 { "repo" } else { "repos" };
+    lines.push(format!(
+        "  {} {} commits, {} reviews across {} {}",
+        "Activity:".bold(),
+        retro.total_commits.to_string().green().bold(),
+        retro.total_reviews,
+        retro.active_repos,
+        repo_word,
+    ));
+    lines.push(format!(
+        "  {} {}",
+        "Time:".bold(),
+        format_duration(Duration::minutes(retro.total_estimated_minutes)).yellow(),
+    ));
+    if retro.total_ai_session_minutes > 0 {
+        lines.push(format!(
+            "  {} {}",
+            "AI sessions:".bold(),
+            format_duration(Duration::minutes(retro.total_ai_session_minutes)).magenta(),
+        ));
+    }
+    lines.push(String::new());
+
+    // Focus & deep work
+    lines.push(format!(
+        "  {} {} sessions, {} min total",
+        "Deep work:".bold(),
+        retro.deep_work_session_count.to_string().green(),
+        retro.total_deep_work_minutes.to_string().green(),
+    ));
+    lines.push(format!(
+        "  {} {:.0} (branch: {}, repo: {})",
+        "Focus score:".bold(),
+        retro.focus_score,
+        retro.branch_switches,
+        retro.repo_switches,
+    ));
+    lines.push(String::new());
+
+    // Work patterns
+    lines.push(format!(
+        "  {} {:.0}% after-hours, {} weekend days",
+        "Work-life:".bold(),
+        retro.after_hours_pct,
+        retro.weekend_days_active,
+    ));
+    if let Some(day) = retro.busiest_day {
+        lines.push(format!(
+            "  {} {} ({} commits)",
+            "Busiest day:".bold(),
+            day.to_string().yellow(),
+            retro.busiest_day_commits,
+        ));
+    }
+    if let Some(hour) = retro.peak_hour {
+        lines.push(format!(
+            "  {} {:02}:00 ({} commits)",
+            "Peak hour:".bold(),
+            hour,
+            retro.peak_hour_commits,
+        ));
+    }
+
+    lines.join("\n")
+}
+
+/// Render DORA-lite metrics report with trend arrows.
+pub fn render_metrics(metrics: &crate::insights::DoraLiteMetrics) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if metrics.commits_per_day == 0.0 && metrics.prs_merged_per_week == 0.0 {
+        lines.push("No metrics data available.".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push("DORA-lite Metrics".bold().cyan().to_string());
+    lines.push(String::new());
+
+    lines.push(format!(
+        "  {} {:.1} commits/day",
+        "Throughput:".bold(),
+        metrics.commits_per_day,
+    ));
+    lines.push(format!(
+        "  {} {:.1} PRs/week",
+        "PRs merged:".bold(),
+        metrics.prs_merged_per_week,
+    ));
+
+    let (arrow, trend_label) = if metrics.velocity_trend > 0.05 {
+        ("▲".green().to_string(), format!("+{:.0}%", metrics.velocity_trend * 100.0))
+    } else if metrics.velocity_trend < -0.05 {
+        ("▼".red().to_string(), format!("{:.0}%", metrics.velocity_trend * 100.0))
+    } else {
+        ("→".yellow().to_string(), "flat".to_string())
+    };
+
+    lines.push(format!(
+        "  {} {} {}",
+        "Velocity:".bold(),
+        arrow,
+        trend_label,
+    ));
+
+    lines.join("\n")
 }
 
 /// Format duration with ~ prefix. e.g. "~1h 30m", "~45m", "~0m"

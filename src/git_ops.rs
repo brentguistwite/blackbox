@@ -46,14 +46,51 @@ pub struct RepoState {
     pub main_repo_path: PathBuf,
 }
 
+/// Extract changed file paths from a commit by diffing against its parent tree.
+/// For root commits (no parent), diffs against an empty tree.
+fn record_file_changes(
+    repo: &Repository,
+    commit: &git2::Commit,
+    db_repo_path: &str,
+    commit_hash: &str,
+    timestamp: &str,
+    conn: &Connection,
+) {
+    let commit_tree = match commit.tree() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let parent_tree = if commit.parent_count() > 0 {
+        commit.parent(0).ok().and_then(|p| p.tree().ok())
+    } else {
+        None
+    };
+    let diff = match repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    for delta in diff.deltas() {
+        let file_path = delta
+            .new_file()
+            .path()
+            .or_else(|| delta.old_file().path())
+            .map(|p| p.to_string_lossy().to_string());
+        if let Some(fp) = file_path {
+            let _ = db::insert_file_change(conn, db_repo_path, commit_hash, &fp, timestamp);
+        }
+    }
+}
+
 /// Poll a repo for git activity.
 /// `repo_path` = filesystem path for git2 to open (worktree or regular).
 /// `db_repo_path` = path string for DB writes (always main repo path).
+/// `track_file_changes` = when true, record per-file diffs for each commit.
 pub fn poll_repo(
     repo_path: &Path,
     db_repo_path: &str,
     state: &mut RepoState,
     conn: &Connection,
+    track_file_changes: bool,
 ) -> anyhow::Result<()> {
     let repo = Repository::open(repo_path)?;
 
@@ -174,6 +211,10 @@ pub fn poll_repo(
                     &ts,
                 )?;
             }
+
+            if track_file_changes {
+                record_file_changes(&repo, &commit, db_repo_path, &hash, &ts, conn);
+            }
         }
 
         return Ok(());
@@ -233,6 +274,10 @@ pub fn poll_repo(
                     Some(&message),
                     &ts,
                 )?;
+            }
+
+            if track_file_changes {
+                record_file_changes(&repo, &commit, db_repo_path, &hash, &ts, conn);
             }
         }
     }

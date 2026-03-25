@@ -216,3 +216,194 @@ fn test_default_config_worktree_dir_name() {
     let cfg = Config::default();
     assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
 }
+
+// --- US-008: work_hours config fields ---
+
+#[test]
+fn test_default_config_work_hours() {
+    let cfg = Config::default();
+    assert_eq!(cfg.work_hours_start, 8);
+    assert_eq!(cfg.work_hours_end, 18);
+}
+
+#[test]
+fn test_parse_work_hours_missing_uses_defaults() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.work_hours_start, 8);
+    assert_eq!(cfg.work_hours_end, 18);
+}
+
+#[test]
+fn test_parse_work_hours_custom_values() {
+    let toml_str = r#"
+        watch_dirs = []
+        work_hours_start = 9
+        work_hours_end = 17
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.work_hours_start, 9);
+    assert_eq!(cfg.work_hours_end, 17);
+}
+
+#[test]
+fn test_validate_work_hours_start_too_high() {
+    let cfg = Config {
+        work_hours_start: 24,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_validate_work_hours_end_too_high() {
+    let cfg = Config {
+        work_hours_end: 25,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn test_validate_work_hours_23_is_ok() {
+    let cfg = Config {
+        work_hours_start: 0,
+        work_hours_end: 23,
+        ..Config::default()
+    };
+    assert!(cfg.validate().is_ok());
+}
+
+// --- US-009: streak_rest_days ---
+
+#[test]
+fn test_default_config_streak_rest_days() {
+    let cfg = Config::default();
+    assert_eq!(cfg.streak_rest_days, vec![5, 6]);
+}
+
+#[test]
+fn test_parse_streak_rest_days_missing_uses_defaults() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.streak_rest_days, vec![5, 6]);
+}
+
+#[test]
+fn test_parse_streak_rest_days_custom_values() {
+    let toml_str = r#"
+        watch_dirs = []
+        streak_rest_days = [6]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.streak_rest_days, vec![6]);
+}
+
+// --- US-011: standup_webhook_url ---
+
+#[test]
+fn test_default_config_standup_webhook_url() {
+    let cfg = Config::default();
+    assert!(cfg.standup_webhook_url.is_none());
+}
+
+#[test]
+fn test_parse_standup_webhook_url_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.standup_webhook_url.is_none());
+}
+
+#[test]
+fn test_parse_standup_webhook_url_custom_value() {
+    let toml_str = r#"
+        watch_dirs = []
+        standup_webhook_url = "https://hooks.slack.com/services/T00/B00/xxx"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.standup_webhook_url.as_deref(), Some("https://hooks.slack.com/services/T00/B00/xxx"));
+}
+
+// --- US-013: ticket_patterns ---
+
+#[test]
+fn test_default_config_ticket_patterns() {
+    let cfg = Config::default();
+    assert_eq!(cfg.ticket_patterns, vec![r"[A-Z]+-\d+".to_string()]);
+}
+
+#[test]
+fn test_parse_ticket_patterns_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.ticket_patterns, vec![r"[A-Z]+-\d+".to_string()]);
+}
+
+#[test]
+fn test_parse_ticket_patterns_custom_values() {
+    let toml_str = "watch_dirs = []\nticket_patterns = [\"[A-Z]+-\\\\d+\", \"#\\\\d+\"]\n";
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.ticket_patterns.len(), 2);
+}
+
+// --- US-016: track_file_changes ---
+
+#[test]
+fn test_default_config_track_file_changes() {
+    let cfg = Config::default();
+    assert!(!cfg.track_file_changes);
+}
+
+#[test]
+fn test_parse_track_file_changes_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.track_file_changes);
+}
+
+#[test]
+fn test_parse_track_file_changes_true() {
+    let toml_str = r#"
+        watch_dirs = []
+        track_file_changes = true
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.track_file_changes);
+}
+
+// --- US-019: deep_work_threshold_minutes ---
+
+#[test]
+fn test_default_config_deep_work_threshold() {
+    let cfg = Config::default();
+    assert_eq!(cfg.deep_work_threshold_minutes, 60);
+}
+
+#[test]
+fn test_parse_deep_work_threshold_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.deep_work_threshold_minutes, 60);
+}
+
+#[test]
+fn test_parse_deep_work_threshold_custom() {
+    let toml_str = r#"
+        watch_dirs = []
+        deep_work_threshold_minutes = 90
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.deep_work_threshold_minutes, 90);
+}

@@ -316,13 +316,48 @@ pub fn run_doctor() -> anyhow::Result<bool> {
     let config_ok = config_result.passed;
     results.push(config_result);
 
-    if config_ok
-        && let Ok(config) = crate::config::load_config()
-    {
-        results.extend(check_watch_dirs(&config));
+    let loaded_config = if config_ok {
+        crate::config::load_config().ok()
+    } else {
+        None
+    };
+
+    if let Some(ref config) = loaded_config {
+        results.extend(check_watch_dirs(config));
     }
 
-    results.push(check_database());
+    let db_result = check_database();
+    let db_ok = db_result.passed;
+    results.push(db_result);
+
+    // Work-hours warning: query last 7 days if both config and DB are available
+    if let Some(ref config) = loaded_config {
+        if db_ok {
+            if let Ok(data_dir) = crate::config::data_dir() {
+                let db_path = data_dir.join("blackbox.db");
+                if let Ok(conn) = crate::db::open_db(&db_path) {
+                    let now = chrono::Utc::now();
+                    let week_ago = now - chrono::Duration::days(7);
+                    if let Ok(repos) = crate::query::query_activity(
+                        &conn,
+                        week_ago,
+                        now,
+                        config.session_gap_minutes,
+                        config.first_commit_minutes,
+                    ) {
+                        let analysis = crate::insights::work_hours_analysis(
+                            &repos,
+                            config.work_hours_start,
+                            config.work_hours_end,
+                        );
+                        if analysis.total_commits > 0 {
+                            results.push(check_work_hours(analysis.after_hours_pct));
+                        }
+                    }
+                }
+            }
+        }
+    }
     results.push(check_daemon());
     results.push(check_gh_cli());
     results.push(check_shell_hook());
@@ -354,9 +389,49 @@ pub fn run_doctor() -> anyhow::Result<bool> {
     Ok(all_passed)
 }
 
+/// Check after-hours commit percentage and warn if above 30%.
+pub fn check_work_hours(after_hours_pct: f64) -> CheckResult {
+    if after_hours_pct > 30.0 {
+        CheckResult {
+            name: "Work-life balance".into(),
+            passed: false,
+            detail: format!("{:.0}% of commits in last 7 days were outside work hours", after_hours_pct),
+            suggestion: Some("Consider adjusting work_hours_start/work_hours_end in config, or take a break!".into()),
+        }
+    } else {
+        CheckResult {
+            name: "Work-life balance".into(),
+            passed: true,
+            detail: format!("{:.0}% after-hours commits (last 7 days)", after_hours_pct),
+            suggestion: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_work_hours_warns_above_30_pct() {
+        let result = check_work_hours(35.0);
+        assert!(!result.passed);
+        assert!(result.detail.contains("35%"));
+        assert!(result.suggestion.is_some());
+    }
+
+    #[test]
+    fn check_work_hours_passes_at_30_pct() {
+        let result = check_work_hours(30.0);
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn check_work_hours_passes_at_zero() {
+        let result = check_work_hours(0.0);
+        assert!(result.passed);
+        assert!(result.detail.contains("0%"));
+    }
 
     #[cfg(target_os = "macos")]
     #[test]
