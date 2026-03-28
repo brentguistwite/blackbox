@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
@@ -110,6 +111,111 @@ pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result
         reviews,
         ai_sessions,
     })
+}
+
+#[derive(Debug)]
+pub struct LanguageBreakdown {
+    pub language: String,
+    pub file_count: usize,
+    pub line_count: usize,
+    pub percent: f64,
+}
+
+/// Walk HEAD tree via git2, count lines per extension, map to languages.
+pub fn compute_language_breakdown(repo_path: &Path) -> anyhow::Result<Vec<LanguageBreakdown>> {
+    let repo = match git2::Repository::open(repo_path) {
+        Ok(r) => r,
+        Err(_) => return Ok(vec![]),
+    };
+    let head = match repo.head() {
+        Ok(h) => h,
+        Err(_) => return Ok(vec![]),
+    };
+    let tree = match head.peel_to_tree() {
+        Ok(t) => t,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let mut ext_counts: HashMap<String, (usize, usize)> = HashMap::new();
+
+    tree.walk(git2::TreeWalkMode::PreOrder, |_, entry| {
+        if entry.kind() != Some(git2::ObjectType::Blob) {
+            return git2::TreeWalkResult::Ok;
+        }
+        let name = match entry.name() {
+            Some(n) => n,
+            None => return git2::TreeWalkResult::Ok,
+        };
+        let ext = match Path::new(name).extension().and_then(|e| e.to_str()) {
+            Some(e) => e.to_lowercase(),
+            None => return git2::TreeWalkResult::Ok,
+        };
+        let blob = match repo.find_blob(entry.id()) {
+            Ok(b) => b,
+            Err(_) => return git2::TreeWalkResult::Ok,
+        };
+        if blob.is_binary() {
+            return git2::TreeWalkResult::Ok;
+        }
+        let lines = blob.content().split(|&b| b == b'\n').count();
+        let e = ext_counts.entry(ext).or_insert((0, 0));
+        e.0 += 1;
+        e.1 += lines;
+        git2::TreeWalkResult::Ok
+    })?;
+
+    let total_lines: usize = ext_counts.values().map(|(_, l)| l).sum();
+    if total_lines == 0 {
+        return Ok(vec![]);
+    }
+
+    let mut lang_map: HashMap<String, (usize, usize)> = HashMap::new();
+    for (ext, (fc, lc)) in &ext_counts {
+        let lang = ext_to_language(ext);
+        let e = lang_map.entry(lang).or_insert((0, 0));
+        e.0 += fc;
+        e.1 += lc;
+    }
+
+    let mut result: Vec<LanguageBreakdown> = lang_map
+        .into_iter()
+        .map(|(language, (file_count, line_count))| LanguageBreakdown {
+            language,
+            file_count,
+            line_count,
+            percent: line_count as f64 / total_lines as f64 * 100.0,
+        })
+        .collect();
+    result.sort_by(|a, b| b.line_count.cmp(&a.line_count));
+    Ok(result)
+}
+
+fn ext_to_language(ext: &str) -> String {
+    match ext {
+        "rs" => "Rust",
+        "ts" | "tsx" => "TypeScript",
+        "js" | "jsx" => "JavaScript",
+        "py" => "Python",
+        "go" => "Go",
+        "java" => "Java",
+        "kt" => "Kotlin",
+        "swift" => "Swift",
+        "rb" => "Ruby",
+        "c" => "C",
+        "cpp" | "cc" => "C++",
+        "h" => "C/C++ Header",
+        "cs" => "C#",
+        "sh" | "bash" | "zsh" | "fish" => "Shell",
+        "toml" => "TOML",
+        "yaml" | "yml" => "YAML",
+        "json" => "JSON",
+        "md" => "Markdown",
+        "html" => "HTML",
+        "css" | "scss" => "CSS",
+        "sql" => "SQL",
+        other => other,
+    }
+    .to_string()
 }
 
 /// Look up repo_path in DB via exact or prefix match.
