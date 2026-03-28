@@ -532,6 +532,67 @@ fn query_ai_sessions(
     Ok(map)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AfterHoursStats {
+    pub total_commits: u32,
+    pub after_hours_commits: u32,
+    pub weekend_commits: u32,
+    pub after_hours_ratio: f64,
+    pub weekend_ratio: f64,
+}
+
+/// Count commits during after-hours (local hour < 9 or >= 18) and on weekends (Sat/Sun local).
+/// Returns counts and ratios. Ratios are 0.0 when total_commits == 0.
+/// Only counts event_type='commit'.
+pub fn after_hours_ratio(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<AfterHoursStats> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2",
+    )?;
+
+    let mut total: u32 = 0;
+    let mut after_hours: u32 = 0;
+    let mut weekend: u32 = 0;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        let local_dt = utc_dt.with_timezone(&Local);
+        let hour = local_dt.hour();
+        let dow = local_dt.weekday().num_days_from_monday();
+
+        total += 1;
+        if !(9..18).contains(&hour) {
+            after_hours += 1;
+        }
+        if dow >= 5 {
+            weekend += 1;
+        }
+    }
+
+    let ah_ratio = if total > 0 { after_hours as f64 / total as f64 } else { 0.0 };
+    let wk_ratio = if total > 0 { weekend as f64 / total as f64 } else { 0.0 };
+
+    Ok(AfterHoursStats {
+        total_commits: total,
+        after_hours_commits: after_hours,
+        weekend_commits: weekend,
+        after_hours_ratio: ah_ratio,
+        weekend_ratio: wk_ratio,
+    })
+}
+
 /// Count commits per local hour of day. Returns [u32; 24] indexed 0–23.
 /// Only counts event_type='commit'. Converts UTC timestamps to local time before bucketing.
 pub fn commit_hour_histogram(
