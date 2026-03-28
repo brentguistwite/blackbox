@@ -551,6 +551,24 @@ pub fn render_after_hours_stats(stats: &crate::query::AfterHoursStats) -> String
     lines.join("\n")
 }
 
+/// Render session length distribution as compact stats line.
+/// Shows median, p90, mean. No flow/quality scoring language.
+pub fn render_session_distribution(dist: &crate::query::SessionDistribution) -> String {
+    if dist.sessions.is_empty() {
+        return "No sessions detected in this period".to_string();
+    }
+
+    let session_word = if dist.sessions.len() == 1 { "session" } else { "sessions" };
+    format!(
+        "Session lengths ({} {}):  median {}  p90 {}  mean {}",
+        dist.sessions.len(),
+        session_word,
+        format_duration(Duration::minutes(dist.median_minutes)),
+        format_duration(Duration::minutes(dist.p90_minutes)),
+        format_duration(Duration::minutes(dist.mean_minutes)),
+    )
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));

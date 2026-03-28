@@ -1,5 +1,5 @@
 use blackbox::db::{insert_activity, open_db};
-use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats};
+use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats, render_session_distribution};
 use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio, session_length_distribution};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
@@ -667,4 +667,68 @@ fn session_distribution_only_counts_commits() {
         .filter(|d| d.num_minutes() >= 5).collect();
     assert!(total_sessions_over_5min.len() <= 1,
         "non-commit events should not create sessions");
+}
+
+// === US-008: render_session_distribution tests ===
+
+#[test]
+fn render_session_distribution_zero_sessions() {
+    colored::control::set_override(false);
+    let dist = blackbox::query::SessionDistribution {
+        sessions: vec![],
+        median_minutes: 0,
+        p90_minutes: 0,
+        mean_minutes: 0,
+    };
+    let output = render_session_distribution(&dist);
+    assert!(output.contains("No sessions detected"), "should show empty message, got: {output}");
+}
+
+#[test]
+fn render_session_distribution_shows_stats() {
+    colored::control::set_override(false);
+    let dist = blackbox::query::SessionDistribution {
+        sessions: vec![chrono::Duration::minutes(45), chrono::Duration::minutes(130)],
+        median_minutes: 45,
+        p90_minutes: 130,
+        mean_minutes: 65,
+    };
+    let output = render_session_distribution(&dist);
+    assert!(output.contains("2 sessions"), "should show session count, got: {output}");
+    assert!(output.contains("median"), "should show median label");
+    assert!(output.contains("p90"), "should show p90 label");
+    assert!(output.contains("mean"), "should show mean label");
+    assert!(output.contains("~45m"), "should format median as ~45m");
+    assert!(output.contains("~2h 10m"), "should format p90 as ~2h 10m");
+    assert!(output.contains("~1h 5m"), "should format mean as ~1h 5m");
+}
+
+#[test]
+fn render_session_distribution_single_session() {
+    colored::control::set_override(false);
+    let dist = blackbox::query::SessionDistribution {
+        sessions: vec![chrono::Duration::minutes(30)],
+        median_minutes: 30,
+        p90_minutes: 30,
+        mean_minutes: 30,
+    };
+    let output = render_session_distribution(&dist);
+    assert!(output.contains("1 session"), "singular 'session' for count=1, got: {output}");
+    assert!(!output.contains("1 sessions"), "should not say '1 sessions'");
+}
+
+#[test]
+fn render_session_distribution_no_evaluative_language() {
+    colored::control::set_override(false);
+    let dist = blackbox::query::SessionDistribution {
+        sessions: vec![chrono::Duration::minutes(10)],
+        median_minutes: 10,
+        p90_minutes: 10,
+        mean_minutes: 10,
+    };
+    let output = render_session_distribution(&dist).to_lowercase();
+    assert!(!output.contains("good"), "no evaluative language");
+    assert!(!output.contains("bad"), "no evaluative language");
+    assert!(!output.contains("healthy"), "no evaluative language");
+    assert!(!output.contains("warning"), "no evaluative language");
 }
