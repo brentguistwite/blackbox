@@ -61,11 +61,26 @@ pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
     }
 }
 
-/// Time estimation v2: git events + AI sessions + presence intervals, adaptive thresholds.
-/// No presence data. AI session intervals must be pre-clipped to query window.
+/// Time estimation v2: adaptive thresholds from commit cadence.
 ///
-/// With empty ai_sessions and < 2 commits, falls back to config gap/credit values
-/// (matching legacy behavior).
+/// # Inputs
+/// - `events` — git activity (commits, branch switches) sorted chronologically.
+/// - `ai_sessions` — AI tool session intervals, pre-clipped to query window.
+/// - `presence_intervals` — directory-presence intervals from shell hooks.
+///   Used to anchor git session starts: if a presence interval started before the
+///   tentative credit window and overlaps it, the session start is pulled back to
+///   `presence.start` instead of applying the estimated credit. This yields a more
+///   accurate start time when the developer was provably in the directory before
+///   committing. Presence-anchored sessions skip AI credit suppression.
+/// - `session_gap_minutes` / `first_commit_minutes` — fallback thresholds when < 2 commits.
+///
+/// # Algorithm
+/// 1. Compute adaptive `effective_gap` / `effective_credit` from median commit gap.
+/// 2. Group git events into sessions → tentative intervals `[first_event - credit, last_event]`.
+/// 3. Presence anchoring — replace tentative start with `presence.start` when applicable.
+/// 4. AI credit suppression — if an AI session overlaps the credit window (and not anchored),
+///    shrink session start to `first_event`.
+/// 5. Union git + AI + presence intervals, merge overlapping, return total duration.
 pub fn estimate_time_v2(
     events: &[ActivityEvent],
     ai_sessions: &[TimeInterval],
