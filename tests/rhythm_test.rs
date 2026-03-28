@@ -732,3 +732,72 @@ fn render_session_distribution_no_evaluative_language() {
     assert!(!output.contains("healthy"), "no evaluative language");
     assert!(!output.contains("warning"), "no evaluative language");
 }
+
+// === US-015: Integration test: after-hours ratio ===
+
+#[test]
+fn after_hours_integration_core_and_after_hours_ratio() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-15 = Wednesday
+    // 3 commits at 12:00 UTC (core hours in most zones)
+    for i in 0..3 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("core{i}")), Some("dev"), Some("msg"), "2025-01-15T12:00:00Z").unwrap();
+    }
+    // 1 commit at 02:00 UTC (after hours in most zones)
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("late0"), Some("dev"), Some("msg"), "2025-01-15T02:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 4);
+
+    // Dynamically compute expected after-hours count based on local tz
+    let ah_12 = is_after_hours_local(2025, 1, 15, 12);
+    let ah_02 = is_after_hours_local(2025, 1, 15, 2);
+    let expected_ah = if ah_12 { 3 } else { 0 } + if ah_02 { 1 } else { 0 };
+    assert_eq!(stats.after_hours_commits, expected_ah);
+
+    let expected_ratio = expected_ah as f64 / 4.0;
+    assert!((stats.after_hours_ratio - expected_ratio).abs() < 1e-9,
+        "expected ratio ~{expected_ratio}, got {}", stats.after_hours_ratio);
+}
+
+#[test]
+fn after_hours_integration_all_weekend_ratio_is_one() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-18 = Saturday, 12:00 UTC — weekend in all practical zones
+    for i in 0..4 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("wknd{i}")), Some("dev"), Some("msg"), "2025-01-18T12:00:00Z").unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 18, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 18, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 4);
+    if is_weekend_local(2025, 1, 18, 12) {
+        assert_eq!(stats.weekend_commits, 4);
+        assert_eq!(stats.weekend_ratio, 1.0, "all-weekend should yield ratio 1.0");
+    }
+}
+
+#[test]
+fn after_hours_integration_zero_commits_ratios_zero() {
+    let (conn, _tmp) = setup_db();
+
+    let from = Utc.with_ymd_and_hms(2025, 6, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 0);
+    assert_eq!(stats.after_hours_commits, 0);
+    assert_eq!(stats.weekend_commits, 0);
+    assert_eq!(stats.after_hours_ratio, 0.0, "0 commits => ratio 0.0");
+    assert_eq!(stats.weekend_ratio, 0.0, "0 commits => ratio 0.0");
+}
