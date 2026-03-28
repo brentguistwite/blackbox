@@ -1,3 +1,4 @@
+use anyhow::Context;
 use chrono::{Datelike, Local, NaiveDate};
 use ratatui::{
     layout::Rect,
@@ -170,6 +171,81 @@ pub fn render_heatmap(frame: &mut Frame, area: Rect, data: &HeatmapData, weeks: 
     }
 
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Compute longest streak of consecutive days with >= 1 commit.
+fn longest_streak(days: &BTreeMap<NaiveDate, u32>) -> u32 {
+    let mut best = 0u32;
+    let mut current = 0u32;
+    let mut prev: Option<NaiveDate> = None;
+    for (&date, &count) in days {
+        if count == 0 {
+            current = 0;
+            prev = Some(date);
+            continue;
+        }
+        if let Some(p) = prev {
+            if date == p + chrono::Duration::days(1) {
+                // Only extend if prev day also had commits
+                if days.get(&p).copied().unwrap_or(0) > 0 {
+                    current += 1;
+                } else {
+                    current = 1;
+                }
+            } else {
+                current = 1;
+            }
+        } else {
+            current = 1;
+        }
+        best = best.max(current);
+        prev = Some(date);
+    }
+    best
+}
+
+/// Render the heatmap grid and summary to terminal via ratatui, then exit.
+///
+/// Loads config + DB, queries daily commit counts for the given week range,
+/// renders a GitHub-style contribution grid with summary stats, then returns.
+pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
+    let data_dir = crate::config::data_dir()?;
+    let db_path = data_dir.join("blackbox.db");
+    let conn = crate::db::open_db(&db_path)
+        .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+    let (from, to) = crate::query::heatmap_range(weeks);
+    let counts = crate::query::query_daily_commit_counts(&conn, from, to)?;
+    let data = HeatmapData::from_counts(counts);
+
+    // Compute summary stats inline (US-006 will formalize HeatmapStats)
+    let total_commits: u32 = data.days.values().sum();
+    let active_days: u32 = data.days.values().filter(|&&c| c > 0).count() as u32;
+    let streak = longest_streak(&data.days);
+
+    // Render via ratatui raw mode, then exit
+    let mut terminal = ratatui::init();
+    terminal.draw(|frame| {
+        let area = frame.area();
+        // Reserve last row for summary
+        let grid_area = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
+        render_heatmap(frame, grid_area, &data, weeks);
+
+        // Summary line at bottom
+        let summary_text = format!(
+            "  {} commits  {} active days  {} day streak",
+            total_commits, active_days, streak
+        );
+        let summary_line = Line::from(Span::styled(
+            summary_text,
+            Style::default().fg(Color::White),
+        ));
+        let summary_area = Rect::new(area.x, area.y + grid_area.height, area.width, 1);
+        frame.render_widget(Paragraph::new(vec![summary_line]), summary_area);
+    })?;
+    ratatui::restore();
+
+    Ok(())
 }
 
 #[cfg(test)]
