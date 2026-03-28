@@ -1,6 +1,6 @@
 use blackbox::db::{insert_activity, open_db};
 use blackbox::output::{render_hour_histogram, render_dow_histogram};
-use blackbox::query::{commit_hour_histogram, commit_dow_histogram};
+use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
 
@@ -338,4 +338,109 @@ fn dow_histogram_empty_returns_all_zeros() {
     let to = Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap();
     let hist = commit_dow_histogram(&conn, from, to).unwrap();
     assert_eq!(hist, [0u32; 7], "empty DB should return all-zero histogram");
+}
+
+// === US-005: after_hours_ratio tests ===
+
+/// Helper: given a UTC hour on a specific date, determine if it's "after hours" in local time.
+/// After-hours = local hour < 9 OR local hour >= 18.
+fn is_after_hours_local(year: i32, month: u32, day: u32, utc_hour: u32) -> bool {
+    let dt = Utc.with_ymd_and_hms(year, month, day, utc_hour, 0, 0).unwrap();
+    let local_hour = dt.with_timezone(&Local).hour();
+    local_hour < 9 || local_hour >= 18
+}
+
+/// Helper: given a UTC date, determine if it's a weekend in local time.
+fn is_weekend_local(year: i32, month: u32, day: u32, utc_hour: u32) -> bool {
+    let dt = Utc.with_ymd_and_hms(year, month, day, utc_hour, 0, 0).unwrap();
+    let dow = dt.with_timezone(&Local).weekday().num_days_from_monday();
+    dow >= 5 // Sat=5, Sun=6
+}
+
+#[test]
+fn after_hours_ratio_empty_db() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+    assert_eq!(stats.total_commits, 0);
+    assert_eq!(stats.after_hours_commits, 0);
+    assert_eq!(stats.weekend_commits, 0);
+    assert_eq!(stats.after_hours_ratio, 0.0);
+    assert_eq!(stats.weekend_ratio, 0.0);
+}
+
+#[test]
+fn after_hours_ratio_mixed_commits() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-15 = Wednesday
+    // Insert 3 commits at 10:00 UTC (core hours in most zones)
+    // Insert 1 commit at 22:00 UTC (after hours in most zones)
+    for i in 0..3 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("c{i}")), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    }
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c3"), Some("dev"), Some("msg"), "2025-01-15T22:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 4);
+
+    // Compute expected after-hours count based on local tz
+    let ah_10 = is_after_hours_local(2025, 1, 15, 10);
+    let ah_22 = is_after_hours_local(2025, 1, 15, 22);
+    let expected_ah = if ah_10 { 3 } else { 0 } + if ah_22 { 1 } else { 0 };
+    assert_eq!(stats.after_hours_commits, expected_ah);
+
+    // Weekend: Wednesday is never weekend regardless of tz
+    assert_eq!(stats.weekend_commits, 0);
+    assert_eq!(stats.weekend_ratio, 0.0);
+
+    // Ratio check
+    let expected_ratio = expected_ah as f64 / 4.0;
+    assert!((stats.after_hours_ratio - expected_ratio).abs() < 1e-9);
+}
+
+#[test]
+fn after_hours_ratio_all_weekend() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-18 = Saturday, 12:00 UTC — weekend in all practical timezones
+    for i in 0..5 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("w{i}")), Some("dev"), Some("msg"), "2025-01-18T12:00:00Z").unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 18, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 18, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 5);
+
+    if is_weekend_local(2025, 1, 18, 12) {
+        assert_eq!(stats.weekend_commits, 5);
+        assert_eq!(stats.weekend_ratio, 1.0);
+    }
+}
+
+#[test]
+fn after_hours_ratio_excludes_non_commit_events() {
+    let (conn, _tmp) = setup_db();
+
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "branch_switch", Some("feat"), None,
+        None, Some("dev"), None, "2025-01-15T22:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "merge", Some("main"), None,
+        Some("m1"), Some("dev"), Some("merge"), "2025-01-15T23:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = after_hours_ratio(&conn, from, to).unwrap();
+
+    assert_eq!(stats.total_commits, 1, "only commit events counted");
 }
