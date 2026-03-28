@@ -1,5 +1,5 @@
 use blackbox::db::{insert_activity, open_db};
-use blackbox::output::render_hour_histogram;
+use blackbox::output::{render_hour_histogram, render_dow_histogram};
 use blackbox::query::{commit_hour_histogram, commit_dow_histogram};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
@@ -231,4 +231,68 @@ fn dow_histogram_respects_time_range() {
 
     let total: u32 = hist.iter().sum();
     assert_eq!(total, 1, "only commits within range counted");
+}
+
+// === US-004: render_dow_histogram tests ===
+
+#[test]
+fn render_dow_histogram_all_zeros_returns_empty_message() {
+    colored::control::set_override(false);
+    let hist = [0u32; 7];
+    let output = render_dow_histogram(&hist);
+    assert!(output.contains("No commit activity"), "should show empty message, got: {output}");
+}
+
+#[test]
+fn render_dow_histogram_shows_all_7_days() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 7];
+    hist[2] = 5; // Wed
+    let output = render_dow_histogram(&hist);
+    for label in &["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] {
+        assert!(output.contains(label), "missing day label {label} in output");
+    }
+}
+
+#[test]
+fn render_dow_histogram_weekend_marker() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 7];
+    hist[5] = 3; // Sat
+    hist[6] = 2; // Sun
+    hist[0] = 1; // Mon
+    let output = render_dow_histogram(&hist);
+    // Sat and Sun histogram rows (containing "|") should have [wknd] marker
+    for line in output.lines() {
+        if !line.contains('|') { continue; }
+        if line.contains("Sat") || line.contains("Sun") {
+            assert!(line.contains("[wknd]"), "weekend row should have [wknd] marker: {line}");
+        }
+        if line.starts_with("Mon") {
+            assert!(!line.contains("[wknd]"), "weekday row should NOT have [wknd] marker: {line}");
+        }
+    }
+}
+
+#[test]
+fn render_dow_histogram_bars_proportional() {
+    colored::control::set_override(false);
+    let hist = [10, 5, 0, 0, 0, 0, 0]; // Mon=10, Tue=5
+    let output = render_dow_histogram(&hist);
+    let lines: Vec<&str> = output.lines().collect();
+    let line_mon = lines.iter().find(|l| l.contains("Mon")).unwrap();
+    let line_tue = lines.iter().find(|l| l.contains("Tue")).unwrap();
+    let bars_mon = line_mon.matches('█').count();
+    let bars_tue = line_tue.matches('█').count();
+    assert!(bars_mon > bars_tue, "Mon (10) should have longer bar than Tue (5): {bars_mon} vs {bars_tue}");
+    assert!(bars_tue > 0, "Tue should have some bar chars");
+}
+
+#[test]
+fn render_dow_histogram_peak_label() {
+    colored::control::set_override(false);
+    let hist = [5, 12, 3, 0, 0, 0, 0]; // Tue=12 is peak
+    let output = render_dow_histogram(&hist);
+    assert!(output.contains("peak"), "should show peak indicator");
+    assert!(output.contains("Tue"), "peak should reference Tue");
 }
