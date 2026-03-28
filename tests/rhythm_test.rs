@@ -801,3 +801,67 @@ fn after_hours_integration_zero_commits_ratios_zero() {
     assert_eq!(stats.after_hours_ratio, 0.0, "0 commits => ratio 0.0");
     assert_eq!(stats.weekend_ratio, 0.0, "0 commits => ratio 0.0");
 }
+
+// === US-016: Integration test: session distribution ===
+
+#[test]
+fn session_distribution_integration_two_sessions_median_45m() {
+    let (conn, _tmp) = setup_db();
+
+    // Session 1: 10:00, 10:20 → 2 commits, 20 min span
+    // Session 2: 14:00, 14:10, 14:20, 14:30, 14:40, 14:50 → 6 commits, 50 min span
+    //
+    // All gaps (sorted): [10,10,10,10,10,20,220] → median=10 min
+    // effective_credit = clamp(10, 5, 30) = 10 min
+    // effective_gap = clamp(30, 30, 120) = 30 min
+    //
+    // Session 1: 20 + 10 = 30 min
+    // Session 2: 50 + 10 = 60 min
+    // Median of [30, 60] = 45 min
+
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s1a"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s1b"), Some("dev"), Some("msg"), "2025-01-15T10:20:00Z").unwrap();
+
+    // 220-min gap → new session
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2a"), Some("dev"), Some("msg"), "2025-01-15T14:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2b"), Some("dev"), Some("msg"), "2025-01-15T14:10:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2c"), Some("dev"), Some("msg"), "2025-01-15T14:20:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2d"), Some("dev"), Some("msg"), "2025-01-15T14:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2e"), Some("dev"), Some("msg"), "2025-01-15T14:40:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("s2f"), Some("dev"), Some("msg"), "2025-01-15T14:50:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 30).unwrap();
+
+    assert_eq!(dist.sessions.len(), 2, "expected 2 sessions");
+    assert_eq!(dist.median_minutes, 45, "median of 30m and 60m sessions should be 45m");
+}
+
+#[test]
+fn session_distribution_integration_short_session_excluded() {
+    let (conn, _tmp) = setup_db();
+
+    // Single isolated commit → session = 0 + credit.
+    // With no gaps, fallback: credit = first_commit_minutes param.
+    // Use first_commit_minutes=2 → session = 2 min < 5 min → excluded.
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("lone"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 2).unwrap();
+
+    assert!(dist.sessions.is_empty(), "session < 5 min should be excluded, returns 0 sessions");
+    assert_eq!(dist.median_minutes, 0);
+    assert_eq!(dist.p90_minutes, 0);
+    assert_eq!(dist.mean_minutes, 0);
+}
