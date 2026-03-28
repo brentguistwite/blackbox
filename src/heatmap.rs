@@ -324,6 +324,11 @@ fn longest_streak(days: &BTreeMap<NaiveDate, u32>) -> u32 {
 /// prints a GitHub-style contribution grid with summary stats, then returns.
 /// Uses the `colored` crate (not ratatui) so output is pipe/redirect-safe.
 pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        (1..=260).contains(&weeks),
+        "weeks must be between 1 and 260"
+    );
+
     let data_dir = crate::config::data_dir()?;
     let db_path = data_dir.join("blackbox.db");
     let conn = crate::db::open_db(&db_path)
@@ -605,6 +610,35 @@ mod tests {
         let out = render_heatmap_ansi(&data, 4);
         assert!(out.contains("5 commits"));
         assert!(out.contains("2 active days"));
+    }
+
+    #[test]
+    fn heatmap_range_12_weeks_spans_about_84_days() {
+        let (start, end) = crate::query::heatmap_range(12);
+        let span = end.signed_duration_since(start).num_days();
+        // 84 days from start Monday + 0..6 days depending on weekday = 84..90
+        assert!(
+            (84..=90).contains(&span),
+            "12-week range should span 84-90 days, got {span}"
+        );
+    }
+
+    #[test]
+    fn run_heatmap_rejects_zero_weeks() {
+        let err = super::run_heatmap(0).unwrap_err();
+        assert!(
+            err.to_string().contains("weeks must be between 1 and 260"),
+            "expected validation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn run_heatmap_rejects_261_weeks() {
+        let err = super::run_heatmap(261).unwrap_err();
+        assert!(
+            err.to_string().contains("weeks must be between 1 and 260"),
+            "expected validation error, got: {err}"
+        );
     }
 
     #[test]

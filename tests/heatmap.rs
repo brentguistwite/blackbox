@@ -44,6 +44,64 @@ fn heatmap_exits_zero_with_empty_db() {
 }
 
 #[test]
+fn heatmap_weeks_12_exits_zero() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env();
+    let _conn = open_test_db(&data_dir);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["heatmap", "--weeks", "12"])
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "heatmap --weeks 12 should exit 0");
+}
+
+#[test]
+fn heatmap_weeks_zero_returns_error() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env();
+    let _conn = open_test_db(&data_dir);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["heatmap", "--weeks", "0"])
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "heatmap --weeks 0 should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("weeks must be between 1 and 260"),
+        "expected validation error, got: {stderr}"
+    );
+}
+
+#[test]
+fn heatmap_weeks_261_returns_error() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env();
+    let _conn = open_test_db(&data_dir);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["heatmap", "--weeks", "261"])
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "heatmap --weeks 261 should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("weeks must be between 1 and 260"),
+        "expected validation error, got: {stderr}"
+    );
+}
+
+#[test]
 fn heatmap_with_commits_exits_zero_and_contains_blocks() {
     let (_tmp, data_dir, config_dir) = setup_temp_env();
     let conn = open_test_db(&data_dir);
