@@ -84,6 +84,15 @@ pub enum Commands {
     Setup,
     /// Live TUI dashboard
     Live,
+    /// Show work rhythm patterns (commit timing analysis)
+    Rhythm {
+        /// Number of days to analyze (default 30)
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Output activity in Slack/Teams-friendly format
     Standup {
         /// Show this week's activity instead of today
