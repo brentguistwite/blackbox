@@ -39,6 +39,7 @@ blackbox today
 | `install` | Register as OS service (launchd on macOS, systemd on Linux) |
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
+| `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -85,6 +86,8 @@ Today - 3 repos, 12 commits, 4h 30m estimated
 **Standup:** `blackbox standup` -- copy-paste-ready summary for Slack/Teams. Use `--week` for weekly and `--summarize` for LLM-generated summaries.
 
 The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
+
+**Repo deep dive:** `blackbox repo <path>` -- onefetch-inspired single-repo analysis showing language breakdown (via git2 tree walk), most-changed files, all-time estimated time, branch activity, and PR history. Works on any git repo; repos not yet tracked by blackbox show git-derived data with an "untracked" indicator.
 
 ## How It Works
 

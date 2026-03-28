@@ -46,6 +46,7 @@ src/
 ├── output.rs         # OutputFormat enum, render_summary/json/csv
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges
+├── repo_deep_dive.rs # Single-repo deep dive (language breakdown, top files, time, branches, PRs)
 ├── repo_scanner.rs   # discover_repos() — recursive git repo finder
 ├── service.rs        # launchd/systemd install/uninstall (cfg-gated)
 ├── setup.rs          # Full interactive onboarding wizard
