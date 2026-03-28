@@ -407,6 +407,64 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     lines.join("\n")
 }
 
+/// Render hour-of-day histogram as ASCII bar chart.
+/// Returns empty message if all slots are zero.
+pub fn render_hour_histogram(histogram: &[u32; 24]) -> String {
+    let max = *histogram.iter().max().unwrap_or(&0);
+    if max == 0 {
+        return "No commit activity in this period.".dimmed().to_string();
+    }
+
+    let max_bar_width: u32 = 20;
+    let mut lines: Vec<String> = Vec::new();
+
+    // Find peak hour
+    let peak_hour = histogram
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, v)| v)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    for (hour, &count) in histogram.iter().enumerate() {
+        let bar_len = if max > 0 {
+            (count as u64 * max_bar_width as u64 / max as u64) as usize
+        } else {
+            0
+        };
+        let bar = "█".repeat(bar_len);
+        let padding = " ".repeat(max_bar_width as usize - bar_len);
+        if hour == peak_hour && count > 0 {
+            lines.push(format!(
+                "{:>2} | {}{} {:>4}  <- peak",
+                hour,
+                bar.green(),
+                padding,
+                count
+            ));
+        } else {
+            lines.push(format!(
+                "{:>2} | {}{} {:>4}",
+                hour,
+                bar.yellow(),
+                padding,
+                count
+            ));
+        }
+    }
+
+    let commit_word = if histogram[peak_hour] == 1 { "commit" } else { "commits" };
+    lines.push(format!(
+        "Peak: {:02}:00–{:02}:00 ({} {})",
+        peak_hour,
+        (peak_hour + 1) % 24,
+        histogram[peak_hour],
+        commit_word,
+    ));
+
+    lines.join("\n")
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
