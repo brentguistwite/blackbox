@@ -569,6 +569,22 @@ pub fn render_session_distribution(dist: &crate::query::SessionDistribution) -> 
     )
 }
 
+/// Render burst pattern stats as descriptive label.
+/// Neutral pattern labels only — no evaluative language.
+pub fn render_burst_stats(stats: &crate::query::BurstStats) -> String {
+    match stats.pattern {
+        crate::query::CommitPattern::Burst => {
+            format!("Commit pattern: bursty (CV={:.2})", stats.cv_of_gaps)
+        }
+        crate::query::CommitPattern::Steady => {
+            format!("Commit pattern: steady (CV={:.2})", stats.cv_of_gaps)
+        }
+        crate::query::CommitPattern::Insufficient => {
+            "Commit pattern: insufficient data (< 3 commits)".to_string()
+        }
+    }
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));

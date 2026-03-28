@@ -1,5 +1,5 @@
 use blackbox::db::{insert_activity, open_db};
-use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats, render_session_distribution};
+use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats, render_session_distribution, render_burst_stats};
 use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio, session_length_distribution, burst_pattern, CommitPattern};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
@@ -963,4 +963,61 @@ fn burst_pattern_ignores_non_commit_events() {
 
     assert_eq!(stats.commit_count, 2);
     assert_eq!(stats.pattern, CommitPattern::Insufficient);
+}
+
+// === US-010: render_burst_stats tests ===
+
+#[test]
+fn render_burst_stats_bursty_pattern() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::BurstStats {
+        commit_count: 10,
+        cv_of_gaps: 1.8,
+        pattern: CommitPattern::Burst,
+    };
+    let output = render_burst_stats(&stats);
+    assert!(output.contains("bursty"), "should say 'bursty', got: {output}");
+    assert!(output.contains("CV=1.80"), "should show CV value, got: {output}");
+}
+
+#[test]
+fn render_burst_stats_steady_pattern() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::BurstStats {
+        commit_count: 12,
+        cv_of_gaps: 0.4,
+        pattern: CommitPattern::Steady,
+    };
+    let output = render_burst_stats(&stats);
+    assert!(output.contains("steady"), "should say 'steady', got: {output}");
+    assert!(output.contains("CV=0.40"), "should show CV value, got: {output}");
+}
+
+#[test]
+fn render_burst_stats_insufficient_data() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::BurstStats {
+        commit_count: 2,
+        cv_of_gaps: 0.0,
+        pattern: CommitPattern::Insufficient,
+    };
+    let output = render_burst_stats(&stats);
+    assert!(output.contains("insufficient data"), "should say insufficient, got: {output}");
+    assert!(output.contains("< 3 commits"), "should explain threshold, got: {output}");
+}
+
+#[test]
+fn render_burst_stats_no_evaluative_language() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::BurstStats {
+        commit_count: 10,
+        cv_of_gaps: 1.5,
+        pattern: CommitPattern::Burst,
+    };
+    let output = render_burst_stats(&stats).to_lowercase();
+    assert!(!output.contains("good"), "no evaluative language");
+    assert!(!output.contains("bad"), "no evaluative language");
+    assert!(!output.contains("healthy"), "no evaluative language");
+    assert!(!output.contains("warning"), "no evaluative language");
+    assert!(!output.contains("concerning"), "no evaluative language");
 }
