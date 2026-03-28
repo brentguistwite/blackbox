@@ -527,6 +527,30 @@ pub fn render_dow_histogram(histogram: &[u32; 7]) -> String {
     lines.join("\n")
 }
 
+/// Render after-hours/weekend stats as a compact display.
+/// No evaluative language — mirror, not a score.
+pub fn render_after_hours_stats(stats: &crate::query::AfterHoursStats) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    let ah_pct = (stats.after_hours_ratio * 100.0).round() as u32;
+    let wk_pct = (stats.weekend_ratio * 100.0).round() as u32;
+
+    lines.push(format!(
+        "After-hours: {}/{} commits ({}%)",
+        stats.after_hours_commits, stats.total_commits, ah_pct,
+    ));
+    lines.push(format!(
+        "Weekend:     {}/{} commits ({}%)",
+        stats.weekend_commits, stats.total_commits, wk_pct,
+    ));
+
+    if stats.after_hours_ratio > 0.5 {
+        lines.push("(more than half outside core hours)".to_string());
+    }
+
+    lines.join("\n")
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
