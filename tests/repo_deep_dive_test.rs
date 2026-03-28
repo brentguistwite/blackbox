@@ -1,7 +1,7 @@
 use blackbox::db;
 use blackbox::repo_deep_dive::{
-    compute_language_breakdown, compute_time_invested, compute_top_files, find_db_repo_path,
-    query_repo_all_time, resolve_repo_path, RepoAllTimeData,
+    compute_branch_activity, compute_language_breakdown, compute_time_invested, compute_top_files,
+    find_db_repo_path, query_repo_all_time, resolve_repo_path, RepoAllTimeData,
 };
 use tempfile::TempDir;
 
@@ -324,4 +324,72 @@ fn time_invested_with_ai_sessions() {
     let dur = compute_time_invested(&data, 120, 30);
     // Should include AI session time
     assert!(dur.num_minutes() >= 30, "expected >= 30min with AI session, got {}", dur.num_minutes());
+}
+
+// --- US-007: compute_branch_activity ---
+
+#[test]
+fn branch_activity_commits_on_two_branches() {
+    use blackbox::query::ActivityEvent;
+    use chrono::{Duration, TimeZone, Utc};
+
+    let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+    let t2 = t1 + Duration::minutes(10);
+    let t3 = t2 + Duration::minutes(20);
+
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("aaa".into()), message: Some("a".into()), timestamp: t1 },
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("bbb".into()), message: Some("b".into()), timestamp: t2 },
+            ActivityEvent { event_type: "commit".into(), branch: Some("feature/x".into()), commit_hash: Some("ccc".into()), message: Some("c".into()), timestamp: t3 },
+        ],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let branches = compute_branch_activity(&data);
+    assert_eq!(branches.len(), 2);
+    // sorted by last_active desc — feature/x (t3) first
+    assert_eq!(branches[0].name, "feature/x");
+    assert_eq!(branches[0].commit_count, 1);
+    assert_eq!(branches[1].name, "main");
+    assert_eq!(branches[1].commit_count, 2);
+}
+
+#[test]
+fn branch_activity_includes_branch_switch_with_zero_commits() {
+    use blackbox::query::ActivityEvent;
+    use chrono::{TimeZone, Utc};
+
+    let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+    let t2 = Utc.with_ymd_and_hms(2024, 1, 1, 11, 0, 0).unwrap();
+
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("aaa".into()), message: Some("a".into()), timestamp: t1 },
+            ActivityEvent { event_type: "branch_switch".into(), branch: Some("feature/y".into()), commit_hash: None, message: None, timestamp: t2 },
+        ],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let branches = compute_branch_activity(&data);
+    assert_eq!(branches.len(), 2);
+    // feature/y last_active=t2 > main last_active=t1, so feature/y first
+    assert_eq!(branches[0].name, "feature/y");
+    assert_eq!(branches[0].commit_count, 0);
+    assert_eq!(branches[1].name, "main");
+    assert_eq!(branches[1].commit_count, 1);
+}
+
+#[test]
+fn branch_activity_empty_events() {
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let branches = compute_branch_activity(&data);
+    assert!(branches.is_empty());
 }

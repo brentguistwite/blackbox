@@ -307,6 +307,48 @@ pub fn compute_time_invested(
     duration
 }
 
+#[derive(Debug)]
+pub struct BranchActivity {
+    pub name: String,
+    pub commit_count: usize,
+    pub last_active: DateTime<Utc>,
+}
+
+/// Summarize branch activity from DB events: commit count + last active per branch.
+/// Includes branches from branch_switch events (with commit_count=0 if no commits).
+pub fn compute_branch_activity(data: &RepoAllTimeData) -> Vec<BranchActivity> {
+    // track (commit_count, max_timestamp) per branch
+    let mut branches: HashMap<String, (usize, DateTime<Utc>)> = HashMap::new();
+
+    for event in &data.events {
+        let name = match &event.branch {
+            Some(n) => n,
+            None => continue,
+        };
+
+        let entry = branches.entry(name.clone()).or_insert((0, event.timestamp));
+
+        if event.event_type == "commit" {
+            entry.0 += 1;
+        }
+
+        if event.timestamp > entry.1 {
+            entry.1 = event.timestamp;
+        }
+    }
+
+    let mut result: Vec<BranchActivity> = branches
+        .into_iter()
+        .map(|(name, (commit_count, last_active))| BranchActivity {
+            name,
+            commit_count,
+            last_active,
+        })
+        .collect();
+    result.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+    result
+}
+
 /// Look up repo_path in DB via exact or prefix match.
 pub fn find_db_repo_path(conn: &Connection, canonical: &Path) -> anyhow::Result<Option<String>> {
     let path_str = canonical.to_string_lossy();
