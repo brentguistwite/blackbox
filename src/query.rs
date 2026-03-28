@@ -303,6 +303,30 @@ pub fn month_range() -> (DateTime<Utc>, DateTime<Utc>) {
     (start_utc, now)
 }
 
+/// Returns date range for heatmap: last N weeks aligned to calendar weeks.
+/// Start = Monday of (current_week - weeks) at 00:00 local, end = today 23:59:59 local.
+pub fn heatmap_range(weeks: u32) -> (DateTime<Utc>, DateTime<Utc>) {
+    let local_today = Local::now().date_naive();
+    let weekday = local_today.weekday().num_days_from_monday();
+    // Current week's Monday
+    let this_monday = local_today - Duration::days(weekday as i64);
+    // Go back `weeks` more weeks
+    let start_date = this_monday - Duration::days(weeks as i64 * 7);
+    let start_local = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let end_local = local_today.and_hms_opt(23, 59, 59).unwrap();
+    let end_utc = Local
+        .from_local_datetime(&end_local)
+        .unwrap()
+        .with_timezone(&Utc);
+
+    (start_utc, end_utc)
+}
+
 /// Query activity from DB, grouped by repo, with time estimates per repo.
 pub fn query_activity(
     conn: &Connection,
@@ -680,5 +704,34 @@ mod tests {
         for (_, count) in &result {
             assert_eq!(*count, 0);
         }
+    }
+
+    #[test]
+    fn test_heatmap_range_starts_on_monday() {
+        let (start, end) = heatmap_range(52);
+        let start_local = start.with_timezone(&Local).date_naive();
+        assert_eq!(start_local.weekday(), chrono::Weekday::Mon);
+        // Range spans at most weeks*7+6 days
+        let span = (end - start).num_days();
+        assert!(span <= 52 * 7 + 6, "span {span} exceeds max");
+        assert!(span >= 7, "span {span} too short");
+    }
+
+    #[test]
+    fn test_heatmap_range_one_week() {
+        let (start, end) = heatmap_range(1);
+        let start_local = start.with_timezone(&Local).date_naive();
+        assert_eq!(start_local.weekday(), chrono::Weekday::Mon);
+        let span = (end - start).num_days();
+        // weeks=1 → 7-13 days depending on weekday
+        assert!(span >= 7 && span <= 13, "span {span} out of range for weeks=1");
+    }
+
+    #[test]
+    fn test_heatmap_range_end_is_today() {
+        let (_, end) = heatmap_range(4);
+        let end_local = end.with_timezone(&Local).date_naive();
+        let today = Local::now().date_naive();
+        assert_eq!(end_local, today);
     }
 }
