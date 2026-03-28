@@ -1,5 +1,5 @@
 use crate::enrichment::PrInfo;
-use chrono::{Datelike, DateTime, Duration, Local, TimeZone, Utc};
+use chrono::{Datelike, DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -530,4 +530,155 @@ fn query_ai_sessions(
     }
 
     Ok(map)
+}
+
+/// Query daily commit counts over an arbitrary date range.
+/// Groups `git_activity` rows where `event_type='commit'` by local calendar date.
+/// Returns a zero-filled BTreeMap with an entry for every date in [from, to].
+pub fn query_daily_commit_counts(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<BTreeMap<NaiveDate, u32>> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT date(timestamp, 'localtime') as day, COUNT(*)
+         FROM git_activity
+         WHERE event_type='commit' AND timestamp >= ?1 AND timestamp <= ?2
+         GROUP BY day",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+    })?;
+
+    // Collect DB results into a temporary map
+    let mut counts: BTreeMap<NaiveDate, u32> = BTreeMap::new();
+    for row in rows {
+        let (day_str, count) = row?;
+        let date = NaiveDate::parse_from_str(&day_str, "%Y-%m-%d")?;
+        counts.insert(date, count);
+    }
+
+    // Zero-fill: ensure every date in [from.date(), to.date()] is present
+    let start_date = from.with_timezone(&Local).date_naive();
+    let end_date = to.with_timezone(&Local).date_naive();
+    let mut result: BTreeMap<NaiveDate, u32> = BTreeMap::new();
+    let mut current = start_date;
+    while current <= end_date {
+        result.insert(current, counts.get(&current).copied().unwrap_or(0));
+        current += Duration::days(1);
+    }
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::open_db;
+    use tempfile::TempDir;
+
+    /// Helper: convert local midnight NaiveDate to DateTime<Utc>
+    fn local_midnight_utc(year: i32, month: u32, day: u32) -> DateTime<Utc> {
+        let nd = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        Local
+            .from_local_datetime(&nd.and_hms_opt(0, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    /// Helper: convert local end-of-day NaiveDate to DateTime<Utc>
+    fn local_eod_utc(year: i32, month: u32, day: u32) -> DateTime<Utc> {
+        let nd = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        Local
+            .from_local_datetime(&nd.and_hms_opt(23, 59, 59).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn test_query_daily_commit_counts() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let conn = open_db(&db_path).unwrap();
+
+        // Use local noon timestamps so date(timestamp,'localtime') = expected date
+        let day1 = NaiveDate::from_ymd_opt(2025, 1, 10).unwrap();
+        let day3 = NaiveDate::from_ymd_opt(2025, 1, 12).unwrap();
+
+        let noon1 = Local
+            .from_local_datetime(&day1.and_hms_opt(12, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+            .to_rfc3339();
+        let noon1b = Local
+            .from_local_datetime(&day1.and_hms_opt(14, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+            .to_rfc3339();
+        let noon3 = Local
+            .from_local_datetime(&day3.and_hms_opt(10, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+            .to_rfc3339();
+        let gap_ts = Local
+            .from_local_datetime(&NaiveDate::from_ymd_opt(2025, 1, 11).unwrap().and_hms_opt(9, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+            .to_rfc3339();
+
+        // Day 1: 2 commits
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('repo1', 'commit', 'main', 'aaa', 'dev', 'msg1', ?1)",
+            rusqlite::params![noon1],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('repo1', 'commit', 'main', 'bbb', 'dev', 'msg2', ?1)",
+            rusqlite::params![noon1b],
+        ).unwrap();
+        // Day 3: 1 commit
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES ('repo1', 'commit', 'main', 'ccc', 'dev', 'msg3', ?1)",
+            rusqlite::params![noon3],
+        ).unwrap();
+        // Non-commit event on gap day — should be excluded
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, timestamp)
+             VALUES ('repo1', 'branch_switch', 'feature', ?1)",
+            rusqlite::params![gap_ts],
+        ).unwrap();
+
+        let from = local_midnight_utc(2025, 1, 10);
+        let to = local_eod_utc(2025, 1, 12);
+
+        let result = query_daily_commit_counts(&conn, from, to).unwrap();
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[&day1], 2);
+        assert_eq!(result[&NaiveDate::from_ymd_opt(2025, 1, 11).unwrap()], 0);
+        assert_eq!(result[&day3], 1);
+    }
+
+    #[test]
+    fn test_query_daily_commit_counts_empty() {
+        let tmp = TempDir::new().unwrap();
+        let db_path = tmp.path().join("test.db");
+        let conn = open_db(&db_path).unwrap();
+
+        let from = local_midnight_utc(2025, 1, 1);
+        let to = local_eod_utc(2025, 1, 3);
+
+        let result = query_daily_commit_counts(&conn, from, to).unwrap();
+
+        assert_eq!(result.len(), 3);
+        for (_, count) in &result {
+            assert_eq!(*count, 0);
+        }
+    }
 }
