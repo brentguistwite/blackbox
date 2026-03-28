@@ -515,7 +515,56 @@ fn v2_presence_anchor_prevents_ai_credit_suppression() {
     assert_eq!(result, Duration::minutes(80));
 }
 
-// ===== query_activity: presence no longer affects time estimation =====
+// ===== US-003: query_activity wires presence into estimate_time_v2 =====
+
+#[test]
+fn query_activity_presence_increases_estimated_time() {
+    // Repo with commits and presence that started well before the first commit.
+    // Presence anchoring should pull session start earlier → increased estimated_time.
+    let (conn, _tmp) = setup_db();
+
+    // Commits at 10:00, 10:30 — without presence, credit=30 → session [9:30, 10:30] = 60 min
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("second"), "2025-01-15T10:30:00Z").unwrap();
+
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+
+    // Baseline: no presence
+    let repos_no_presence = query_activity(&conn, from, to, 120, 30).unwrap();
+    let baseline = repos_no_presence.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    let baseline_time = baseline.estimated_time;
+
+    // Now add presence that started at 9:00 (45 min before first commit, well before credit window)
+    insert_presence(&conn, "/repo/alpha", "2025-01-15T09:00:00Z", Some("2025-01-15T10:05:00Z"));
+
+    let repos_with_presence = query_activity(&conn, from, to, 120, 30).unwrap();
+    let with_pres = repos_with_presence.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+
+    assert!(
+        with_pres.estimated_time > baseline_time,
+        "presence should increase estimated_time: got {:?} vs baseline {:?}",
+        with_pres.estimated_time, baseline_time
+    );
+}
+
+#[test]
+fn query_activity_no_presence_passes_empty() {
+    // Repo with commits but NO presence data — behavior identical to before US-003
+    let (conn, _tmp) = setup_db();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("second"), "2025-01-15T10:30:00Z").unwrap();
+
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+
+    // Without presence: median=30, credit=30, gap=90 → session [9:30, 10:30] = 60 min
+    assert_eq!(alpha.estimated_time, Duration::minutes(60));
+}
+
+// ===== query_activity: presence must not create standalone repos =====
 
 #[test]
 fn query_activity_presence_does_not_create_repos() {
