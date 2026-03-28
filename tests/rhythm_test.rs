@@ -1,4 +1,5 @@
 use blackbox::db::{insert_activity, open_db};
+use blackbox::output::render_hour_histogram;
 use blackbox::query::commit_hour_histogram;
 use chrono::{TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
@@ -86,4 +87,67 @@ fn hour_histogram_respects_time_range() {
 
     let total: u32 = hist.iter().sum();
     assert_eq!(total, 1, "only commits within range counted");
+}
+
+// === US-002: render_hour_histogram tests ===
+
+#[test]
+fn render_hour_histogram_all_zeros_returns_empty_message() {
+    colored::control::set_override(false);
+    let hist = [0u32; 24];
+    let output = render_hour_histogram(&hist);
+    assert!(output.contains("No commit activity"), "should show empty message, got: {output}");
+}
+
+#[test]
+fn render_hour_histogram_shows_all_24_hours() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 24];
+    hist[10] = 5;
+    let output = render_hour_histogram(&hist);
+    // Should have a row for every hour 0–23
+    for h in 0..24 {
+        let label = format!("{h:>2} |");
+        assert!(output.contains(&label), "missing hour {h} row in output");
+    }
+}
+
+#[test]
+fn render_hour_histogram_peak_label() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 24];
+    hist[10] = 24;
+    hist[9] = 18;
+    hist[11] = 20;
+    let output = render_hour_histogram(&hist);
+    assert!(output.contains("Peak: 10:00"), "should identify peak hour 10, got: {output}");
+    assert!(output.contains("24 commits"), "should show peak count");
+}
+
+#[test]
+fn render_hour_histogram_bars_proportional() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 24];
+    hist[10] = 20;
+    hist[14] = 10; // half of peak
+    let output = render_hour_histogram(&hist);
+    let lines: Vec<&str> = output.lines().collect();
+    // Find line for hour 10 and 14
+    let line_10 = lines.iter().find(|l| l.starts_with("10 |")).unwrap();
+    let line_14 = lines.iter().find(|l| l.starts_with("14 |")).unwrap();
+    let bars_10 = line_10.matches('█').count();
+    let bars_14 = line_14.matches('█').count();
+    assert!(bars_10 > bars_14, "peak hour should have longer bar: {bars_10} vs {bars_14}");
+    assert!(bars_14 > 0, "half-peak hour should have some bar chars");
+}
+
+#[test]
+fn render_hour_histogram_zero_hours_show_no_bar() {
+    colored::control::set_override(false);
+    let mut hist = [0u32; 24];
+    hist[10] = 5;
+    let output = render_hour_histogram(&hist);
+    let line_0 = output.lines().find(|l| l.starts_with(" 0 |")).unwrap();
+    assert_eq!(line_0.matches('█').count(), 0, "zero-count hour should have no bar");
+    assert!(line_0.contains(" 0"), "should show count 0");
 }
