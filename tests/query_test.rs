@@ -1,6 +1,6 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
-    estimate_time, estimate_time_v2, median_commit_gap, merge_intervals, query_activity,
+    estimate_time_v2, median_commit_gap, merge_intervals, query_activity,
     query_presence, today_range, week_range, month_range, ActivityEvent, TimeInterval,
 };
 use chrono::{Duration, TimeZone, Utc};
@@ -275,7 +275,7 @@ fn v2_fallback_matches_legacy_with_few_commits() {
     // Single commit: just the credit = 30 min (no gap to measure)
     // But estimate_time_v2 creates interval [first - credit, first] = 30 min
     let events = vec![make_event_at(10, 0)];
-    let (result, _) = estimate_time_v2(&events, &[], 120, 30);
+    let (result, _) = estimate_time_v2(&events, &[], &[], 120, 30);
     assert_eq!(result, Duration::minutes(30));
 }
 
@@ -284,7 +284,7 @@ fn v2_two_commits_same_session() {
     // 2 commits 30 min apart. Median=30. effective_gap=clamp(90,30,120)=90.
     // effective_credit=clamp(30,5,30)=30. Session: [9:30, 10:30] = 60 min
     let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
-    let (result, _) = estimate_time_v2(&events, &[], 120, 30);
+    let (result, _) = estimate_time_v2(&events, &[], &[], 120, 30);
     assert_eq!(result, Duration::minutes(60));
 }
 
@@ -298,7 +298,7 @@ fn v2_rapid_committer_tight_gap() {
         make_event_at(10, 0), make_event_at(10, 8),
         make_event_at(10, 16), make_event_at(10, 24),
     ];
-    let (result, _) = estimate_time_v2(&events, &[], 120, 30);
+    let (result, _) = estimate_time_v2(&events, &[], &[], 120, 30);
     assert_eq!(result, Duration::minutes(32));
 }
 
@@ -312,7 +312,7 @@ fn v2_rapid_committer_session_split() {
         make_event_at(10, 0), make_event_at(10, 8), make_event_at(10, 16),
         make_event_at(10, 51), make_event_at(10, 59), make_event_at(11, 7),
     ];
-    let (result, _) = estimate_time_v2(&events, &[], 120, 30);
+    let (result, _) = estimate_time_v2(&events, &[], &[], 120, 30);
     assert_eq!(result, Duration::minutes(48));
 }
 
@@ -323,7 +323,7 @@ fn v2_slow_committer_capped_gap() {
     // Events at 10:00 and 10:50 (gap=50 < 120, same session)
     // Session: [9:30, 10:50] = 80 min
     let events = vec![make_event_at(10, 0), make_event_at(10, 50)];
-    let (result, _) = estimate_time_v2(&events, &[], 120, 30);
+    let (result, _) = estimate_time_v2(&events, &[], &[], 120, 30);
     assert_eq!(result, Duration::minutes(80));
 }
 
@@ -331,7 +331,7 @@ fn v2_slow_committer_capped_gap() {
 fn v2_ai_session_only() {
     // No git events, just AI session: 10:00-11:30 = 90 min
     let ai = vec![iv(10, 0, 11, 30)];
-    let (result, _) = estimate_time_v2(&[], &ai, 120, 30);
+    let (result, _) = estimate_time_v2(&[], &ai, &[], 120, 30);
     assert_eq!(result, Duration::minutes(90));
 }
 
@@ -344,7 +344,7 @@ fn v2_ai_session_merges_with_git() {
     // Merge AI [9:30, 10:05] + git [10:00, 10:30] => [9:30, 10:30] = 60 min
     let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
     let ai = vec![iv(9, 30, 10, 5)];
-    let (result, _) = estimate_time_v2(&events, &ai, 120, 30);
+    let (result, _) = estimate_time_v2(&events, &ai, &[], 120, 30);
     assert_eq!(result, Duration::minutes(60));
 }
 
@@ -356,8 +356,28 @@ fn v2_ai_no_overlap_no_suppression() {
     // Git: [9:30, 10:30] = 60 min. AI: [8:00, 9:00] = 60 min. Total = 120 min
     let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
     let ai = vec![iv(8, 0, 9, 0)];
-    let (result, _) = estimate_time_v2(&events, &ai, 120, 30);
+    let (result, _) = estimate_time_v2(&events, &ai, &[], 120, 30);
     assert_eq!(result, Duration::minutes(120));
+}
+
+#[test]
+fn v2_presence_only_no_git_events() {
+    // No git events, presence intervals: 10:00-11:00 and 12:00-12:30 = 90 min total
+    let presence = vec![iv(10, 0, 11, 0), iv(12, 0, 12, 30)];
+    let (result, _) = estimate_time_v2(&[], &[], &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(90));
+}
+
+#[test]
+fn v2_presence_merges_with_git_intervals() {
+    // Git: commits at 10:00, 10:30 (median=30, credit=30, gap=90)
+    // Git session tentative: [9:30, 10:30]
+    // Presence: [9:00, 9:45] — overlaps with git interval after merge
+    // After merge: [9:00, 10:30] = 90 min
+    let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
+    let presence = vec![iv(9, 0, 9, 45)];
+    let (result, _) = estimate_time_v2(&events, &[], &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(90));
 }
 
 // ===== query_presence tests =====
