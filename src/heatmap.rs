@@ -13,6 +13,14 @@ const DAY_LABEL_WIDTH: u16 = 4;
 const CELL_WIDTH: u16 = 2;
 const DAY_LABELS: [&str; 7] = ["Mon ", "    ", "Wed ", "    ", "Fri ", "    ", "Sun "];
 
+/// Summary statistics derived from heatmap data.
+pub struct HeatmapStats {
+    pub total_commits: u32,
+    pub active_days: u32,
+    pub longest_streak: u32,
+    pub current_streak: u32,
+}
+
 /// Holds daily commit counts and precomputed max for intensity calculation.
 pub struct HeatmapData {
     pub days: BTreeMap<NaiveDate, u32>,
@@ -68,6 +76,40 @@ impl HeatmapData {
             1
         }
     }
+
+    /// Compute summary statistics: totals, active days, longest/current streaks.
+    pub fn stats(&self) -> HeatmapStats {
+        let total_commits: u32 = self.days.values().sum();
+        let active_days: u32 = self.days.values().filter(|&&c| c > 0).count() as u32;
+        let longest = longest_streak(&self.days);
+        let current = current_streak(&self.days, Local::now().date_naive());
+        HeatmapStats {
+            total_commits,
+            active_days,
+            longest_streak: longest,
+            current_streak: current,
+        }
+    }
+}
+
+/// Compute current streak ending on `today` (or yesterday if today has 0 commits).
+fn current_streak(days: &BTreeMap<NaiveDate, u32>, today: NaiveDate) -> u32 {
+    let start = if days.get(&today).copied().unwrap_or(0) > 0 {
+        today
+    } else {
+        today - chrono::Duration::days(1)
+    };
+    let mut streak = 0u32;
+    let mut date = start;
+    loop {
+        if days.get(&date).copied().unwrap_or(0) > 0 {
+            streak += 1;
+            date -= chrono::Duration::days(1);
+        } else {
+            break;
+        }
+    }
+    streak
 }
 
 /// Map intensity tier (0-4) to ratatui Color.
@@ -218,10 +260,7 @@ pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
     let counts = crate::query::query_daily_commit_counts(&conn, from, to)?;
     let data = HeatmapData::from_counts(counts);
 
-    // Compute summary stats inline (US-006 will formalize HeatmapStats)
-    let total_commits: u32 = data.days.values().sum();
-    let active_days: u32 = data.days.values().filter(|&&c| c > 0).count() as u32;
-    let streak = longest_streak(&data.days);
+    let stats = data.stats();
 
     // Render via ratatui raw mode, then exit
     let mut terminal = ratatui::init();
@@ -234,7 +273,7 @@ pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
         // Summary line at bottom
         let summary_text = format!(
             "  {} commits  {} active days  {} day streak",
-            total_commits, active_days, streak
+            stats.total_commits, stats.active_days, stats.longest_streak
         );
         let summary_line = Line::from(Span::styled(
             summary_text,
@@ -378,5 +417,73 @@ mod tests {
         assert_eq!(intensity_color(2), Color::Rgb(0, 128, 0));
         assert_eq!(intensity_color(3), Color::Rgb(0, 185, 0));
         assert_eq!(intensity_color(4), Color::Rgb(57, 211, 83));
+    }
+
+    #[test]
+    fn stats_empty_data_all_zeros() {
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        let s = data.stats();
+        assert_eq!(s.total_commits, 0);
+        assert_eq!(s.active_days, 0);
+        assert_eq!(s.longest_streak, 0);
+        assert_eq!(s.current_streak, 0);
+    }
+
+    #[test]
+    fn stats_three_consecutive_days_streak() {
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        counts.insert(today, 2);
+        counts.insert(today - chrono::Duration::days(1), 3);
+        counts.insert(today - chrono::Duration::days(2), 1);
+        let data = HeatmapData::from_counts(counts);
+        let s = data.stats();
+        assert_eq!(s.total_commits, 6);
+        assert_eq!(s.active_days, 3);
+        assert_eq!(s.longest_streak, 3);
+        assert_eq!(s.current_streak, 3);
+    }
+
+    #[test]
+    fn stats_streak_resets_on_gap() {
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        // 2-day streak ending today
+        counts.insert(today, 1);
+        counts.insert(today - chrono::Duration::days(1), 1);
+        // gap on day -2
+        counts.insert(today - chrono::Duration::days(2), 0);
+        // 3-day streak earlier
+        counts.insert(today - chrono::Duration::days(3), 1);
+        counts.insert(today - chrono::Duration::days(4), 1);
+        counts.insert(today - chrono::Duration::days(5), 1);
+        let data = HeatmapData::from_counts(counts);
+        let s = data.stats();
+        assert_eq!(s.longest_streak, 3);
+        assert_eq!(s.current_streak, 2);
+    }
+
+    #[test]
+    fn stats_current_streak_from_yesterday_when_today_zero() {
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        counts.insert(today, 0);
+        counts.insert(today - chrono::Duration::days(1), 1);
+        counts.insert(today - chrono::Duration::days(2), 1);
+        let data = HeatmapData::from_counts(counts);
+        let s = data.stats();
+        assert_eq!(s.current_streak, 2);
+    }
+
+    #[test]
+    fn longest_streak_helper_basic() {
+        let mut days = BTreeMap::new();
+        let base = NaiveDate::from_ymd_opt(2025, 3, 1).unwrap();
+        days.insert(base, 1);
+        days.insert(base + chrono::Duration::days(1), 2);
+        days.insert(base + chrono::Duration::days(2), 1);
+        // gap
+        days.insert(base + chrono::Duration::days(4), 3);
+        assert_eq!(longest_streak(&days), 3);
     }
 }
