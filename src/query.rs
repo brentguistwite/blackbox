@@ -562,3 +562,34 @@ pub fn commit_hour_histogram(
 
     Ok(histogram)
 }
+
+/// Count commits per local day of week. Returns [u32; 7] indexed Mon=0..Sun=6.
+/// Only counts event_type='commit'. Converts UTC timestamps to local time before bucketing.
+pub fn commit_dow_histogram(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<[u32; 7]> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2",
+    )?;
+
+    let mut histogram = [0u32; 7];
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        let local_dt = utc_dt.with_timezone(&Local);
+        let dow = local_dt.weekday().num_days_from_monday() as usize;
+        histogram[dow] += 1;
+    }
+
+    Ok(histogram)
+}

@@ -1,7 +1,7 @@
 use blackbox::db::{insert_activity, open_db};
 use blackbox::output::render_hour_histogram;
-use blackbox::query::commit_hour_histogram;
-use chrono::{TimeZone, Utc, Local, Timelike};
+use blackbox::query::{commit_hour_histogram, commit_dow_histogram};
+use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, NamedTempFile) {
@@ -14,6 +14,12 @@ fn setup_db() -> (rusqlite::Connection, NamedTempFile) {
 fn utc_hour_to_local(utc_hour: u32) -> usize {
     let dt = Utc.with_ymd_and_hms(2025, 1, 15, utc_hour, 0, 0).unwrap();
     dt.with_timezone(&Local).hour() as usize
+}
+
+/// Helper: given a UTC date, return the local weekday index (Mon=0..Sun=6).
+fn utc_date_to_local_dow(year: i32, month: u32, day: u32, hour: u32) -> usize {
+    let dt = Utc.with_ymd_and_hms(year, month, day, hour, 0, 0).unwrap();
+    dt.with_timezone(&Local).weekday().num_days_from_monday() as usize
 }
 
 #[test]
@@ -150,4 +156,79 @@ fn render_hour_histogram_zero_hours_show_no_bar() {
     let line_0 = output.lines().find(|l| l.starts_with(" 0 |")).unwrap();
     assert_eq!(line_0.matches('█').count(), 0, "zero-count hour should have no bar");
     assert!(line_0.contains(" 0"), "should show count 0");
+}
+
+// === US-003: commit_dow_histogram tests ===
+
+#[test]
+fn dow_histogram_empty_db() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 1, 13, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 19, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+    assert_eq!(hist, [0u32; 7]);
+}
+
+#[test]
+fn dow_histogram_counts_by_local_weekday() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-15 = Wednesday (UTC). Insert 3 commits.
+    // 2025-01-18 = Saturday (UTC). Insert 2 commits.
+    for i in 0..3 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("w{i}")), Some("dev"), Some("msg"), "2025-01-15T12:00:00Z").unwrap();
+    }
+    for i in 0..2 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("s{i}")), Some("dev"), Some("msg"), "2025-01-18T12:00:00Z").unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 13, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 19, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+
+    let wed_idx = utc_date_to_local_dow(2025, 1, 15, 12);
+    let sat_idx = utc_date_to_local_dow(2025, 1, 18, 12);
+    assert_eq!(hist[wed_idx], 3);
+    assert_eq!(hist[sat_idx], 2);
+
+    let total: u32 = hist.iter().sum();
+    assert_eq!(total, 5);
+}
+
+#[test]
+fn dow_histogram_excludes_non_commit_events() {
+    let (conn, _tmp) = setup_db();
+
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T12:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "branch_switch", Some("feat"), None,
+        None, Some("dev"), None, "2025-01-15T12:05:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 13, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 19, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+
+    let total: u32 = hist.iter().sum();
+    assert_eq!(total, 1, "only commit events counted");
+}
+
+#[test]
+fn dow_histogram_respects_time_range() {
+    let (conn, _tmp) = setup_db();
+
+    // Outside range
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c0"), Some("dev"), Some("msg"), "2025-01-12T12:00:00Z").unwrap();
+    // Inside range
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T12:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 13, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 19, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+
+    let total: u32 = hist.iter().sum();
+    assert_eq!(total, 1, "only commits within range counted");
 }
