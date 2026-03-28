@@ -593,6 +593,138 @@ pub fn after_hours_ratio(
     })
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionDistribution {
+    #[serde(skip)]
+    pub sessions: Vec<Duration>,
+    pub median_minutes: i64,
+    pub p90_minutes: i64,
+    pub mean_minutes: i64,
+}
+
+/// Compute session length distribution from commit timestamps across all repos.
+/// Uses same session-gap logic as estimate_time_v2: adaptive thresholds from median commit gap.
+/// Sessions < 5 min excluded as noise. Returns all-zero struct if no qualifying sessions.
+pub fn session_length_distribution(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> anyhow::Result<SessionDistribution> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        timestamps.push(utc_dt);
+    }
+
+    if timestamps.is_empty() {
+        return Ok(SessionDistribution {
+            sessions: vec![],
+            median_minutes: 0,
+            p90_minutes: 0,
+            mean_minutes: 0,
+        });
+    }
+
+    // Compute adaptive thresholds (same as estimate_time_v2)
+    let gaps: Vec<Duration> = timestamps
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|d| d.num_seconds() > 0)
+        .collect();
+
+    let (effective_gap, effective_credit) = if gaps.is_empty() {
+        (
+            Duration::minutes(session_gap_minutes as i64),
+            Duration::minutes(first_commit_minutes as i64),
+        )
+    } else {
+        let mut sorted_gaps = gaps.clone();
+        sorted_gaps.sort();
+        let mid = sorted_gaps.len() / 2;
+        let median = if sorted_gaps.len().is_multiple_of(2) {
+            (sorted_gaps[mid - 1] + sorted_gaps[mid]) / 2
+        } else {
+            sorted_gaps[mid]
+        };
+        let median_mins = median.num_minutes();
+        let gap = (median_mins * 3).clamp(MIN_GAP_FLOOR_MINS, MAX_GAP_CAP_MINS);
+        let credit = median_mins.clamp(MIN_CREDIT_MINS, MAX_CREDIT_MINS);
+        (Duration::minutes(gap), Duration::minutes(credit))
+    };
+
+    // Group into sessions
+    let mut session_durations: Vec<Duration> = Vec::new();
+    let mut session_start = 0usize;
+
+    for i in 1..=timestamps.len() {
+        let is_end = i == timestamps.len()
+            || (timestamps[i] - timestamps[i - 1]) >= effective_gap;
+        if is_end {
+            let first_ts = timestamps[session_start];
+            let last_ts = timestamps[i - 1];
+            let duration = (last_ts - first_ts) + effective_credit;
+            session_durations.push(duration);
+            if i < timestamps.len() {
+                session_start = i;
+            }
+        }
+    }
+
+    // Exclude sessions < 5 min
+    let min_session = Duration::minutes(5);
+    let mut qualifying: Vec<Duration> = session_durations
+        .into_iter()
+        .filter(|d| *d >= min_session)
+        .collect();
+
+    if qualifying.is_empty() {
+        return Ok(SessionDistribution {
+            sessions: vec![],
+            median_minutes: 0,
+            p90_minutes: 0,
+            mean_minutes: 0,
+        });
+    }
+
+    qualifying.sort();
+    let n = qualifying.len();
+
+    let median = if n.is_multiple_of(2) {
+        (qualifying[n / 2 - 1] + qualifying[n / 2]) / 2
+    } else {
+        qualifying[n / 2]
+    };
+
+    let p90_idx = ((n as f64 * 0.9).ceil() as usize).min(n) - 1;
+    let p90 = qualifying[p90_idx];
+
+    let total_mins: i64 = qualifying.iter().map(|d| d.num_minutes()).sum();
+    let mean_mins = total_mins / n as i64;
+
+    Ok(SessionDistribution {
+        sessions: qualifying,
+        median_minutes: median.num_minutes(),
+        p90_minutes: p90.num_minutes(),
+        mean_minutes: mean_mins,
+    })
+}
+
 /// Count commits per local hour of day. Returns [u32; 24] indexed 0–23.
 /// Only counts event_type='commit'. Converts UTC timestamps to local time before bucketing.
 pub fn commit_hour_histogram(

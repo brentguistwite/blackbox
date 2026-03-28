@@ -1,6 +1,6 @@
 use blackbox::db::{insert_activity, open_db};
 use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats};
-use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio};
+use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio, session_length_distribution};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
 
@@ -527,4 +527,144 @@ fn render_after_hours_stats_no_note_at_50_percent() {
     };
     let output = render_after_hours_stats(&stats);
     assert!(!output.contains("more than half"), "note only shown when ratio > 0.5, not ==0.5");
+}
+
+// === US-007: session_length_distribution tests ===
+
+#[test]
+fn session_distribution_empty_db() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 30).unwrap();
+    assert!(dist.sessions.is_empty());
+    assert_eq!(dist.median_minutes, 0);
+    assert_eq!(dist.p90_minutes, 0);
+    assert_eq!(dist.mean_minutes, 0);
+}
+
+#[test]
+fn session_distribution_excludes_short_sessions() {
+    let (conn, _tmp) = setup_db();
+
+    // Single isolated commit = session of just the credit time.
+    // With median gap fallback (< 2 commits), credit = first_commit_minutes = 2 min.
+    // 2 min < 5 min threshold => excluded.
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    // Use first_commit_minutes=2 so session is 2 min (< 5 min threshold)
+    let dist = session_length_distribution(&conn, from, to, 120, 2).unwrap();
+    assert!(dist.sessions.is_empty(), "sessions < 5 min should be excluded");
+    assert_eq!(dist.median_minutes, 0);
+}
+
+#[test]
+fn session_distribution_two_sessions() {
+    let (conn, _tmp) = setup_db();
+
+    // Session 1: commits at 10:00, 10:10, 10:20 (3 commits, 8 min gaps)
+    // Median gap = 10 min. effective_credit = clamp(10, 5, 30) = 10.
+    // effective_gap = clamp(30, 30, 120) = 30.
+    // Session 1: [9:50, 10:20] = 30 min
+    //
+    // Session 2: commits at 14:00, 14:30, 15:00, 15:30 (4 commits, 30 min gaps)
+    // All within 30 min gap => one session: [13:50, 15:30] = 100 min
+    //
+    // But wait — the function queries ALL commits across ALL repos in range,
+    // then groups by session gap. Let me use separate repos to ensure distinct sessions,
+    // or use a gap large enough between sessions.
+    //
+    // Actually, the function should aggregate across repos. Let me use a single repo
+    // with a gap > session_gap between the two clusters.
+
+    // Cluster 1: 10:00, 10:10, 10:20
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c2"), Some("dev"), Some("msg"), "2025-01-15T10:10:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c3"), Some("dev"), Some("msg"), "2025-01-15T10:20:00Z").unwrap();
+
+    // Gap of 4 hours (>> any session gap)
+    // Cluster 2: 14:00, 14:30, 15:00, 15:30
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c4"), Some("dev"), Some("msg"), "2025-01-15T14:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c5"), Some("dev"), Some("msg"), "2025-01-15T14:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c6"), Some("dev"), Some("msg"), "2025-01-15T15:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c7"), Some("dev"), Some("msg"), "2025-01-15T15:30:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 30).unwrap();
+
+    // Should have 2 sessions, both >= 5 min
+    assert_eq!(dist.sessions.len(), 2, "expected 2 sessions, got {}", dist.sessions.len());
+
+    // Both sessions should be > 5 min
+    for s in &dist.sessions {
+        assert!(s.num_minutes() >= 5, "session {} min should be >= 5", s.num_minutes());
+    }
+
+    // Median should be between the two session lengths
+    assert!(dist.median_minutes > 0);
+    assert!(dist.mean_minutes > 0);
+    assert!(dist.p90_minutes >= dist.median_minutes);
+}
+
+#[test]
+fn session_distribution_aggregates_across_repos() {
+    let (conn, _tmp) = setup_db();
+
+    // Repo A: session at 10:00-10:20
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("a1"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("a2"), Some("dev"), Some("msg"), "2025-01-15T10:20:00Z").unwrap();
+
+    // Repo B: session at 14:00-14:40 (separate repo, separate time)
+    insert_activity(&conn, "/repo/b", "commit", Some("main"), None,
+        Some("b1"), Some("dev"), Some("msg"), "2025-01-15T14:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/b", "commit", Some("main"), None,
+        Some("b2"), Some("dev"), Some("msg"), "2025-01-15T14:40:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 30).unwrap();
+
+    // Should detect sessions from both repos
+    assert!(dist.sessions.len() >= 2, "should aggregate across repos, got {} sessions", dist.sessions.len());
+}
+
+#[test]
+fn session_distribution_only_counts_commits() {
+    let (conn, _tmp) = setup_db();
+
+    // Two commits forming a session
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c1"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c2"), Some("dev"), Some("msg"), "2025-01-15T10:20:00Z").unwrap();
+
+    // Non-commit events should not create additional sessions
+    insert_activity(&conn, "/repo/a", "branch_switch", Some("feat"), None,
+        None, Some("dev"), None, "2025-01-15T16:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "merge", Some("main"), None,
+        Some("m1"), Some("dev"), Some("merge"), "2025-01-15T16:05:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let dist = session_length_distribution(&conn, from, to, 120, 30).unwrap();
+
+    // Only 1 session from the 2 commits; branch_switch/merge don't count
+    // (the non-commit events at 16:00 shouldn't form sessions)
+    let total_sessions_over_5min: Vec<_> = dist.sessions.iter()
+        .filter(|d| d.num_minutes() >= 5).collect();
+    assert!(total_sessions_over_5min.len() <= 1,
+        "non-commit events should not create sessions");
 }
