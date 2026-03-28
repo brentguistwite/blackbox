@@ -1,5 +1,16 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, Local, NaiveDate};
+use ratatui::{
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
 use std::collections::BTreeMap;
+
+const DAY_LABEL_WIDTH: u16 = 4;
+const CELL_WIDTH: u16 = 2;
+const DAY_LABELS: [&str; 7] = ["Mon ", "    ", "Wed ", "    ", "Fri ", "    ", "Sun "];
 
 /// Holds daily commit counts and precomputed max for intensity calculation.
 pub struct HeatmapData {
@@ -56,6 +67,109 @@ impl HeatmapData {
             1
         }
     }
+}
+
+/// Map intensity tier (0-4) to ratatui Color.
+fn intensity_color(tier: u8) -> Color {
+    match tier {
+        0 => Color::DarkGray,
+        1 => Color::Rgb(0, 68, 0),
+        2 => Color::Rgb(0, 128, 0),
+        3 => Color::Rgb(0, 185, 0),
+        _ => Color::Rgb(57, 211, 83),
+    }
+}
+
+/// 2-char month abbreviation aligned to cell width.
+fn month_label(month: u32) -> &'static str {
+    match month {
+        1 => "Ja",
+        2 => "Fe",
+        3 => "Mr",
+        4 => "Ap",
+        5 => "My",
+        6 => "Jn",
+        7 => "Jl",
+        8 => "Au",
+        9 => "Se",
+        10 => "Oc",
+        11 => "Nv",
+        12 => "De",
+        _ => "  ",
+    }
+}
+
+/// Render GitHub-style contribution heatmap into a ratatui frame.
+///
+/// Columns = weeks (left=oldest), rows = 7 days (Mon at top).
+/// Each cell is `██` (2 chars wide) colored by intensity tier.
+/// Month labels appear above the first column of each new month.
+/// Day-of-week labels (Mon/Wed/Fri) on the left.
+/// Truncates weeks to fit when terminal is narrower than the grid.
+pub fn render_heatmap(frame: &mut Frame, area: Rect, data: &HeatmapData, weeks: u32) {
+    let available = area.width.saturating_sub(DAY_LABEL_WIDTH);
+    let max_weeks = (available / CELL_WIDTH) as u32;
+    let display_weeks = weeks.min(max_weeks);
+
+    if display_weeks == 0 || area.height < 2 {
+        return;
+    }
+
+    let today = Local::now().date_naive();
+    let days_since_monday = today.weekday().num_days_from_monday();
+    let this_monday = today - chrono::Duration::days(days_since_monday as i64);
+    let start_monday = this_monday - chrono::Duration::weeks((display_weeks - 1) as i64);
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Month labels row
+    let mut month_spans: Vec<Span> = Vec::new();
+    month_spans.push(Span::raw("    ")); // day label padding
+    let mut prev_month: Option<u32> = None;
+    for w in 0..display_weeks {
+        let week_monday = start_monday + chrono::Duration::weeks(w as i64);
+        let month = week_monday.month();
+        if prev_month != Some(month) {
+            month_spans.push(Span::styled(
+                month_label(month).to_string(),
+                Style::default().fg(Color::White),
+            ));
+        } else {
+            month_spans.push(Span::raw("  "));
+        }
+        prev_month = Some(month);
+    }
+    lines.push(Line::from(month_spans));
+
+    // Day rows: Mon(0) through Sun(6)
+    for row in 0..7u32 {
+        if (lines.len() as u16) >= area.height {
+            break;
+        }
+        let mut spans: Vec<Span> = Vec::new();
+        spans.push(Span::styled(
+            DAY_LABELS[row as usize].to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+        for w in 0..display_weeks {
+            let date = start_monday
+                + chrono::Duration::weeks(w as i64)
+                + chrono::Duration::days(row as i64);
+            if date > today {
+                // Future date: blank
+                spans.push(Span::raw("  "));
+            } else {
+                let tier = data.intensity(date);
+                spans.push(Span::styled(
+                    "██",
+                    Style::default().fg(intensity_color(tier)),
+                ));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]
@@ -125,5 +239,68 @@ mod tests {
         assert_eq!(data.intensity(NaiveDate::from_ymd_opt(2025, 1, 4).unwrap()), 2);
         assert_eq!(data.intensity(NaiveDate::from_ymd_opt(2025, 1, 5).unwrap()), 3);
         assert_eq!(data.intensity(NaiveDate::from_ymd_opt(2025, 1, 6).unwrap()), 4);
+    }
+
+    #[test]
+    fn render_heatmap_empty_does_not_panic() {
+        let backend = ratatui::backend::TestBackend::new(120, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        terminal
+            .draw(|frame| {
+                render_heatmap(frame, frame.area(), &data, 52);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn render_heatmap_narrow_terminal_does_not_panic() {
+        let backend = ratatui::backend::TestBackend::new(10, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        terminal
+            .draw(|frame| {
+                render_heatmap(frame, frame.area(), &data, 52);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn render_heatmap_with_data_does_not_panic() {
+        let backend = ratatui::backend::TestBackend::new(120, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let mut counts = BTreeMap::new();
+        let today = Local::now().date_naive();
+        counts.insert(today, 5);
+        counts.insert(today - chrono::Duration::days(1), 3);
+        counts.insert(today - chrono::Duration::days(7), 10);
+        let data = HeatmapData::from_counts(counts);
+        terminal
+            .draw(|frame| {
+                render_heatmap(frame, frame.area(), &data, 52);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn render_heatmap_zero_height_does_not_panic() {
+        let backend = ratatui::backend::TestBackend::new(120, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 120, 1);
+                render_heatmap(frame, area, &data, 52);
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn intensity_color_maps_all_tiers() {
+        assert_eq!(intensity_color(0), Color::DarkGray);
+        assert_eq!(intensity_color(1), Color::Rgb(0, 68, 0));
+        assert_eq!(intensity_color(2), Color::Rgb(0, 128, 0));
+        assert_eq!(intensity_color(3), Color::Rgb(0, 185, 0));
+        assert_eq!(intensity_color(4), Color::Rgb(57, 211, 83));
     }
 }
