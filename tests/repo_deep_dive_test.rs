@@ -1,6 +1,32 @@
 use blackbox::db;
-use blackbox::repo_deep_dive::{find_db_repo_path, query_repo_all_time, resolve_repo_path};
+use blackbox::repo_deep_dive::{
+    compute_language_breakdown, find_db_repo_path, query_repo_all_time, resolve_repo_path,
+};
 use tempfile::TempDir;
+
+/// Helper: create a commit in a git2 repo with given files.
+/// `files` is a slice of (relative_path, content_bytes).
+fn commit_files(repo: &git2::Repository, files: &[(&str, &[u8])], message: &str) {
+    let mut index = repo.index().unwrap();
+    for (path, content) in files {
+        let dir = std::path::Path::new(path).parent();
+        if let Some(d) = dir {
+            let full = repo.workdir().unwrap().join(d);
+            std::fs::create_dir_all(full).ok();
+        }
+        let full_path = repo.workdir().unwrap().join(path);
+        std::fs::write(&full_path, content).unwrap();
+        index.add_path(std::path::Path::new(path)).unwrap();
+    }
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let sig = git2::Signature::now("test", "test@test.com").unwrap();
+    let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+    let parents: Vec<&git2::Commit> = parent.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)
+        .unwrap();
+}
 
 #[test]
 fn resolve_repo_path_valid_git_repo() {
@@ -123,4 +149,86 @@ fn query_repo_all_time_returns_ai_sessions() {
     assert_eq!(data.ai_sessions[0].session_id, "sess-1");
     assert!(data.ai_sessions[0].ended_at.is_some());
     assert!(data.ai_sessions[1].ended_at.is_none());
+}
+
+// --- US-003: compute_language_breakdown ---
+
+#[test]
+fn language_breakdown_single_rs_file() {
+    let tmp = TempDir::new().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    commit_files(&repo, &[("main.rs", b"fn main() {\n    println!(\"hi\");\n}\n")], "init");
+
+    let result = compute_language_breakdown(tmp.path()).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].language, "Rust");
+    assert_eq!(result[0].file_count, 1);
+    // 3 lines of content + split produces 4 segments, but "fn main...\nprintln...\n}\n" = 4 splits
+    assert!(result[0].line_count >= 3);
+    assert!((result[0].percent - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn language_breakdown_two_languages() {
+    let tmp = TempDir::new().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    commit_files(
+        &repo,
+        &[
+            ("main.rs", b"line1\nline2\n"),
+            ("script.py", b"print('hi')\n"),
+        ],
+        "init",
+    );
+
+    let result = compute_language_breakdown(tmp.path()).unwrap();
+    assert_eq!(result.len(), 2);
+    let total_pct: f64 = result.iter().map(|r| r.percent).sum();
+    assert!((total_pct - 100.0).abs() < 0.01);
+}
+
+#[test]
+fn language_breakdown_skips_binary() {
+    let tmp = TempDir::new().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    commit_files(
+        &repo,
+        &[
+            ("main.rs", b"fn main() {}\n"),
+            ("image.png", &[0x89, 0x50, 0x4E, 0x47, 0x00, 0x00, 0x00]),
+        ],
+        "init",
+    );
+
+    let result = compute_language_breakdown(tmp.path()).unwrap();
+    // only Rust should appear, binary png skipped
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].language, "Rust");
+}
+
+#[test]
+fn language_breakdown_empty_repo() {
+    let tmp = TempDir::new().unwrap();
+    git2::Repository::init(tmp.path()).unwrap();
+    let result = compute_language_breakdown(tmp.path()).unwrap();
+    assert!(result.is_empty());
+}
+
+#[test]
+fn language_breakdown_skips_no_extension() {
+    let tmp = TempDir::new().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    commit_files(
+        &repo,
+        &[
+            ("Makefile", b"all:\n\techo hi\n"),
+            ("main.rs", b"fn main() {}\n"),
+        ],
+        "init",
+    );
+
+    let result = compute_language_breakdown(tmp.path()).unwrap();
+    // only Rust — Makefile has no extension, skipped
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].language, "Rust");
 }
