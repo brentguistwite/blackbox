@@ -34,6 +34,7 @@ blackbox today
 | `week` | Show this week's activity (`--format pretty\|json\|csv`, `--summarize`) |
 | `month` | Show this month's activity (`--format pretty\|json\|csv`, `--summarize`) |
 | `standup` | Slack/Teams-friendly activity summary (`--week`, `--summarize`) |
+| `heatmap` | GitHub-style contribution heatmap (`--weeks N`, default 52) |
 | `live` | Interactive TUI dashboard |
 | `doctor` | Run health checks and report status |
 | `install` | Register as OS service (launchd on macOS, systemd on Linux) |
@@ -83,6 +84,8 @@ Today - 3 repos, 12 commits, 4h 30m estimated
 **CSV:** `blackbox today --format csv` -- flat rows suitable for spreadsheets/pipelines.
 
 **Standup:** `blackbox standup` -- copy-paste-ready summary for Slack/Teams. Use `--week` for weekly and `--summarize` for LLM-generated summaries.
+
+**Heatmap:** `blackbox heatmap` -- GitHub-style contribution grid in your terminal. Shows commit frequency across all tracked repos as color-intensity blocks. Use `--weeks N` (1-260) to control the range. Displays total commits, active days, and longest streak.
 
 The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
 
