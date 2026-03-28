@@ -54,14 +54,14 @@ pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
     }
     gaps.sort();
     let mid = gaps.len() / 2;
-    if gaps.len() % 2 == 0 {
+    if gaps.len().is_multiple_of(2) {
         Some((gaps[mid - 1] + gaps[mid]) / 2)
     } else {
         Some(gaps[mid])
     }
 }
 
-/// Time estimation v2: git events + AI sessions, adaptive thresholds.
+/// Time estimation v2: git events + AI sessions + presence intervals, adaptive thresholds.
 /// No presence data. AI session intervals must be pre-clipped to query window.
 ///
 /// With empty ai_sessions and < 2 commits, falls back to config gap/credit values
@@ -69,6 +69,7 @@ pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
 pub fn estimate_time_v2(
     events: &[ActivityEvent],
     ai_sessions: &[TimeInterval],
+    presence_intervals: &[TimeInterval],
     session_gap_minutes: u64,
     first_commit_minutes: u64,
 ) -> (Duration, Vec<TimeInterval>) {
@@ -76,8 +77,8 @@ pub fn estimate_time_v2(
     let (effective_gap, effective_credit) = match median_commit_gap(events) {
         Some(median) => {
             let median_mins = median.num_minutes();
-            let gap = (median_mins * 3).max(MIN_GAP_FLOOR_MINS).min(MAX_GAP_CAP_MINS);
-            let credit = median_mins.max(MIN_CREDIT_MINS).min(MAX_CREDIT_MINS);
+            let gap = (median_mins * 3).clamp(MIN_GAP_FLOOR_MINS, MAX_GAP_CAP_MINS);
+            let credit = median_mins.clamp(MIN_CREDIT_MINS, MAX_CREDIT_MINS);
             (Duration::minutes(gap), Duration::minutes(credit))
         }
         None => (
@@ -121,10 +122,11 @@ pub fn estimate_time_v2(
         }
     }
 
-    // Step 4: Collect git + AI intervals
+    // Step 4: Collect git + AI + presence intervals
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     all_intervals.extend_from_slice(&git_intervals);
     all_intervals.extend_from_slice(ai_sessions);
+    all_intervals.extend_from_slice(presence_intervals);
 
     // Step 5: Merge and return total + intervals
     let (merged, total) = merge_intervals(&mut all_intervals);
@@ -251,9 +253,9 @@ pub fn estimate_time(
         let gap = events[i].timestamp - events[i - 1].timestamp;
         if gap >= gap_threshold {
             // New session
-            total = total + first_credit;
+            total += first_credit;
         } else {
-            total = total + gap;
+            total += gap;
         }
     }
 
@@ -357,7 +359,7 @@ pub fn query_activity(
 
     // Collect all repo paths. Filter out AI sessions from user's home dir.
     let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
-    let not_home = |k: &&String| home_dir.as_ref().map_or(true, |h| k.as_str() != h);
+    let not_home = |k: &&String| home_dir.as_ref().is_none_or(|h| k.as_str() != h);
     let all_repo_paths: std::collections::BTreeSet<String> = repo_map
         .keys()
         .chain(review_map.keys())
@@ -399,7 +401,7 @@ pub fn query_activity(
         }).collect();
 
         let (estimated_time, _) = estimate_time_v2(
-            &events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &events, &ai_intervals, &[], session_gap_minutes, first_commit_minutes,
         );
 
         repos.push(RepoSummary {
@@ -433,7 +435,7 @@ pub fn global_estimated_time(
             if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
         }).collect();
         let (_, intervals) = estimate_time_v2(
-            &repo.events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &repo.events, &ai_intervals, &[], session_gap_minutes, first_commit_minutes,
         );
         all_intervals.extend_from_slice(&intervals);
     }
