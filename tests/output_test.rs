@@ -70,6 +70,7 @@ fn render_summary_with_repos() {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     };
 
@@ -136,6 +137,7 @@ fn make_test_summary() -> ActivitySummary {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     }
 }
@@ -298,6 +300,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
                 },
             ],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     }
 }
@@ -397,6 +400,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
                     turns: None,
                 },
             ],
+            presence_intervals: vec![],
         }],
     }
 }
@@ -505,6 +509,7 @@ fn standup_groups_commits_by_branch() {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     };
     let output = render_standup(&summary);
@@ -560,6 +565,7 @@ fn standup_includes_pr_info() {
             pr_info: Some(vec![PrInfo { number: 472, title: "Auth refactor".to_string(), state: "MERGED".to_string(), head_ref_name: "feat/auth".to_string() }]),
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     };
     let output = render_standup(&summary);
@@ -600,6 +606,7 @@ fn standup_week_header() {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }],
     };
     let output = render_standup(&summary);

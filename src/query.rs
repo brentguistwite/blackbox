@@ -234,6 +234,7 @@ pub struct RepoSummary {
     pub pr_info: Option<Vec<PrInfo>>,
     pub reviews: Vec<ReviewInfo>,
     pub ai_sessions: Vec<AiSessionInfo>,
+    pub presence_intervals: Vec<TimeInterval>,
 }
 
 #[derive(Debug, Clone)]
@@ -419,10 +420,10 @@ pub fn query_activity(
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
 
-        let presence = presence_map.get(&repo_path).map(|v| v.as_slice()).unwrap_or(&[]);
+        let presence: Vec<TimeInterval> = presence_map.get(&repo_path).cloned().unwrap_or_default();
 
         let (estimated_time, _) = estimate_time_v2(
-            &events, &ai_intervals, presence, session_gap_minutes, first_commit_minutes,
+            &events, &ai_intervals, &presence, session_gap_minutes, first_commit_minutes,
         );
 
         repos.push(RepoSummary {
@@ -435,6 +436,7 @@ pub fn query_activity(
             pr_info: None,
             reviews,
             ai_sessions,
+            presence_intervals: presence,
         });
     }
 
@@ -456,7 +458,7 @@ pub fn global_estimated_time(
             if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
         }).collect();
         let (_, intervals) = estimate_time_v2(
-            &repo.events, &ai_intervals, &[], session_gap_minutes, first_commit_minutes,
+            &repo.events, &ai_intervals, &repo.presence_intervals, session_gap_minutes, first_commit_minutes,
         );
         all_intervals.extend_from_slice(&intervals);
     }

@@ -1,7 +1,8 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
-    estimate_time_v2, median_commit_gap, merge_intervals, query_activity,
-    query_presence, today_range, week_range, month_range, ActivityEvent, TimeInterval,
+    estimate_time_v2, global_estimated_time, median_commit_gap, merge_intervals,
+    query_activity, query_presence, today_range, week_range, month_range,
+    ActivityEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Duration, TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -578,4 +579,54 @@ fn query_activity_presence_does_not_create_repos() {
 
     let repo = repos.iter().find(|r| r.repo_path == "/repo/presence-only");
     assert!(repo.is_none(), "presence should not create standalone repos");
+}
+
+// ===== US-004: global_estimated_time passes presence to estimate_time_v2 =====
+
+#[test]
+fn global_estimated_time_no_double_count_overlapping_presence() {
+    // Two repos with overlapping presence intervals 10:00-11:00.
+    // global_estimated_time merges across repos → should count 10:00-11:00 only once = 60 min.
+    let repo_a = RepoSummary {
+        repo_path: "/repo/alpha".into(),
+        repo_name: "alpha".into(),
+        commits: 0,
+        branches: vec![],
+        estimated_time: Duration::minutes(60),
+        events: vec![],
+        pr_info: None,
+        reviews: vec![],
+        ai_sessions: vec![],
+        presence_intervals: vec![iv(10, 0, 11, 0)],
+    };
+    let repo_b = RepoSummary {
+        repo_path: "/repo/beta".into(),
+        repo_name: "beta".into(),
+        commits: 0,
+        branches: vec![],
+        estimated_time: Duration::minutes(60),
+        events: vec![],
+        pr_info: None,
+        reviews: vec![],
+        ai_sessions: vec![],
+        presence_intervals: vec![iv(10, 0, 11, 0)],
+    };
+    let total = global_estimated_time(&[repo_a, repo_b], 120, 30);
+    assert_eq!(total, Duration::minutes(60), "overlapping presence across repos should not double-count");
+}
+
+#[test]
+fn query_activity_populates_presence_intervals() {
+    let (conn, _tmp) = setup_db();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_presence(&conn, "/repo/alpha", "2025-01-15T09:00:00Z", Some("2025-01-15T10:05:00Z"));
+
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+
+    assert!(!alpha.presence_intervals.is_empty(), "presence_intervals should be populated");
+    assert_eq!(alpha.presence_intervals[0].start, ts(9, 0));
+    assert_eq!(alpha.presence_intervals[0].end, ts(10, 5));
 }
