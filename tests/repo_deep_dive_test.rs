@@ -1,6 +1,7 @@
 use blackbox::db;
 use blackbox::repo_deep_dive::{
-    compute_language_breakdown, find_db_repo_path, query_repo_all_time, resolve_repo_path,
+    compute_language_breakdown, compute_top_files, find_db_repo_path, query_repo_all_time,
+    resolve_repo_path,
 };
 use tempfile::TempDir;
 
@@ -231,4 +232,28 @@ fn language_breakdown_skips_no_extension() {
     // only Rust — Makefile has no extension, skipped
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].language, "Rust");
+}
+
+// --- US-004: compute_top_files ---
+
+#[test]
+fn top_files_same_file_multiple_commits() {
+    let tmp = TempDir::new().unwrap();
+    let repo = git2::Repository::init(tmp.path()).unwrap();
+    commit_files(&repo, &[("file.rs", b"v1\n")], "first");
+    commit_files(&repo, &[("file.rs", b"v2\n")], "second");
+    commit_files(&repo, &[("file.rs", b"v3\n")], "third");
+
+    let result = compute_top_files(tmp.path(), 10).unwrap();
+    assert!(!result.is_empty());
+    assert_eq!(result[0].path, "file.rs");
+    assert_eq!(result[0].change_count, 3);
+}
+
+#[test]
+fn top_files_empty_repo() {
+    let tmp = TempDir::new().unwrap();
+    git2::Repository::init(tmp.path()).unwrap();
+    let result = compute_top_files(tmp.path(), 10).unwrap();
+    assert!(result.is_empty());
 }
