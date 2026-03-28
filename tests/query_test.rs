@@ -458,6 +458,63 @@ fn query_presence_clipped_to_query_window() {
     assert_eq!(intervals[0], iv(10, 0, 15, 0)); // clipped both sides
 }
 
+// ===== US-002: presence anchoring tests =====
+
+#[test]
+fn v2_presence_anchors_session_start_before_credit_window() {
+    // Presence started 45 min before first commit, credit=30
+    // Commits at 10:00, 10:30 → median=30, credit=30, gap=90
+    // Tentative git session: [9:30, 10:30]
+    // Presence: [9:15, 10:00] starts before tentative (9:30), overlaps credit window
+    // Anchored: session start = 9:15 → [9:15, 10:30] = 75 min
+    let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
+    let presence = vec![iv(9, 15, 10, 0)];
+    let (result, intervals) = estimate_time_v2(&events, &[], &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(75));
+    assert_eq!(intervals[0].start, ts(9, 15), "session start should be anchored to presence.start");
+}
+
+#[test]
+fn v2_presence_after_first_commit_no_anchoring() {
+    // Presence started after first_event → no anchoring, credit logic applies
+    // Commits at 10:00, 10:30 → credit=30, tentative [9:30, 10:30]
+    // Presence: [10:10, 10:40] starts after first_event (10:00)
+    // Git stays [9:30, 10:30], merge with presence → [9:30, 10:40] = 70 min
+    let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
+    let presence = vec![iv(10, 10, 10, 40)];
+    let (result, intervals) = estimate_time_v2(&events, &[], &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(70));
+    assert_eq!(intervals[0].start, ts(9, 30), "credit should be preserved, not anchored");
+}
+
+#[test]
+fn v2_presence_partial_credit_overlap_still_anchors() {
+    // Presence covers only part of credit window → still anchors
+    // Commits at 10:00, 10:30 → credit=30, tentative [9:30, 10:30]
+    // Presence: [9:20, 9:40] starts before 9:30 and overlaps [9:30, 10:00]
+    // Anchored: session start = 9:20 → merged [9:20, 10:30] = 70 min
+    let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
+    let presence = vec![iv(9, 20, 9, 40)];
+    let (result, intervals) = estimate_time_v2(&events, &[], &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(70));
+    assert_eq!(intervals[0].start, ts(9, 20), "presence should anchor even with partial overlap");
+}
+
+#[test]
+fn v2_presence_anchor_prevents_ai_credit_suppression() {
+    // Presence anchoring should prevent AI credit suppression from creating a gap
+    // Commits at 10:00, 10:30 (credit=30, gap=90)
+    // AI: [9:32, 9:58] overlaps credit window [9:30, 10:00]
+    // Presence: [9:10, 9:35] starts before tentative (9:30), overlaps credit window
+    // Without anchoring: AI suppresses credit → git=[10:00,10:30], gap [9:58,10:00] → 78 min
+    // With anchoring: git=[9:10,10:30], suppression skipped → 80 min
+    let events = vec![make_event_at(10, 0), make_event_at(10, 30)];
+    let ai = vec![iv(9, 32, 9, 58)];
+    let presence = vec![iv(9, 10, 9, 35)];
+    let (result, _) = estimate_time_v2(&events, &ai, &presence, 120, 30);
+    assert_eq!(result, Duration::minutes(80));
+}
+
 // ===== query_activity: presence no longer affects time estimation =====
 
 #[test]

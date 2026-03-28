@@ -109,9 +109,25 @@ pub fn estimate_time_v2(
         }
     }
 
+    // Step 2b: Presence anchoring — if a presence interval started before the
+    // tentative start and overlaps the credit window, anchor session start to presence.start
+    let mut anchored = vec![false; git_intervals.len()];
+    for (i, iv) in git_intervals.iter_mut().enumerate() {
+        let tentative_start = iv.start;
+        if let Some(p) = presence_intervals.iter()
+            .filter(|p| p.start < tentative_start && p.end > tentative_start)
+            .min_by_key(|p| p.start)
+        {
+            iv.start = p.start;
+            anchored[i] = true;
+        }
+    }
+
     // Step 3: Credit suppression — if AI session covers [first_event - credit, first_event],
-    // shrink git interval start to first_event (real data > guess)
-    for iv in &mut git_intervals {
+    // shrink git interval start to first_event (real data > guess).
+    // Skip for presence-anchored intervals (presence > credit guess).
+    for (i, iv) in git_intervals.iter_mut().enumerate() {
+        if anchored[i] { continue; }
         let credit_window_start = iv.start;
         let credit_window_end = iv.start + effective_credit;
         let has_ai_overlap = ai_sessions.iter().any(|ai| {
