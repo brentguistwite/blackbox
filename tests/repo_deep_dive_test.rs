@@ -436,3 +436,128 @@ fn pr_history_from_reviews_only() {
     assert_eq!(prs[0].state, "REVIEWED");
     assert_eq!(prs[1].number, 10);
 }
+
+// --- US-015: CLI integration tests ---
+
+use assert_cmd::Command;
+use predicates::prelude::*;
+use std::fs;
+
+/// Helper: set up isolated XDG dirs with config + DB, return (config_dir, data_dir)
+fn setup_cli_env(tmp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Create config via init
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    // Ensure DB exists
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    (config_dir, data_dir)
+}
+
+#[test]
+fn cli_repo_pretty_exits_0_shows_repo_name() {
+    let tmp = TempDir::new().unwrap();
+    let (config_dir, data_dir) = setup_cli_env(&tmp);
+
+    // Create a git repo with a commit
+    let repo_dir = tmp.path().join("myrepo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo = git2::Repository::init(&repo_dir).unwrap();
+    commit_files(&repo, &[("main.rs", b"fn main() {}\n")], "init");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["repo", repo_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("myrepo"));
+}
+
+#[test]
+fn cli_repo_json_exits_0_valid_json_keys() {
+    let tmp = TempDir::new().unwrap();
+    let (config_dir, data_dir) = setup_cli_env(&tmp);
+
+    let repo_dir = tmp.path().join("jsonrepo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo = git2::Repository::init(&repo_dir).unwrap();
+    commit_files(&repo, &[("lib.rs", b"pub fn hello() {}\n")], "init");
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["repo", repo_dir.to_str().unwrap(), "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "exit 0 expected");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("invalid JSON: {e}\nstdout: {stdout}"));
+    assert!(parsed.get("repo_name").is_some(), "missing repo_name");
+    assert!(parsed.get("total_commits").is_some(), "missing total_commits");
+    assert!(parsed.get("total_estimated_minutes").is_some(), "missing total_estimated_minutes");
+    assert!(parsed.get("languages").is_some(), "missing languages");
+    assert!(parsed.get("top_files").is_some(), "missing top_files");
+    assert!(parsed.get("branches").is_some(), "missing branches");
+}
+
+#[test]
+fn cli_repo_invalid_path_exits_nonzero() {
+    let tmp = TempDir::new().unwrap();
+    let (config_dir, data_dir) = setup_cli_env(&tmp);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["repo", "/tmp/definitely-not-a-repo-xyz-999"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "should exit non-zero");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Not a git repository") || combined.contains("Path not found"),
+        "expected error message, got: {combined}"
+    );
+}
+
+#[test]
+fn cli_repo_untracked_shows_indicator() {
+    let tmp = TempDir::new().unwrap();
+    let (config_dir, data_dir) = setup_cli_env(&tmp);
+
+    // Repo with commits but not in DB — should show untracked
+    let repo_dir = tmp.path().join("untracked-repo");
+    fs::create_dir_all(&repo_dir).unwrap();
+    let repo = git2::Repository::init(&repo_dir).unwrap();
+    commit_files(&repo, &[("app.py", b"print('hi')\n")], "init");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["repo", repo_dir.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("untracked"));
+}
