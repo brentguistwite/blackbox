@@ -218,6 +218,65 @@ fn ext_to_language(ext: &str) -> String {
     .to_string()
 }
 
+#[derive(Debug)]
+pub struct FileChurnEntry {
+    pub path: String,
+    pub change_count: usize,
+}
+
+/// Walk commits from HEAD, count file appearances in diffs. Cap at 500 commits.
+pub fn compute_top_files(repo_path: &Path, limit: usize) -> anyhow::Result<Vec<FileChurnEntry>> {
+    let repo = git2::Repository::open(repo_path)?;
+    let mut revwalk = repo.revwalk()?;
+    if revwalk.push_head().is_err() {
+        // empty repo — no HEAD
+        return Ok(vec![]);
+    }
+    revwalk.set_sorting(git2::Sort::TIME)?;
+
+    let mut file_counts: HashMap<String, usize> = HashMap::new();
+
+    for (walked, oid_result) in revwalk.enumerate() {
+        if walked >= 500 {
+            log::debug!("compute_top_files: capped at 500 commits");
+            break;
+        }
+        let oid = oid_result?;
+        let commit = repo.find_commit(oid)?;
+
+        let tree = commit.tree()?;
+        let parent_tree = if commit.parent_count() > 0 {
+            commit.parent(0).ok().and_then(|p| p.tree().ok())
+        } else {
+            None
+        };
+
+        let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+        diff.foreach(
+            &mut |delta, _| {
+                if delta.new_file().is_binary() {
+                    return true;
+                }
+                if let Some(p) = delta.new_file().path().and_then(|p| p.to_str()) {
+                    *file_counts.entry(p.to_string()).or_insert(0) += 1;
+                }
+                true
+            },
+            None,
+            None,
+            None,
+        )?;
+    }
+
+    let mut entries: Vec<FileChurnEntry> = file_counts
+        .into_iter()
+        .map(|(path, change_count)| FileChurnEntry { path, change_count })
+        .collect();
+    entries.sort_by(|a, b| b.change_count.cmp(&a.change_count));
+    entries.truncate(limit);
+    Ok(entries)
+}
+
 /// Look up repo_path in DB via exact or prefix match.
 pub fn find_db_repo_path(conn: &Connection, canonical: &Path) -> anyhow::Result<Option<String>> {
     let path_str = canonical.to_string_lossy();
