@@ -114,7 +114,7 @@ pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct LanguageBreakdown {
     pub language: String,
     pub file_count: usize,
@@ -219,7 +219,7 @@ fn ext_to_language(ext: &str) -> String {
     .to_string()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct FileChurnEntry {
     pub path: String,
     pub change_count: usize,
@@ -307,7 +307,7 @@ pub fn compute_time_invested(
     duration
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BranchActivity {
     pub name: String,
     pub commit_count: usize,
@@ -347,6 +347,86 @@ pub fn compute_branch_activity(data: &RepoAllTimeData) -> Vec<BranchActivity> {
         .collect();
     result.sort_by(|a, b| b.last_active.cmp(&a.last_active));
     result
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepoPrEntry {
+    pub number: u64,
+    pub title: String,
+    pub state: String,
+    pub branch: Option<String>,
+    pub url: Option<String>,
+}
+
+/// Fetch PR history for a repo. Stub until US-006 implements gh CLI integration.
+pub fn fetch_repo_pr_history(_repo_path: &str, _data: &RepoAllTimeData) -> Vec<RepoPrEntry> {
+    vec![]
+}
+
+#[derive(Debug)]
+pub struct RepoDeepDive {
+    pub repo_path: String,
+    pub repo_name: String,
+    pub total_commits: usize,
+    pub first_commit_at: Option<DateTime<Utc>>,
+    pub last_commit_at: Option<DateTime<Utc>>,
+    pub total_estimated_time: Duration,
+    pub languages: Vec<LanguageBreakdown>,
+    pub top_files: Vec<FileChurnEntry>,
+    pub branches: Vec<BranchActivity>,
+    pub prs: Vec<RepoPrEntry>,
+    pub tracked: bool,
+}
+
+/// Orchestrate all sub-computations into a single RepoDeepDive.
+pub fn build_deep_dive(
+    repo_path_input: &str,
+    conn: &Connection,
+    config: &crate::config::Config,
+) -> anyhow::Result<RepoDeepDive> {
+    let canonical = resolve_repo_path(repo_path_input)?;
+    let db_repo_path = find_db_repo_path(conn, &canonical)?;
+    let tracked = db_repo_path.is_some();
+    let effective_path_owned =
+        db_repo_path.unwrap_or_else(|| canonical.to_string_lossy().to_string());
+
+    let data = query_repo_all_time(conn, &effective_path_owned)?;
+
+    let languages = compute_language_breakdown(&canonical).unwrap_or_default();
+    let top_files = compute_top_files(&canonical, 10).unwrap_or_default();
+    let total_estimated_time =
+        compute_time_invested(&data, config.session_gap_minutes, config.first_commit_minutes);
+    let branches = compute_branch_activity(&data);
+    let prs = fetch_repo_pr_history(&effective_path_owned, &data);
+
+    let commit_times: Vec<_> = data
+        .events
+        .iter()
+        .filter(|e| e.event_type == "commit")
+        .map(|e| e.timestamp)
+        .collect();
+    let first_commit_at = commit_times.iter().copied().min();
+    let last_commit_at = commit_times.iter().copied().max();
+    let total_commits = commit_times.len();
+
+    let repo_name = std::path::Path::new(&effective_path_owned)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| effective_path_owned.clone());
+
+    Ok(RepoDeepDive {
+        repo_path: effective_path_owned,
+        repo_name,
+        total_commits,
+        first_commit_at,
+        last_commit_at,
+        total_estimated_time,
+        languages,
+        top_files,
+        branches,
+        prs,
+        tracked,
+    })
 }
 
 /// Look up repo_path in DB via exact or prefix match.
