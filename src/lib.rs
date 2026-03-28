@@ -1,5 +1,6 @@
 pub mod claude_tracking;
 pub mod cli;
+pub mod heatmap;
 pub mod config;
 pub mod daemon;
 pub mod doctor;
