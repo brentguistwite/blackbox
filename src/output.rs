@@ -672,3 +672,93 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
 
     lines.join("\n")
 }
+
+// --- Rhythm report ---
+
+/// Aggregated rhythm analysis report for a time window.
+#[derive(Debug, Clone, Serialize)]
+pub struct RhythmReport {
+    pub days: u64,
+    pub hour_histogram: [u32; 24],
+    pub dow_histogram: [u32; 7],
+    pub after_hours: crate::query::AfterHoursStats,
+    pub session_distribution: crate::query::SessionDistribution,
+    pub burst_stats: crate::query::BurstStats,
+}
+
+/// Render full rhythm report as pretty terminal output.
+/// Composes all rhythm sections with headers and blank-line separators.
+pub fn render_rhythm(report: &RhythmReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(
+        format!("=== Work Rhythm (last {} days) ===", report.days)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
+    lines.push(String::new());
+
+    // Hour of day
+    lines.push("Hour of day".bold().to_string());
+    lines.push(render_hour_histogram(&report.hour_histogram));
+    lines.push(String::new());
+
+    // Day of week
+    lines.push("Day of week".bold().to_string());
+    lines.push(render_dow_histogram(&report.dow_histogram));
+    lines.push(String::new());
+
+    // Sustainability (after-hours)
+    lines.push("Sustainability".bold().to_string());
+    lines.push(render_after_hours_stats(&report.after_hours));
+    lines.push(String::new());
+
+    // Session lengths
+    lines.push("Session lengths".bold().to_string());
+    lines.push(render_session_distribution(&report.session_distribution));
+    lines.push(String::new());
+
+    // Commit pattern
+    lines.push("Commit pattern".bold().to_string());
+    lines.push(render_burst_stats(&report.burst_stats));
+
+    lines.join("\n")
+}
+
+/// JSON struct for rhythm report output.
+#[derive(Serialize)]
+pub struct RhythmReportJson {
+    pub days: u64,
+    pub hour_histogram: [u32; 24],
+    pub dow_histogram: [u32; 7],
+    pub after_hours: crate::query::AfterHoursStats,
+    pub session_distribution: SessionDistributionJson,
+    pub burst_stats: crate::query::BurstStats,
+}
+
+#[derive(Serialize)]
+pub struct SessionDistributionJson {
+    pub session_count: usize,
+    pub median_minutes: i64,
+    pub p90_minutes: i64,
+    pub mean_minutes: i64,
+}
+
+/// Render rhythm report as pretty-printed JSON string.
+pub fn render_rhythm_json(report: &RhythmReport) -> String {
+    let json = RhythmReportJson {
+        days: report.days,
+        hour_histogram: report.hour_histogram,
+        dow_histogram: report.dow_histogram,
+        after_hours: report.after_hours.clone(),
+        session_distribution: SessionDistributionJson {
+            session_count: report.session_distribution.sessions.len(),
+            median_minutes: report.session_distribution.median_minutes,
+            p90_minutes: report.session_distribution.p90_minutes,
+            mean_minutes: report.session_distribution.mean_minutes,
+        },
+        burst_stats: report.burst_stats.clone(),
+    };
+    serde_json::to_string_pretty(&json).expect("JSON serialization should not fail")
+}
