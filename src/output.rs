@@ -465,6 +465,68 @@ pub fn render_hour_histogram(histogram: &[u32; 24]) -> String {
     lines.join("\n")
 }
 
+/// Render day-of-week histogram as ASCII bar chart.
+/// Index 0=Mon..6=Sun. Returns empty message if all slots are zero.
+pub fn render_dow_histogram(histogram: &[u32; 7]) -> String {
+    const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    let max = *histogram.iter().max().unwrap_or(&0);
+    if max == 0 {
+        return "No commit activity in this period.".dimmed().to_string();
+    }
+
+    let max_bar_width: u32 = 20;
+    let mut lines: Vec<String> = Vec::new();
+
+    let peak_idx = histogram
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, v)| v)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    for (i, &count) in histogram.iter().enumerate() {
+        let bar_len = if max > 0 {
+            (count as u64 * max_bar_width as u64 / max as u64) as usize
+        } else {
+            0
+        };
+        let bar = "█".repeat(bar_len);
+        let padding = " ".repeat(max_bar_width as usize - bar_len);
+        let weekend_tag = if i >= 5 { " [wknd]" } else { "" };
+
+        if i == peak_idx && count > 0 {
+            lines.push(format!(
+                "{} | {}{} {:>4}  <- peak{}",
+                DAY_LABELS[i],
+                bar.green(),
+                padding,
+                count,
+                weekend_tag,
+            ));
+        } else {
+            lines.push(format!(
+                "{} | {}{} {:>4}{}",
+                DAY_LABELS[i],
+                bar.yellow(),
+                padding,
+                count,
+                weekend_tag,
+            ));
+        }
+    }
+
+    let commit_word = if histogram[peak_idx] == 1 { "commit" } else { "commits" };
+    lines.push(format!(
+        "Peak: {} ({} {})",
+        DAY_LABELS[peak_idx],
+        histogram[peak_idx],
+        commit_word,
+    ));
+
+    lines.join("\n")
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
