@@ -373,6 +373,9 @@ pub fn query_activity(
     // Query AI sessions in the same time range
     let ai_session_map = query_ai_sessions(conn, from, to)?;
 
+    // Query presence intervals once for all repos
+    let presence_map = query_presence(conn, from, to, session_gap_minutes)?;
+
     // Collect all repo paths. Filter out AI sessions from user's home dir.
     let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
     let not_home = |k: &&String| home_dir.as_ref().is_none_or(|h| k.as_str() != h);
@@ -416,8 +419,10 @@ pub fn query_activity(
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
 
+        let presence = presence_map.get(&repo_path).map(|v| v.as_slice()).unwrap_or(&[]);
+
         let (estimated_time, _) = estimate_time_v2(
-            &events, &ai_intervals, &[], session_gap_minutes, first_commit_minutes,
+            &events, &ai_intervals, presence, session_gap_minutes, first_commit_minutes,
         );
 
         repos.push(RepoSummary {
