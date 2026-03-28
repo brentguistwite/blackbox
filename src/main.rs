@@ -142,6 +142,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Live => {
             blackbox::tui::run_live()?;
         }
+        Commands::Rhythm { days, format } => {
+            blackbox::rhythm::run_rhythm(days, format)?;
+        }
         Commands::Standup { week, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
