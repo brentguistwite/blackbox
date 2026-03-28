@@ -296,3 +296,46 @@ fn render_dow_histogram_peak_label() {
     assert!(output.contains("peak"), "should show peak indicator");
     assert!(output.contains("Tue"), "peak should reference Tue");
 }
+
+// === US-014: Integration test: day-of-week histogram query ===
+
+#[test]
+fn dow_histogram_wednesday_saturday_others_zero() {
+    let (conn, _tmp) = setup_db();
+
+    // 2025-01-15 12:00 UTC = Wednesday, 2025-01-18 12:00 UTC = Saturday
+    for i in 0..3 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("w{i}")), Some("dev"), Some("msg"), "2025-01-15T12:00:00Z").unwrap();
+    }
+    for i in 0..2 {
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("s{i}")), Some("dev"), Some("msg"), "2025-01-18T12:00:00Z").unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 13, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 19, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+
+    let wed_idx = utc_date_to_local_dow(2025, 1, 15, 12);
+    let sat_idx = utc_date_to_local_dow(2025, 1, 18, 12);
+
+    assert!(hist[wed_idx] > 0, "Wednesday bucket should have commits");
+    assert!(hist[sat_idx] > 0, "Saturday bucket should have commits");
+
+    // All other DOW slots must be 0
+    for (i, &count) in hist.iter().enumerate() {
+        if i != wed_idx && i != sat_idx {
+            assert_eq!(count, 0, "DOW index {i} should be 0, got {count}");
+        }
+    }
+}
+
+#[test]
+fn dow_histogram_empty_returns_all_zeros() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 6, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap();
+    let hist = commit_dow_histogram(&conn, from, to).unwrap();
+    assert_eq!(hist, [0u32; 7], "empty DB should return all-zero histogram");
+}
