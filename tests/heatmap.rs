@@ -26,13 +26,21 @@ fn heatmap_exits_zero_with_empty_db() {
     let (_tmp, data_dir, config_dir) = setup_temp_env();
     let _conn = open_test_db(&data_dir);
 
-    Command::cargo_bin("blackbox")
+    let output = Command::cargo_bin("blackbox")
         .unwrap()
         .arg("heatmap")
         .env("XDG_DATA_HOME", &data_dir)
         .env("XDG_CONFIG_HOME", &config_dir)
-        .assert()
-        .success();
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "heatmap should exit 0 with empty DB");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No commits"),
+        "empty DB should show 'No commits' message, got: {stdout}"
+    );
 }
 
 #[test]

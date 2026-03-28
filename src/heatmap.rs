@@ -280,6 +280,10 @@ pub fn render_heatmap_ansi(data: &HeatmapData, weeks: u32) -> String {
         stats.total_commits, stats.active_days, stats.longest_streak
     ));
 
+    if stats.total_commits == 0 {
+        out.push_str("No commits recorded in this period\n");
+    }
+
     out
 }
 
@@ -542,6 +546,31 @@ mod tests {
         assert!(out.contains("0 commits"));
         assert!(out.contains("0 active days"));
         assert!(out.contains("0 day streak"));
+    }
+
+    #[test]
+    fn render_ansi_empty_data_shows_no_commits_message() {
+        colored::control::set_override(false);
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(
+            out.contains("No commits recorded in this period"),
+            "empty data should show 'No commits recorded in this period'"
+        );
+    }
+
+    #[test]
+    fn render_ansi_nonempty_data_omits_no_commits_message() {
+        colored::control::set_override(false);
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        counts.insert(today, 3);
+        let data = HeatmapData::from_counts(counts);
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(
+            !out.contains("No commits recorded in this period"),
+            "non-empty data should not show 'No commits' message"
+        );
     }
 
     #[test]
