@@ -1,5 +1,6 @@
 use anyhow::Context;
 use chrono::{Datelike, Local, NaiveDate};
+use colored::Colorize;
 use ratatui::{
     layout::Rect,
     style::{Color, Style},
@@ -215,6 +216,73 @@ pub fn render_heatmap(frame: &mut Frame, area: Rect, data: &HeatmapData, weeks: 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// Map intensity tier to (r, g, b) for the colored crate ANSI renderer.
+fn intensity_rgb(tier: u8) -> (u8, u8, u8) {
+    match tier {
+        0 => (80, 80, 80), // dark gray
+        1 => (0, 68, 0),
+        2 => (0, 128, 0),
+        3 => (0, 185, 0),
+        _ => (57, 211, 83),
+    }
+}
+
+/// Render a GitHub-style contribution heatmap as an ANSI-colored string.
+///
+/// Uses the `colored` crate so output is pipe-safe (colors auto-stripped when
+/// stdout is not a TTY). Returns the full grid with month labels, day-of-week
+/// labels, and a summary stats line.
+pub fn render_heatmap_ansi(data: &HeatmapData, weeks: u32) -> String {
+    let today = Local::now().date_naive();
+    let days_since_monday = today.weekday().num_days_from_monday();
+    let this_monday = today - chrono::Duration::days(days_since_monday as i64);
+    let start_monday = this_monday - chrono::Duration::weeks((weeks.max(1) - 1) as i64);
+
+    let mut out = String::new();
+
+    // Month labels row
+    out.push_str("    "); // day-label padding
+    let mut prev_month: Option<u32> = None;
+    for w in 0..weeks {
+        let week_monday = start_monday + chrono::Duration::weeks(w as i64);
+        let month = week_monday.month();
+        if prev_month != Some(month) {
+            out.push_str(month_label(month));
+        } else {
+            out.push_str("  ");
+        }
+        prev_month = Some(month);
+    }
+    out.push('\n');
+
+    // Day rows: Mon(0) through Sun(6)
+    for row in 0..7u32 {
+        out.push_str(DAY_LABELS[row as usize]);
+        for w in 0..weeks {
+            let date = start_monday
+                + chrono::Duration::weeks(w as i64)
+                + chrono::Duration::days(row as i64);
+            if date > today {
+                out.push_str("  ");
+            } else {
+                let tier = data.intensity(date);
+                let (r, g, b) = intensity_rgb(tier);
+                out.push_str(&format!("{}", "██".truecolor(r, g, b)));
+            }
+        }
+        out.push('\n');
+    }
+
+    // Stats line
+    let stats = data.stats();
+    out.push_str(&format!(
+        "  {} commits  {} active days  {} day streak\n",
+        stats.total_commits, stats.active_days, stats.longest_streak
+    ));
+
+    out
+}
+
 /// Compute longest streak of consecutive days with >= 1 commit.
 fn longest_streak(days: &BTreeMap<NaiveDate, u32>) -> u32 {
     let mut best = 0u32;
@@ -246,10 +314,11 @@ fn longest_streak(days: &BTreeMap<NaiveDate, u32>) -> u32 {
     best
 }
 
-/// Render the heatmap grid and summary to terminal via ratatui, then exit.
+/// Render the heatmap as ANSI-colored text to stdout.
 ///
 /// Loads config + DB, queries daily commit counts for the given week range,
-/// renders a GitHub-style contribution grid with summary stats, then returns.
+/// prints a GitHub-style contribution grid with summary stats, then returns.
+/// Uses the `colored` crate (not ratatui) so output is pipe/redirect-safe.
 pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
     let data_dir = crate::config::data_dir()?;
     let db_path = data_dir.join("blackbox.db");
@@ -260,29 +329,7 @@ pub fn run_heatmap(weeks: u32) -> anyhow::Result<()> {
     let counts = crate::query::query_daily_commit_counts(&conn, from, to)?;
     let data = HeatmapData::from_counts(counts);
 
-    let stats = data.stats();
-
-    // Render via ratatui raw mode, then exit
-    let mut terminal = ratatui::init();
-    terminal.draw(|frame| {
-        let area = frame.area();
-        // Reserve last row for summary
-        let grid_area = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-        render_heatmap(frame, grid_area, &data, weeks);
-
-        // Summary line at bottom
-        let summary_text = format!(
-            "  {} commits  {} active days  {} day streak",
-            stats.total_commits, stats.active_days, stats.longest_streak
-        );
-        let summary_line = Line::from(Span::styled(
-            summary_text,
-            Style::default().fg(Color::White),
-        ));
-        let summary_area = Rect::new(area.x, area.y + grid_area.height, area.width, 1);
-        frame.render_widget(Paragraph::new(vec![summary_line]), summary_area);
-    })?;
-    ratatui::restore();
+    print!("{}", render_heatmap_ansi(&data, weeks));
 
     Ok(())
 }
@@ -485,5 +532,62 @@ mod tests {
         // gap
         days.insert(base + chrono::Duration::days(4), 3);
         assert_eq!(longest_streak(&days), 3);
+    }
+
+    #[test]
+    fn render_ansi_empty_data_contains_stats() {
+        colored::control::set_override(false);
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(out.contains("0 commits"));
+        assert!(out.contains("0 active days"));
+        assert!(out.contains("0 day streak"));
+    }
+
+    #[test]
+    fn render_ansi_contains_day_labels() {
+        colored::control::set_override(false);
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(out.contains("Mon"));
+        assert!(out.contains("Wed"));
+        assert!(out.contains("Fri"));
+    }
+
+    #[test]
+    fn render_ansi_contains_block_chars() {
+        colored::control::set_override(false);
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        counts.insert(today, 5);
+        let data = HeatmapData::from_counts(counts);
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(out.contains("██"), "output should contain block chars");
+    }
+
+    #[test]
+    fn render_ansi_with_data_shows_nonzero_stats() {
+        colored::control::set_override(false);
+        let today = Local::now().date_naive();
+        let mut counts = BTreeMap::new();
+        counts.insert(today, 3);
+        counts.insert(today - chrono::Duration::days(1), 2);
+        let data = HeatmapData::from_counts(counts);
+        let out = render_heatmap_ansi(&data, 4);
+        assert!(out.contains("5 commits"));
+        assert!(out.contains("2 active days"));
+    }
+
+    #[test]
+    fn render_ansi_has_month_labels() {
+        colored::control::set_override(false);
+        let data = HeatmapData::from_counts(BTreeMap::new());
+        let out = render_heatmap_ansi(&data, 52);
+        // First line should have at least one month abbreviation
+        let first_line = out.lines().next().unwrap_or("");
+        let has_month = ["Ja", "Fe", "Mr", "Ap", "My", "Jn", "Jl", "Au", "Se", "Oc", "Nv", "De"]
+            .iter()
+            .any(|m| first_line.contains(m));
+        assert!(has_month, "month label row should contain month abbreviations");
     }
 }
