@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
-use crate::query::{ActivityEvent, AiSessionInfo, ReviewInfo};
+use crate::query::{ActivityEvent, AiSessionInfo, ReviewInfo, TimeInterval, estimate_time_v2};
+use chrono::Duration;
 
 /// Canonicalize path, verify it's a git repo.
 pub fn resolve_repo_path(input: &str) -> anyhow::Result<PathBuf> {
@@ -275,6 +276,35 @@ pub fn compute_top_files(repo_path: &Path, limit: usize) -> anyhow::Result<Vec<F
     entries.sort_by(|a, b| b.change_count.cmp(&a.change_count));
     entries.truncate(limit);
     Ok(entries)
+}
+
+/// Compute total estimated time invested using estimate_time_v2.
+/// No time-window clipping — uses full AI session durations.
+pub fn compute_time_invested(
+    data: &RepoAllTimeData,
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> Duration {
+    if data.events.is_empty() && data.ai_sessions.is_empty() {
+        return Duration::zero();
+    }
+
+    let now = chrono::Utc::now();
+    let ai_intervals: Vec<TimeInterval> = data
+        .ai_sessions
+        .iter()
+        .filter_map(|s| {
+            let end = s.ended_at.unwrap_or(now);
+            if s.started_at < end {
+                Some(TimeInterval { start: s.started_at, end })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let (duration, _) = estimate_time_v2(&data.events, &ai_intervals, session_gap_minutes, first_commit_minutes);
+    duration
 }
 
 /// Look up repo_path in DB via exact or prefix match.

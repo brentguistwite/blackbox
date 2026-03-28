@@ -1,7 +1,7 @@
 use blackbox::db;
 use blackbox::repo_deep_dive::{
-    compute_language_breakdown, compute_top_files, find_db_repo_path, query_repo_all_time,
-    resolve_repo_path,
+    compute_language_breakdown, compute_time_invested, compute_top_files, find_db_repo_path,
+    query_repo_all_time, resolve_repo_path, RepoAllTimeData,
 };
 use tempfile::TempDir;
 
@@ -256,4 +256,72 @@ fn top_files_empty_repo() {
     git2::Repository::init(tmp.path()).unwrap();
     let result = compute_top_files(tmp.path(), 10).unwrap();
     assert!(result.is_empty());
+}
+
+// --- US-005: compute_time_invested ---
+
+#[test]
+fn time_invested_empty_data() {
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let dur = compute_time_invested(&data, 120, 30);
+    assert_eq!(dur.num_seconds(), 0);
+}
+
+#[test]
+fn time_invested_with_commits() {
+    use blackbox::query::ActivityEvent;
+    use chrono::{Duration, TimeZone, Utc};
+
+    let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+    let t2 = t1 + Duration::minutes(10);
+    let t3 = t2 + Duration::minutes(15);
+
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("aaa".into()), message: Some("a".into()), timestamp: t1 },
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("bbb".into()), message: Some("b".into()), timestamp: t2 },
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("ccc".into()), message: Some("c".into()), timestamp: t3 },
+        ],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let dur = compute_time_invested(&data, 120, 30);
+    // estimate_time_v2 with 3 commits 10+15 min apart: adaptive gap from median
+    // Should be > 0
+    assert!(dur.num_minutes() > 0, "expected positive duration, got {}", dur.num_minutes());
+}
+
+#[test]
+fn time_invested_with_ai_sessions() {
+    use blackbox::query::{ActivityEvent, AiSessionInfo};
+    use chrono::{Duration, TimeZone, Utc};
+
+    let t1 = Utc.with_ymd_and_hms(2024, 1, 1, 10, 0, 0).unwrap();
+    let t2 = t1 + Duration::minutes(30);
+
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![
+            ActivityEvent { event_type: "commit".into(), branch: Some("main".into()), commit_hash: Some("aaa".into()), message: Some("a".into()), timestamp: t1 },
+        ],
+        reviews: vec![],
+        ai_sessions: vec![
+            AiSessionInfo {
+                session_id: "s1".into(),
+                started_at: t1,
+                ended_at: Some(t2),
+                duration: t2 - t1,
+                turns: Some(3),
+            },
+        ],
+    };
+    let dur = compute_time_invested(&data, 120, 30);
+    // Should include AI session time
+    assert!(dur.num_minutes() >= 30, "expected >= 30min with AI session, got {}", dur.num_minutes());
 }
