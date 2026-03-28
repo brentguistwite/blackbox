@@ -1,5 +1,5 @@
 use blackbox::db::{insert_activity, open_db};
-use blackbox::output::{render_hour_histogram, render_dow_histogram};
+use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats};
 use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
@@ -443,4 +443,88 @@ fn after_hours_ratio_excludes_non_commit_events() {
     let stats = after_hours_ratio(&conn, from, to).unwrap();
 
     assert_eq!(stats.total_commits, 1, "only commit events counted");
+}
+
+// === US-006: render_after_hours_stats tests ===
+
+#[test]
+fn render_after_hours_stats_typical() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::AfterHoursStats {
+        total_commits: 20,
+        after_hours_commits: 3,
+        weekend_commits: 2,
+        after_hours_ratio: 0.15,
+        weekend_ratio: 0.10,
+    };
+    let output = render_after_hours_stats(&stats);
+    assert!(output.contains("After-hours:"), "should have after-hours label");
+    assert!(output.contains("3/20"), "should show 3/20 commits");
+    assert!(output.contains("15%"), "should show 15%");
+    assert!(output.contains("Weekend:"), "should have weekend label");
+    assert!(output.contains("2/20"), "should show 2/20 commits");
+    assert!(output.contains("10%"), "should show 10%");
+}
+
+#[test]
+fn render_after_hours_stats_zero_commits() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::AfterHoursStats {
+        total_commits: 0,
+        after_hours_commits: 0,
+        weekend_commits: 0,
+        after_hours_ratio: 0.0,
+        weekend_ratio: 0.0,
+    };
+    let output = render_after_hours_stats(&stats);
+    assert!(output.contains("0/0"), "should handle zero gracefully");
+    assert!(output.contains("0%"), "should show 0%");
+}
+
+#[test]
+fn render_after_hours_stats_no_evaluative_language() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::AfterHoursStats {
+        total_commits: 10,
+        after_hours_commits: 8,
+        weekend_commits: 6,
+        after_hours_ratio: 0.8,
+        weekend_ratio: 0.6,
+    };
+    let output = render_after_hours_stats(&stats);
+    let lower = output.to_lowercase();
+    assert!(!lower.contains("bad"), "no evaluative language");
+    assert!(!lower.contains("healthy"), "no evaluative language");
+    assert!(!lower.contains("warning"), "no evaluative language");
+    assert!(!lower.contains("good"), "no evaluative language");
+    assert!(!lower.contains("concerning"), "no evaluative language");
+}
+
+#[test]
+fn render_after_hours_stats_high_ratio_note() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::AfterHoursStats {
+        total_commits: 10,
+        after_hours_commits: 6,
+        weekend_commits: 0,
+        after_hours_ratio: 0.6,
+        weekend_ratio: 0.0,
+    };
+    let output = render_after_hours_stats(&stats);
+    assert!(output.contains("more than half outside core hours"),
+        "should show neutral note when after_hours_ratio > 0.5, got: {output}");
+}
+
+#[test]
+fn render_after_hours_stats_no_note_at_50_percent() {
+    colored::control::set_override(false);
+    let stats = blackbox::query::AfterHoursStats {
+        total_commits: 10,
+        after_hours_commits: 5,
+        weekend_commits: 0,
+        after_hours_ratio: 0.5,
+        weekend_ratio: 0.0,
+    };
+    let output = render_after_hours_stats(&stats);
+    assert!(!output.contains("more than half"), "note only shown when ratio > 0.5, not ==0.5");
 }
