@@ -786,3 +786,88 @@ pub fn commit_dow_histogram(
 
     Ok(histogram)
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum CommitPattern {
+    Burst,
+    Steady,
+    Insufficient,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BurstStats {
+    pub commit_count: u32,
+    pub cv_of_gaps: f64,
+    pub pattern: CommitPattern,
+}
+
+/// Classify commit pattern as burst vs steady using coefficient of variation of inter-commit gaps.
+/// Insufficient when < 3 commits. Burst when CV > 1.0. Steady when CV <= 1.0.
+/// CV = std_dev / mean; 0.0 if mean is 0.
+pub fn burst_pattern(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<BurstStats> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        timestamps.push(utc_dt);
+    }
+
+    let commit_count = timestamps.len() as u32;
+
+    if commit_count < 3 {
+        return Ok(BurstStats {
+            commit_count,
+            cv_of_gaps: 0.0,
+            pattern: CommitPattern::Insufficient,
+        });
+    }
+
+    let gaps: Vec<f64> = timestamps
+        .windows(2)
+        .map(|w| (w[1] - w[0]).num_seconds() as f64)
+        .collect();
+
+    let n = gaps.len() as f64;
+    let mean = gaps.iter().sum::<f64>() / n;
+
+    if mean == 0.0 {
+        return Ok(BurstStats {
+            commit_count,
+            cv_of_gaps: 0.0,
+            pattern: CommitPattern::Insufficient,
+        });
+    }
+
+    let variance = gaps.iter().map(|g| (g - mean).powi(2)).sum::<f64>() / n;
+    let std_dev = variance.sqrt();
+    let cv = std_dev / mean;
+
+    let pattern = if cv > 1.0 {
+        CommitPattern::Burst
+    } else {
+        CommitPattern::Steady
+    };
+
+    Ok(BurstStats {
+        commit_count,
+        cv_of_gaps: cv,
+        pattern,
+    })
+}
