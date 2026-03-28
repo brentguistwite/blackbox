@@ -142,6 +142,20 @@ fn main() -> anyhow::Result<()> {
         Commands::Live => {
             blackbox::tui::run_live()?;
         }
+        Commands::Repo { path, format } => {
+            let config = blackbox::config::load_config()?;
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let dive = blackbox::repo_deep_dive::build_deep_dive(&path, &conn, &config)?;
+            match format {
+                OutputFormat::Pretty => blackbox::output::render_repo_pretty(&dive),
+                OutputFormat::Json | OutputFormat::Csv => {
+                    println!("{}", blackbox::output::render_repo_json(&dive));
+                }
+            }
+        }
         Commands::Standup { week, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
