@@ -1,7 +1,8 @@
 use blackbox::db;
 use blackbox::repo_deep_dive::{
     compute_branch_activity, compute_language_breakdown, compute_time_invested, compute_top_files,
-    find_db_repo_path, query_repo_all_time, resolve_repo_path, RepoAllTimeData,
+    fetch_repo_pr_history, find_db_repo_path, query_repo_all_time, resolve_repo_path,
+    RepoAllTimeData,
 };
 use tempfile::TempDir;
 
@@ -392,4 +393,46 @@ fn branch_activity_empty_events() {
     };
     let branches = compute_branch_activity(&data);
     assert!(branches.is_empty());
+}
+
+// --- US-006: fetch_repo_pr_history ---
+
+#[test]
+fn pr_history_empty_data_no_gh() {
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![],
+        reviews: vec![],
+        ai_sessions: vec![],
+    };
+    let prs = fetch_repo_pr_history("/nonexistent/repo", &data);
+    assert!(prs.is_empty());
+}
+
+#[test]
+fn pr_history_from_reviews_only() {
+    use blackbox::query::ReviewInfo;
+    use chrono::{TimeZone, Utc};
+
+    let t1 = Utc.with_ymd_and_hms(2024, 2, 1, 0, 0, 0).unwrap();
+    let t2 = Utc.with_ymd_and_hms(2024, 2, 2, 0, 0, 0).unwrap();
+
+    let data = RepoAllTimeData {
+        repo_path: "/test".to_string(),
+        events: vec![],
+        reviews: vec![
+            ReviewInfo { pr_number: 42, pr_title: "Add feature X".into(), action: "APPROVED".into(), reviewed_at: t1 },
+            ReviewInfo { pr_number: 42, pr_title: "Add feature X".into(), action: "COMMENTED".into(), reviewed_at: t2 },
+            ReviewInfo { pr_number: 10, pr_title: "Fix bug Y".into(), action: "APPROVED".into(), reviewed_at: t1 },
+        ],
+        ai_sessions: vec![],
+    };
+    // With a nonexistent path, gh will fail — should fall back to review-only entries
+    let prs = fetch_repo_pr_history("/nonexistent/repo", &data);
+    assert_eq!(prs.len(), 2);
+    // sorted by number desc
+    assert_eq!(prs[0].number, 42);
+    assert_eq!(prs[0].title, "Add feature X");
+    assert_eq!(prs[0].state, "REVIEWED");
+    assert_eq!(prs[1].number, 10);
 }

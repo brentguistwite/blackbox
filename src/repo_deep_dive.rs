@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use crate::query::{ActivityEvent, AiSessionInfo, ReviewInfo, TimeInterval, estimate_time_v2};
@@ -358,9 +360,79 @@ pub struct RepoPrEntry {
     pub url: Option<String>,
 }
 
-/// Fetch PR history for a repo. Stub until US-006 implements gh CLI integration.
-pub fn fetch_repo_pr_history(_repo_path: &str, _data: &RepoAllTimeData) -> Vec<RepoPrEntry> {
-    vec![]
+/// Check once if `gh` CLI is available on PATH.
+fn gh_available() -> bool {
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("which")
+            .arg("gh")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Fetch all PRs for a repo via `gh pr list --state all`. Returns None on any failure.
+fn fetch_all_prs_gh(repo_path: &str) -> Option<Vec<serde_json::Value>> {
+    let child = Command::new("gh")
+        .args([
+            "pr", "list", "--state", "all",
+            "--json", "number,title,state,headRefName,url",
+            "--limit", "30",
+        ])
+        .current_dir(repo_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let handle = std::thread::spawn(move || child.wait_with_output());
+    match handle.join() {
+        Ok(Ok(output)) if output.status.success() => {
+            serde_json::from_slice(&output.stdout).ok()
+        }
+        _ => None,
+    }
+}
+
+/// Fetch PR history combining DB reviews + live gh CLI data.
+/// Graceful degradation: returns review-only list if gh unavailable/fails.
+pub fn fetch_repo_pr_history(repo_path: &str, data: &RepoAllTimeData) -> Vec<RepoPrEntry> {
+    // Step 1: collect unique PRs from DB reviews
+    let mut pr_map: HashMap<u64, RepoPrEntry> = HashMap::new();
+    for review in &data.reviews {
+        pr_map.entry(review.pr_number as u64).or_insert_with(|| RepoPrEntry {
+            number: review.pr_number as u64,
+            title: review.pr_title.clone(),
+            state: "REVIEWED".to_string(),
+            branch: None,
+            url: None,
+        });
+    }
+
+    // Step 2: try gh CLI for live data
+    if gh_available()
+        && let Some(gh_prs) = fetch_all_prs_gh(repo_path)
+    {
+        for val in gh_prs {
+            let number = match val.get("number").and_then(|v| v.as_u64()) {
+                Some(n) => n,
+                None => continue,
+            };
+            let title = val.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let state = val.get("state").and_then(|v| v.as_str()).unwrap_or("OPEN").to_string();
+            let branch = val.get("headRefName").and_then(|v| v.as_str()).map(String::from);
+            let url = val.get("url").and_then(|v| v.as_str()).map(String::from);
+
+            // Step 3: upsert — gh data takes precedence
+            pr_map.insert(number, RepoPrEntry { number, title, state, branch, url });
+        }
+    }
+
+    // Sort by number descending
+    let mut result: Vec<RepoPrEntry> = pr_map.into_values().collect();
+    result.sort_by(|a, b| b.number.cmp(&a.number));
+    result
 }
 
 #[derive(Debug)]
