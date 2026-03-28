@@ -1021,3 +1021,69 @@ fn render_burst_stats_no_evaluative_language() {
     assert!(!output.contains("warning"), "no evaluative language");
     assert!(!output.contains("concerning"), "no evaluative language");
 }
+
+// ============================================================
+// === US-017: Integration test: burst pattern classification
+// ============================================================
+
+#[test]
+fn us017_steady_12_commits_uniform_30m() {
+    let (conn, _tmp) = setup_db();
+    // 12 commits uniformly 30 min apart starting 08:00
+    for i in 0..12 {
+        let h = 8 + (i * 30) / 60;
+        let m = (i * 30) % 60;
+        let ts = format!("2025-01-15T{h:02}:{m:02}:00Z");
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("s{i:02}")), Some("dev"), Some("msg"), &ts).unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 12);
+    assert_eq!(stats.pattern, CommitPattern::Steady);
+    assert!(stats.cv_of_gaps <= 1.0, "uniform 30m gaps → CV <= 1.0, got {}", stats.cv_of_gaps);
+}
+
+#[test]
+fn us017_burst_9_clustered_1_distant() {
+    let (conn, _tmp) = setup_db();
+    // 9 commits within ~2 min of each other
+    let offsets_secs: [u32; 9] = [0, 10, 25, 40, 55, 70, 85, 100, 115];
+    for (i, &s) in offsets_secs.iter().enumerate() {
+        let m = s / 60;
+        let sec = s % 60;
+        let ts = format!("2025-01-15T10:{m:02}:{sec:02}Z");
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("b{i:02}")), Some("dev"), Some("msg"), &ts).unwrap();
+    }
+    // 1 commit 300 min (5h) later
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("b09"), Some("dev"), Some("msg"), "2025-01-15T15:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 10);
+    assert_eq!(stats.pattern, CommitPattern::Burst);
+    assert!(stats.cv_of_gaps > 1.0, "bursty pattern → CV > 1.0, got {}", stats.cv_of_gaps);
+}
+
+#[test]
+fn us017_insufficient_only_2_commits() {
+    let (conn, _tmp) = setup_db();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("i00"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("i01"), Some("dev"), Some("msg"), "2025-01-15T11:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 2);
+    assert_eq!(stats.pattern, CommitPattern::Insufficient);
+}
