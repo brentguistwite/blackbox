@@ -1,6 +1,6 @@
 use blackbox::db::{insert_activity, open_db};
 use blackbox::output::{render_hour_histogram, render_dow_histogram, render_after_hours_stats, render_session_distribution};
-use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio, session_length_distribution};
+use blackbox::query::{commit_hour_histogram, commit_dow_histogram, after_hours_ratio, session_length_distribution, burst_pattern, CommitPattern};
 use chrono::{Datelike, TimeZone, Utc, Local, Timelike};
 use tempfile::NamedTempFile;
 
@@ -864,4 +864,103 @@ fn session_distribution_integration_short_session_excluded() {
     assert_eq!(dist.median_minutes, 0);
     assert_eq!(dist.p90_minutes, 0);
     assert_eq!(dist.mean_minutes, 0);
+}
+
+// ============================================================
+// US-009: Burst vs steady commit pattern query
+// ============================================================
+
+#[test]
+fn burst_pattern_insufficient_with_fewer_than_3_commits() {
+    let (conn, _tmp) = setup_db();
+    // Insert only 2 commits
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("aaa0"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("aaa1"), Some("dev"), Some("msg"), "2025-01-15T11:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 2);
+    assert_eq!(stats.pattern, CommitPattern::Insufficient);
+}
+
+#[test]
+fn burst_pattern_steady_with_uniform_gaps() {
+    let (conn, _tmp) = setup_db();
+    // 12 commits uniformly 30 min apart
+    for i in 0..12 {
+        let ts = format!("2025-01-15T{:02}:{:02}:00Z", 8 + (i * 30) / 60, (i * 30) % 60);
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("c{i:02}")), Some("dev"), Some("msg"), &ts).unwrap();
+    }
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 12);
+    assert_eq!(stats.pattern, CommitPattern::Steady);
+    assert!(stats.cv_of_gaps <= 1.0, "uniform gaps should have low CV, got {}", stats.cv_of_gaps);
+}
+
+#[test]
+fn burst_pattern_burst_with_clustered_commits() {
+    let (conn, _tmp) = setup_db();
+    // 9 commits within 2 min of each other, then 1 commit 300 min later
+    let base_secs: [u32; 9] = [0, 10, 20, 30, 40, 50, 65, 80, 100];
+    for (i, &s) in base_secs.iter().enumerate() {
+        let min = s / 60;
+        let sec = s % 60;
+        let ts = format!("2025-01-15T10:{min:02}:{sec:02}Z");
+        insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+            Some(&format!("c{i:02}")), Some("dev"), Some("msg"), &ts).unwrap();
+    }
+    // 1 commit 5 hours later
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("c09"), Some("dev"), Some("msg"), "2025-01-15T15:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 10);
+    assert_eq!(stats.pattern, CommitPattern::Burst);
+    assert!(stats.cv_of_gaps > 1.0, "bursty pattern should have high CV, got {}", stats.cv_of_gaps);
+}
+
+#[test]
+fn burst_pattern_empty_db() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 0);
+    assert_eq!(stats.pattern, CommitPattern::Insufficient);
+    assert_eq!(stats.cv_of_gaps, 0.0);
+}
+
+#[test]
+fn burst_pattern_ignores_non_commit_events() {
+    let (conn, _tmp) = setup_db();
+    // 5 branch_switch events + 2 commits = insufficient
+    for i in 0..5 {
+        let ts = format!("2025-01-15T{:02}:00:00Z", 8 + i);
+        insert_activity(&conn, "/repo/a", "branch_switch", Some("feat"), None,
+            None, Some("dev"), None, &ts).unwrap();
+    }
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("aaa0"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/a", "commit", Some("main"), None,
+        Some("aaa1"), Some("dev"), Some("msg"), "2025-01-15T11:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+    let stats = burst_pattern(&conn, from, to).unwrap();
+
+    assert_eq!(stats.commit_count, 2);
+    assert_eq!(stats.pattern, CommitPattern::Insufficient);
 }
