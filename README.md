@@ -74,6 +74,8 @@ Config lives at `~/.config/blackbox/config.toml`:
 | `session_gap_minutes` | `120` | Minutes of inactivity before new session |
 | `first_commit_minutes` | `30` | Time credit for first commit in a session |
 | `streak_exclude_weekends` | `false` | Skip weekends when computing commit streak |
+| `notifications_enabled` | `false` | Enable opt-in OS desktop notifications |
+| `notification_time` | `"17:00"` | Local time (HH:MM, 24h) to fire daily summary notification |
 
 ## Output Formats
 
@@ -117,6 +119,19 @@ Blackbox tracks branch switches and estimates their focus cost using Gloria Mark
 - **Pretty/JSON/CSV output** includes per-repo branch switch counts and total focus cost
 - **`blackbox focus`** shows a dedicated focus report with per-repo switch breakdown
 - **`blackbox standup`** flags high switch counts (≥5) with estimated focus cost
+
+## Daily Summary Notifications
+
+Blackbox can send an OS desktop notification with your daily activity summary at a configurable time. Opt in by adding to `~/.config/blackbox/config.toml`:
+
+```toml
+notifications_enabled = true
+notification_time = "17:00"   # 24h local time, default 5 PM
+```
+
+The notification shows commit count, repo count, and estimated time — e.g. "12 commits across 3 repos — ~4h 30m". Rate-limited to once per day per type via a `notification_log` DB table, so daemon restarts won't re-fire. If no commits today, no notification is sent.
+
+Supported on macOS (native notification center) and Linux (libnotify/dbus, requires DISPLAY or WAYLAND_DISPLAY). Headless/SSH sessions are detected and skipped silently.
 
 ## How It Works
 
