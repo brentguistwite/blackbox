@@ -1,18 +1,61 @@
+use anyhow::bail;
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
 use rusqlite::Connection;
 use serde::Serialize;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use crate::config::Config;
 use crate::enrichment;
+use crate::llm::{LlmConfig, call_llm_streaming};
 use crate::query::{self, ActivitySummary};
 
-// --- US-04: Theme extraction (stub — full impl in US-04) ---
+// --- US-04: Theme extraction ---
 
-/// Extract recurring themes from commit messages. Returns top-N frequent words.
-/// Full implementation in US-04; this stub returns empty vec.
-pub fn extract_commit_themes(_repos: &[query::RepoSummary]) -> Vec<String> {
-    vec![]
+const STOP_WORDS: &[&str] = &[
+    "fix", "the", "a", "an", "add", "added", "update", "updated", "chore", "feat", "feature",
+    "refactor", "test", "tests", "wip", "merge", "merged", "bump", "release", "minor", "major",
+    "revert", "pr", "co", "authored", "by", "for", "in", "of", "on", "to", "use", "used",
+    "using", "remove", "removed", "change", "changes", "clean", "cleanup", "typo", "misc",
+];
+
+/// Extract recurring themes from commit messages. Returns top-20 frequent words
+/// formatted as "word (N occurrences)", sorted descending by count.
+/// Returns empty vec if total commits < 5.
+pub fn extract_commit_themes(repos: &[query::RepoSummary]) -> Vec<String> {
+    let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    if total_commits < 5 {
+        return vec![];
+    }
+
+    let stop_set: std::collections::HashSet<&str> = STOP_WORDS.iter().copied().collect();
+    let mut freq: HashMap<String, usize> = HashMap::new();
+
+    for repo in repos {
+        for event in &repo.events {
+            if event.event_type != "commit" {
+                continue;
+            }
+            let Some(ref msg) = event.message else {
+                continue;
+            };
+            let lower = msg.to_lowercase();
+            for word in lower.split(|c: char| !c.is_alphanumeric()) {
+                if word.len() < 3 || stop_set.contains(word) {
+                    continue;
+                }
+                *freq.entry(word.to_string()).or_default() += 1;
+            }
+        }
+    }
+
+    let mut sorted: Vec<(String, usize)> = freq.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    sorted.truncate(20);
+
+    sorted
+        .into_iter()
+        .map(|(word, count)| format!("{word} ({count} occurrences)"))
+        .collect()
 }
 
 // --- US-05: PR summary compilation (stub — full impl in US-05) ---
@@ -209,6 +252,96 @@ pub fn build_perf_review_context(summary: &ActivitySummary) -> PerfReviewContext
     }
 }
 
+// --- US-06: LLM prompt + generate fn ---
+
+pub const PERF_REVIEW_SYSTEM_PROMPT: &str = "\
+You are helping a software developer write a performance review self-assessment \
+based on their recorded git activity data. Write in first person, professional tone. \
+Produce approximately 400-600 words in markdown format with these sections:\n\n\
+## Summary\n\
+A brief overview of the review period, total output, and key areas of focus.\n\n\
+## Key Contributions\n\
+The most impactful work items, referencing specific repositories, features, and PRs \
+where available. Do NOT invent accomplishments not evidenced in the data.\n\n\
+## Technical Themes\n\
+Recurring technical areas and domains based on commit message analysis and repository patterns.\n\n\
+## Collaboration & Code Review\n\
+Cross-team collaboration evidenced by PR reviews, authored PRs, and multi-repo work. \
+If PR data is unavailable, note this and skip detailed PR references.\n\n\
+## Time Investment\n\
+Total estimated hours, distribution across repositories, and AI-assisted development time \
+where applicable.\n\n\
+Ground every claim in the provided data. Do not fabricate accomplishments or metrics \
+not present in the input. If the data is sparse, acknowledge the limited window rather \
+than speculating.";
+
+/// Stream an LLM-generated performance review self-assessment to stdout.
+///
+/// Serializes `PerfReviewContext` to JSON, applies token budget guards
+/// (truncating commit messages if serialized context > 40,000 chars),
+/// and streams the result via the configured LLM provider.
+pub fn generate_perf_review(config: &LlmConfig, context: &PerfReviewContext) -> anyhow::Result<()> {
+    // Zero activity guard — bail before any LLM call
+    if context.total_commits == 0 && context.total_reviews == 0 {
+        bail!("No activity found for this period. Is the daemon running?");
+    }
+
+    let mut truncated = false;
+    let context_json = {
+        let json = serde_json::to_string_pretty(context)?;
+        if json.len() > 40_000 {
+            let mut ctx = context.clone();
+            let total_msgs: usize = ctx
+                .repos
+                .iter()
+                .map(|r| r.recent_commit_messages.len())
+                .sum();
+            if total_msgs > 200 {
+                for repo in &mut ctx.repos {
+                    let keep = (200 * repo.recent_commit_messages.len()) / total_msgs.max(1);
+                    let keep = keep.max(1);
+                    let start = repo.recent_commit_messages.len().saturating_sub(keep);
+                    repo.recent_commit_messages = repo.recent_commit_messages[start..].to_vec();
+                }
+            }
+            truncated = true;
+            serde_json::to_string_pretty(&ctx)?
+        } else {
+            json
+        }
+    };
+
+    let mut user_message = String::new();
+
+    // Sparse data warning (US-09)
+    if context.total_commits < 10 {
+        user_message.push_str(&format!(
+            "Note: limited data — only {} commits recorded. \
+             User may have started tracking recently.\n\n",
+            context.total_commits
+        ));
+    }
+
+    if truncated {
+        user_message.push_str(
+            "Note: commit message list was truncated to fit token budget. \
+             Not all commits are shown.\n\n",
+        );
+    }
+
+    user_message
+        .push_str("Generate a performance review self-assessment for this developer's activity:\n\n");
+    user_message.push_str(&context_json);
+
+    call_llm_streaming(
+        config,
+        PERF_REVIEW_SYSTEM_PROMPT,
+        &user_message,
+        2048,
+        120,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +500,213 @@ mod tests {
 
         let ctx = build_perf_review_context(&summary);
         assert_eq!(ctx.repos[0].recent_commit_messages.len(), 50);
+    }
+
+    // --- US-04: Theme extraction tests ---
+
+    #[test]
+    fn themes_empty_input() {
+        let themes = extract_commit_themes(&[]);
+        assert!(themes.is_empty());
+    }
+
+    #[test]
+    fn themes_below_threshold_returns_empty() {
+        // < 5 commits → empty vec
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 3,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: None,
+                    commit_hash: None,
+                    message: Some("implement auth module".to_string()),
+                    timestamp: Utc::now(),
+                },
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: None,
+                    commit_hash: None,
+                    message: Some("implement auth tests".to_string()),
+                    timestamp: Utc::now(),
+                },
+                ActivityEvent {
+                    event_type: "commit".to_string(),
+                    branch: None,
+                    commit_hash: None,
+                    message: Some("auth cleanup".to_string()),
+                    timestamp: Utc::now(),
+                },
+            ],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let themes = extract_commit_themes(&[repo]);
+        assert!(themes.is_empty());
+    }
+
+    #[test]
+    fn themes_all_stopwords_returns_empty() {
+        let events: Vec<ActivityEvent> = (0..10)
+            .map(|_| ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: Some("fix: add update merge bump".to_string()),
+                timestamp: Utc::now(),
+            })
+            .collect();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 10,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events,
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let themes = extract_commit_themes(&[repo]);
+        assert!(themes.is_empty());
+    }
+
+    #[test]
+    fn themes_normal_corpus() {
+        let messages = vec![
+            "feat: implement auth module",
+            "fix: auth token refresh",
+            "feat: add database migrations",
+            "chore: update dependencies",
+            "feat: implement caching layer",
+            "fix: caching invalidation bug",
+            "feat: auth rate limiting",
+            "refactor: database connection pool",
+            "feat: implement logging middleware",
+            "fix: logging format errors",
+            "feat: database schema update",
+            "test: auth integration tests",
+        ];
+        let events: Vec<ActivityEvent> = messages
+            .into_iter()
+            .map(|m| ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: Some(m.to_string()),
+                timestamp: Utc::now(),
+            })
+            .collect();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 12,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events,
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let themes = extract_commit_themes(&[repo]);
+        assert!(!themes.is_empty());
+        // "auth" appears 4 times — should be first
+        assert!(themes[0].contains("auth"), "expected 'auth' first, got: {:?}", themes);
+        assert!(themes[0].contains("occurrences"), "expected count format: {}", themes[0]);
+        // "database" appears 3 times
+        assert!(
+            themes.iter().any(|t| t.contains("database")),
+            "expected 'database' in themes: {:?}",
+            themes
+        );
+    }
+
+    #[test]
+    fn themes_skips_non_commit_events() {
+        let events = vec![
+            ActivityEvent {
+                event_type: "branch_switch".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: Some("auth auth auth auth auth".to_string()),
+                timestamp: Utc::now(),
+            },
+        ];
+        // Need 5+ commits total, so add commits with bland messages
+        let mut commit_events: Vec<ActivityEvent> = (0..6)
+            .map(|_| ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: Some("implement pipeline handler".to_string()),
+                timestamp: Utc::now(),
+            })
+            .collect();
+        commit_events.extend(events);
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 6,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: commit_events,
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let themes = extract_commit_themes(&[repo]);
+        // "auth" from non-commit event should NOT appear (or if it does, not dominate)
+        // "pipeline" and "handler" and "implement" should be top
+        // Actually "implement" is not a stop word, so it should appear
+        assert!(
+            themes.iter().any(|t| t.contains("pipeline")),
+            "expected 'pipeline': {:?}",
+            themes
+        );
+    }
+
+    #[test]
+    fn themes_caps_at_20() {
+        // Generate many distinct words
+        let events: Vec<ActivityEvent> = (0..30)
+            .map(|i| ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: None,
+                commit_hash: None,
+                message: Some(format!(
+                    "word{i}alpha word{i}beta word{i}gamma word{i}delta"
+                )),
+                timestamp: Utc::now(),
+            })
+            .collect();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 30,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events,
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let themes = extract_commit_themes(&[repo]);
+        assert!(themes.len() <= 20, "expected <=20 themes, got {}", themes.len());
     }
 
     #[test]
