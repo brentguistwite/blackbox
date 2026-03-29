@@ -216,3 +216,79 @@ fn test_default_config_worktree_dir_name() {
     let cfg = Config::default();
     assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
 }
+
+// --- US-6: reload_config unit tests ---
+
+#[test]
+fn test_reload_config_from_valid_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+watch_dirs = ["/tmp/repos"]
+poll_interval_secs = 60
+"#,
+    )
+    .unwrap();
+
+    let cfg = config::reload_config_from(&path).unwrap();
+    assert_eq!(cfg.watch_dirs, vec![PathBuf::from("/tmp/repos")]);
+    assert_eq!(cfg.poll_interval_secs, 60);
+}
+
+#[test]
+fn test_reload_config_from_parse_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "not valid toml {{{{").unwrap();
+
+    assert!(config::reload_config_from(&path).is_err());
+}
+
+#[test]
+fn test_reload_config_from_validation_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+watch_dirs = []
+poll_interval_secs = 5
+"#,
+    )
+    .unwrap();
+
+    let err = config::reload_config_from(&path).unwrap_err();
+    assert!(
+        err.to_string().contains("poll_interval_secs"),
+        "error should mention poll_interval_secs: {err}"
+    );
+}
+
+#[test]
+fn test_reload_config_from_expands_tilde() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+watch_dirs = ["~/code"]
+poll_interval_secs = 30
+"#,
+    )
+    .unwrap();
+
+    let cfg = config::reload_config_from(&path).unwrap();
+    let expanded = &cfg.watch_dirs[0];
+    assert!(!expanded.starts_with("~"), "tilde should be expanded");
+    assert!(expanded.is_absolute(), "path should be absolute after expansion");
+}
+
+#[test]
+fn test_reload_config_from_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nonexistent.toml");
+
+    assert!(config::reload_config_from(&path).is_err());
+}
