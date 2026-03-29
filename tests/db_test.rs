@@ -960,3 +960,58 @@ fn test_notification_log_idempotent() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn test_get_active_sessions_by_tool() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_ai_session(&conn, "claude-code", "/repo", "cc-1", "2026-03-29T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/repo", "cc-2", "2026-03-29T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "codex", "/repo", "cx-1", "2026-03-29T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "copilot", "/repo", "cp-1", "2026-03-29T10:00:00Z").unwrap();
+    // End one claude session
+    db::update_session_ended(&conn, "cc-2", "2026-03-29T11:00:00Z", None).unwrap();
+
+    let claude = db::get_active_sessions_by_tool(&conn, "claude-code").unwrap();
+    assert_eq!(claude.len(), 1);
+    assert_eq!(claude[0], "cc-1");
+
+    let codex = db::get_active_sessions_by_tool(&conn, "codex").unwrap();
+    assert_eq!(codex.len(), 1);
+    assert_eq!(codex[0], "cx-1");
+
+    // No active sessions for nonexistent tool → empty vec
+    let none = db::get_active_sessions_by_tool(&conn, "windsurf").unwrap();
+    assert!(none.is_empty());
+}
+
+#[test]
+fn test_get_active_sessions_all() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_ai_session(&conn, "claude-code", "/repo", "cc-1", "2026-03-29T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "codex", "/repo", "cx-1", "2026-03-29T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "copilot", "/repo", "cp-1", "2026-03-29T10:00:00Z").unwrap();
+    // End one
+    db::update_session_ended(&conn, "cx-1", "2026-03-29T11:00:00Z", None).unwrap();
+
+    let all = db::get_active_sessions_all(&conn).unwrap();
+    assert_eq!(all.len(), 2);
+    // Returns (session_id, tool) pairs
+    assert!(all.contains(&("cc-1".to_string(), "claude-code".to_string())));
+    assert!(all.contains(&("cp-1".to_string(), "copilot".to_string())));
+}
+
+#[test]
+fn test_get_active_sessions_all_empty() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let all = db::get_active_sessions_all(&conn).unwrap();
+    assert!(all.is_empty());
+}
