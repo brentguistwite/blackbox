@@ -96,6 +96,10 @@ fn main() -> anyhow::Result<()> {
             let data_dir = blackbox::config::data_dir()?;
             blackbox::daemon::daemon_status(&data_dir)?;
         }
+        Commands::Reload => {
+            let data_dir = blackbox::config::data_dir()?;
+            blackbox::daemon::reload_daemon(&data_dir)?;
+        }
         Commands::Today { format, summarize } => {
             run_query("Today", blackbox::query::today_range, format, summarize)?;
         }
