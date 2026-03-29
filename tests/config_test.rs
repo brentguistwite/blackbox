@@ -426,3 +426,74 @@ fn test_parse_churn_window_days_custom() {
     let cfg: Config = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.churn_window_days, 7);
 }
+
+// --- US-007: insights config fields ---
+
+#[test]
+fn test_default_config_insights_fields_none() {
+    let cfg = Config::default();
+    assert!(cfg.insights_max_tokens.is_none());
+    assert!(cfg.insights_window.is_none());
+}
+
+#[test]
+fn test_parse_missing_insights_fields_defaults_none() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.insights_max_tokens.is_none());
+    assert!(cfg.insights_window.is_none());
+}
+
+#[test]
+fn test_parse_insights_max_tokens() {
+    let toml_str = r#"
+        watch_dirs = []
+        insights_max_tokens = 2048
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.insights_max_tokens, Some(2048));
+}
+
+#[test]
+fn test_parse_insights_window() {
+    let toml_str = r#"
+        watch_dirs = []
+        insights_window = "month"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.insights_window.as_deref(), Some("month"));
+}
+
+#[test]
+fn test_insights_config_roundtrip() {
+    let cfg = Config {
+        insights_max_tokens: Some(512),
+        insights_window: Some("month".to_string()),
+        ..Config::default()
+    };
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.insights_max_tokens, Some(512));
+    assert_eq!(deserialized.insights_window.as_deref(), Some("month"));
+}
+
+#[test]
+fn test_existing_config_without_insights_fields_still_parses() {
+    // Simulates an existing config.toml that predates the insights feature
+    let toml_str = r#"
+        watch_dirs = ["/home/user/code"]
+        poll_interval_secs = 300
+        llm_provider = "anthropic"
+        llm_api_key = "sk-test"
+        notifications_enabled = true
+        notification_time = "17:00"
+        churn_window_days = 14
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.insights_max_tokens.is_none());
+    assert!(cfg.insights_window.is_none());
+    // All existing fields still parse correctly
+    assert_eq!(cfg.llm_api_key.as_deref(), Some("sk-test"));
+}

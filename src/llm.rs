@@ -69,8 +69,8 @@ pub fn summarize_activity(config: &LlmConfig, activity_json: &str) -> anyhow::Re
 }
 
 /// Stream LLM-generated behavioral insights to stdout.
-pub fn generate_insights(config: &LlmConfig, prompt: &str) -> anyhow::Result<()> {
-    call_llm_streaming(config, INSIGHTS_SYSTEM_PROMPT, prompt, 1024, 60)
+pub fn generate_insights(config: &LlmConfig, prompt: &str, max_tokens: u32) -> anyhow::Result<()> {
+    call_llm_streaming(config, INSIGHTS_SYSTEM_PROMPT, prompt, max_tokens, 60)
 }
 
 /// Core streaming helper — routes to Anthropic/OpenAI, handles 429/errors, streams to stdout.
