@@ -23,6 +23,7 @@ pub struct JsonSummary {
     pub total_repos: usize,
     pub total_estimated_minutes: i64,
     pub total_ai_session_minutes: i64,
+    pub streak_days: u32,
     pub repos: Vec<JsonRepo>,
 }
 
@@ -93,6 +94,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
         total_repos: summary.total_repos,
         total_estimated_minutes: summary.total_estimated_time.num_minutes(),
         total_ai_session_minutes: summary.total_ai_session_time.num_minutes(),
+        streak_days: summary.streak_days,
         repos: summary
             .repos
             .iter()

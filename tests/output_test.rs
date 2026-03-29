@@ -595,6 +595,24 @@ fn standup_includes_ai_sessions() {
     assert!(output.contains("Claude Code session"), "should show AI sessions");
 }
 
+// --- JSON streak tests (US-004) ---
+
+#[test]
+fn render_json_includes_streak_days() {
+    let summary = make_today_summary_with_streak(3);
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(v["streak_days"], 3, "JSON should contain streak_days field with value 3");
+}
+
+#[test]
+fn render_json_streak_zero_still_present() {
+    let summary = make_today_summary_with_streak(0);
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(v["streak_days"], 0, "streak_days=0 should still be present in JSON (not omitted)");
+}
+
 // --- Streak display tests (US-003) ---
 
 fn make_today_summary_with_streak(streak_days: u32) -> ActivitySummary {
