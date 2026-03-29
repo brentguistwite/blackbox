@@ -81,6 +81,7 @@ pub struct JsonReview {
 
 #[derive(Serialize)]
 pub struct JsonAiSession {
+    pub tool: String,
     pub session_id: String,
     pub started_at: String,
     pub ended_at: Option<String>,
@@ -160,6 +161,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                     .ai_sessions
                     .iter()
                     .map(|s| JsonAiSession {
+                        tool: s.tool.clone(),
                         session_id: s.session_id.clone(),
                         started_at: s.started_at.to_rfc3339(),
                         ended_at: s.ended_at.map(|dt| dt.to_rfc3339()),
@@ -229,7 +231,7 @@ pub fn render_csv(summary: &ActivitySummary) -> String {
                 event_type: "ai_session".to_string(),
                 branch: String::new(),
                 commit_hash: String::new(),
-                message: format!("Claude Code session ({}, {}m)", status, session.duration.num_minutes()),
+                message: format!("{} session ({}, {}m)", session.tool, status, session.duration.num_minutes()),
                 timestamp: session.started_at.to_rfc3339(),
                 repo_estimated_minutes: repo.estimated_time.num_minutes(),
                 pr_number: String::new(),
@@ -424,10 +426,12 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
         // AI Sessions
         if !repo.ai_sessions.is_empty() {
             let total_session_time: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
+            let word = if repo.ai_sessions.len() == 1 { "session" } else { "sessions" };
             lines.push(format!(
-                "  {} {} Claude Code sessions ({})",
+                "  {} {} AI {} ({})",
                 "~".dimmed(),
                 repo.ai_sessions.len(),
+                word,
                 format_duration(total_session_time).magenta(),
             ));
             for session in &repo.ai_sessions {
@@ -438,8 +442,9 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                 };
                 let turns_str = session.turns.map(|t| format!(", {} turns", t)).unwrap_or_default();
                 lines.push(format!(
-                    "    {} {}{}",
+                    "    {} {} {}{}",
                     "o".magenta(),
+                    session.tool,
                     status,
                     turns_str,
                 ));
@@ -909,7 +914,7 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
         if !repo.ai_sessions.is_empty() {
             let total: Duration = repo.ai_sessions.iter().map(|s| s.duration).fold(Duration::zero(), |a, b| a + b);
             let word = if repo.ai_sessions.len() == 1 { "session" } else { "sessions" };
-            lines.push(format!("  - {} Claude Code {} ({})", repo.ai_sessions.len(), word, format_duration_plain(total)));
+            lines.push(format!("  - {} AI {} ({})", repo.ai_sessions.len(), word, format_duration_plain(total)));
         }
     }
 
