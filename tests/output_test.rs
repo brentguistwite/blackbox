@@ -38,6 +38,7 @@ fn render_summary_with_repos() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(90),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -97,6 +98,7 @@ fn render_empty_summary() {
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![],
     };
 
@@ -112,6 +114,7 @@ fn make_test_summary() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(45),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -150,6 +153,7 @@ fn make_empty_summary() -> ActivitySummary {
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![],
     }
 }
@@ -265,6 +269,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -369,6 +374,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::minutes(62) + Duration::minutes(0), // ended session only
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -495,6 +501,7 @@ fn standup_groups_commits_by_branch() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(60),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -555,6 +562,7 @@ fn standup_includes_pr_info() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/proj".to_string(),
             repo_name: "proj".to_string(),
@@ -587,6 +595,89 @@ fn standup_includes_ai_sessions() {
     assert!(output.contains("Claude Code session"), "should show AI sessions");
 }
 
+// --- JSON streak tests (US-004) ---
+
+#[test]
+fn render_json_includes_streak_days() {
+    let summary = make_today_summary_with_streak(3);
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(v["streak_days"], 3, "JSON should contain streak_days field with value 3");
+}
+
+#[test]
+fn render_json_streak_zero_still_present() {
+    let summary = make_today_summary_with_streak(0);
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(v["streak_days"], 0, "streak_days=0 should still be present in JSON (not omitted)");
+}
+
+// --- Streak display tests (US-003) ---
+
+fn make_today_summary_with_streak(streak_days: u32) -> ActivitySummary {
+    ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 3,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(45),
+        total_ai_session_time: Duration::zero(),
+        streak_days,
+        repos: vec![RepoSummary {
+            repo_path: "/code/proj".to_string(),
+            repo_name: "proj".to_string(),
+            commits: 3,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(45),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("abc1234".to_string()),
+                message: Some("fix bug".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+        }],
+    }
+}
+
+#[test]
+fn streak_shown_in_today_pretty_output() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(5);
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("5-day streak"), "today with streak=5 should show '5-day streak'");
+}
+
+#[test]
+fn streak_zero_not_shown_in_pretty_output() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(0);
+    let output = render_summary_to_string(&summary);
+    assert!(!output.contains("streak"), "streak=0 should show no streak text");
+}
+
+#[test]
+fn streak_not_shown_for_week_period() {
+    colored::control::set_override(false);
+    let mut summary = make_today_summary_with_streak(5);
+    summary.period_label = "This Week".to_string();
+    let output = render_summary_to_string(&summary);
+    assert!(!output.contains("streak"), "week period should not show streak text");
+}
+
+#[test]
+fn streak_one_day_singular_format() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(1);
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("1-day streak"), "streak=1 should show '1-day streak'");
+}
+
 #[test]
 fn standup_week_header() {
     let summary = ActivitySummary {
@@ -596,6 +687,7 @@ fn standup_week_header() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(10),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/p".to_string(),
             repo_name: "p".to_string(),

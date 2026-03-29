@@ -28,6 +28,12 @@ fn run_query(
 
     blackbox::enrichment::enrich_with_prs(&mut repos);
 
+    let streak_days = blackbox::query::query_streak(&conn, config.streak_exclude_weekends)
+        .unwrap_or_else(|e| {
+            log::warn!("Failed to compute streak: {}", e);
+            0
+        });
+
     let total_commits: usize = repos.iter().map(|r| r.commits).sum();
     let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
@@ -44,6 +50,7 @@ fn run_query(
         total_repos: repos.len(),
         total_estimated_time: total_time,
         total_ai_session_time,
+        streak_days,
         repos,
     };
 
@@ -201,6 +208,7 @@ fn main() -> anyhow::Result<()> {
                 total_repos: repos.len(),
                 total_estimated_time: total_time,
                 total_ai_session_time,
+                streak_days: 0,
                 repos,
             };
             if summarize {
