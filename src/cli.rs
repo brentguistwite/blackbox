@@ -25,7 +25,11 @@ pub enum Commands {
     /// Stop the running daemon
     Stop,
     /// Show daemon status (running/stopped)
-    Status,
+    Status {
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show today's git activity
     Today {
         /// Output format: pretty, json, csv
@@ -192,6 +196,7 @@ impl Commands {
         matches!(
             self,
             Commands::Init { .. }
+                | Commands::Status { .. }
                 | Commands::Setup
                 | Commands::Completions { .. }
                 | Commands::Hook { .. }

@@ -125,6 +125,8 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_churn_events_dedup ON churn_events(repo_path, original_commit_hash, churn_commit_hash, file_path);"
         ),
+        // richer-status US-001: daemon_state key-value table for heartbeat data
+        M::up("CREATE TABLE IF NOT EXISTS daemon_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);"),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -409,4 +411,39 @@ pub fn repos_with_line_stats(conn: &Connection) -> anyhow::Result<Vec<String>> {
         paths.push(r?);
     }
     Ok(paths)
+}
+
+/// Set a key-value pair in the daemon_state table (INSERT OR REPLACE).
+pub fn set_daemon_state(conn: &Connection, key: &str, value: &str) -> anyhow::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO daemon_state (key, value) VALUES (?1, ?2)",
+        rusqlite::params![key, value],
+    )?;
+    Ok(())
+}
+
+/// Get a value from the daemon_state table. Returns None if key absent.
+pub fn get_daemon_state(conn: &Connection, key: &str) -> anyhow::Result<Option<String>> {
+    let mut stmt = conn.prepare("SELECT value FROM daemon_state WHERE key = ?1")?;
+    let mut rows = stmt.query(rusqlite::params![key])?;
+    match rows.next()? {
+        Some(row) => Ok(Some(row.get(0)?)),
+        None => Ok(None),
+    }
+}
+
+/// Count git_activity events from today (UTC midnight onwards).
+pub fn count_events_today(conn: &Connection) -> anyhow::Result<u64> {
+    let today_start = chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .to_rfc3339();
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM git_activity WHERE timestamp >= ?1",
+        rusqlite::params![today_start],
+        |row| row.get(0),
+    )?;
+    Ok(count as u64)
 }

@@ -964,7 +964,7 @@ pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
         return lines.join("\n");
     }
 
-    lines.push(format!("=== PR Cycle Time ===").bold().cyan().to_string());
+    lines.push("=== PR Cycle Time ===".to_string().bold().cyan().to_string());
     lines.push(String::new());
 
     lines.push(format!("{} PRs opened  {} merged", stats.total_prs, stats.merged_prs));
@@ -972,10 +972,10 @@ pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
 
     // Median stats
     let ct = stats.median_cycle_time_hours
-        .map(|h| format_hours(h))
+        .map(format_hours)
         .unwrap_or_else(|| "n/a".to_string());
     let tfr = stats.median_time_to_first_review_hours
-        .map(|h| format_hours(h))
+        .map(format_hours)
         .unwrap_or_else(|| "n/a".to_string());
     let size = stats.median_pr_size_lines
         .map(|s| format!("{} lines", s.round() as i64))
@@ -997,7 +997,7 @@ pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
     for pr in sorted_prs {
         let title = truncate(&pr.title, 40);
         let cycle = pr.cycle_time_hours
-            .map(|h| format_hours(h))
+            .map(format_hours)
             .unwrap_or_else(|| "-".to_string());
         let size = pr.size_lines
             .map(|s| format!("{} lines", s))

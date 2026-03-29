@@ -70,6 +70,17 @@ pub fn remove_stale_worktrees(repo_states: &mut HashMap<PathBuf, RepoState>) -> 
     stale
 }
 
+/// Write heartbeat data to daemon_state after each full_scan.
+fn write_heartbeat(conn: &Connection, repo_count: usize) {
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = db::set_daemon_state(conn, "last_poll_at", &now) {
+        log::warn!("Failed to write last_poll_at: {}", e);
+    }
+    if let Err(e) = db::set_daemon_state(conn, "repos_watched", &repo_count.to_string()) {
+        log::warn!("Failed to write repos_watched: {}", e);
+    }
+}
+
 /// Full scan: re-discover repos, poll all, collect reviews, track sessions.
 fn full_scan(
     config: &Config,
@@ -95,6 +106,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
     // Initial full scan
     let mut repos = full_scan(&config, &mut repo_states, &conn);
+    write_heartbeat(&conn, repos.len());
 
     // Try to set up filesystem watcher
     let mut watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -122,6 +134,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                     log::info!("Config reloaded successfully");
                     // Re-discover repos and recreate watcher with new config
                     repos = full_scan(&config, &mut repo_states, &conn);
+                    write_heartbeat(&conn, repos.len());
                     watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
                     last_full_scan = Instant::now();
                     debounce_map.clear();
@@ -162,6 +175,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             // Periodic full scan for missed events + new repos
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
                 repos = full_scan(&config, &mut repo_states, &conn);
+                write_heartbeat(&conn, repos.len());
 
                 // Recreate watcher with updated repo list
                 watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -175,6 +189,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             // Pure polling fallback (original behavior)
             std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
             repos = full_scan(&config, &mut repo_states, &conn);
+            write_heartbeat(&conn, repos.len());
 
             // Retry watcher setup on each full scan
             watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
