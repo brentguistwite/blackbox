@@ -38,6 +38,7 @@ fn render_summary_with_repos() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(90),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -97,6 +98,7 @@ fn render_empty_summary() {
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![],
     };
 
@@ -112,6 +114,7 @@ fn make_test_summary() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(45),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -150,6 +153,7 @@ fn make_empty_summary() -> ActivitySummary {
         total_repos: 0,
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![],
     }
 }
@@ -265,6 +269,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -369,6 +374,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::minutes(62) + Duration::minutes(0), // ended session only
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -495,6 +501,7 @@ fn standup_groups_commits_by_branch() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(60),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -555,6 +562,7 @@ fn standup_includes_pr_info() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/proj".to_string(),
             repo_name: "proj".to_string(),
@@ -596,6 +604,7 @@ fn standup_week_header() {
         total_repos: 1,
         total_estimated_time: Duration::minutes(10),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/p".to_string(),
             repo_name: "p".to_string(),
