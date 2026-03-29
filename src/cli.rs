@@ -31,6 +31,15 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Output JSON. Shape: {period_label, total_commits, total_reviews, total_repos,
+        /// total_estimated_minutes, total_ai_session_minutes,
+        /// repos: [{repo_name, repo_path, commits, branches, estimated_minutes,
+        ///          events, pr_info?, reviews, ai_sessions}]}
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
@@ -40,6 +49,15 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Output JSON. Shape: {period_label, total_commits, total_reviews, total_repos,
+        /// total_estimated_minutes, total_ai_session_minutes,
+        /// repos: [{repo_name, repo_path, commits, branches, estimated_minutes,
+        ///          events, pr_info?, reviews, ai_sessions}]}
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
@@ -49,6 +67,15 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Output JSON. Shape: {period_label, total_commits, total_reviews, total_repos,
+        /// total_estimated_minutes, total_ai_session_minutes,
+        /// repos: [{repo_name, repo_path, commits, branches, estimated_minutes,
+        ///          events, pr_info?, reviews, ai_sessions}]}
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
@@ -104,6 +131,15 @@ pub enum Commands {
         /// Show this week's activity instead of today
         #[arg(long)]
         week: bool,
+        /// Output JSON. Shape: {period_label, total_commits, total_reviews, total_repos,
+        /// total_estimated_minutes, total_ai_session_minutes,
+        /// repos: [{repo_name, repo_path, commits, branches, estimated_minutes,
+        ///          events, pr_info?, reviews, ai_sessions}]}
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,

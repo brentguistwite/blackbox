@@ -77,6 +77,7 @@ fn today_pretty_streak_three_consecutive_days() {
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
         .env("NO_COLOR", "1")
+        .env("BLACKBOX_FORMAT", "pretty")
         .arg("today")
         .output()
         .unwrap();
@@ -121,6 +122,7 @@ fn today_pretty_streak_one_day() {
         .env("XDG_CONFIG_HOME", &config_dir)
         .env("XDG_DATA_HOME", &data_dir)
         .env("NO_COLOR", "1")
+        .env("BLACKBOX_FORMAT", "pretty")
         .arg("today")
         .output()
         .unwrap();

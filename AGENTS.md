@@ -44,7 +44,7 @@ src/
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
 ├── llm.rs            # LLM integration for --summarize flag
-├── output.rs         # OutputFormat enum, render_summary/json/csv
+├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges
 ├── repo_deep_dive.rs # Single-repo deep dive (language breakdown, top files, time, branches, PRs)
