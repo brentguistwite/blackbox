@@ -1,6 +1,7 @@
 use blackbox::db::{open_db, upsert_pr_snapshot};
 use blackbox::enrichment::{collect_pr_snapshots, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
-use blackbox::query::query_pr_cycle_stats;
+use blackbox::output::render_pr_cycle_stats;
+use blackbox::query::{query_pr_cycle_stats, PrCycleStats, PrMetrics};
 use chrono::{TimeZone, Utc};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
@@ -468,4 +469,173 @@ fn query_pr_cycle_stats_null_additions_deletions() {
 
     assert!(stats.prs[0].size_lines.is_none());
     assert!(stats.median_pr_size_lines.is_none());
+}
+
+// --- US-007: render_pr_cycle_stats tests ---
+
+#[test]
+fn render_pr_cycle_stats_empty() {
+    let stats = PrCycleStats {
+        prs: vec![],
+        median_cycle_time_hours: None,
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: None,
+        median_iteration_count: None,
+        total_prs: 0,
+        merged_prs: 0,
+    };
+    let output = render_pr_cycle_stats(&stats);
+    assert!(output.contains("No PR data available for this period"));
+}
+
+#[test]
+fn render_pr_cycle_stats_header_and_summary() {
+    let stats = PrCycleStats {
+        prs: vec![PrMetrics {
+            pr_number: 1,
+            title: "Add feature".to_string(),
+            url: "https://github.com/test/repo/pull/1".to_string(),
+            state: "MERGED".to_string(),
+            cycle_time_hours: Some(10.0),
+            time_to_first_review_hours: Some(2.0),
+            size_lines: Some(120),
+            iteration_count: Some(1),
+            created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+            merged_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 20, 0, 0).unwrap()),
+        }],
+        median_cycle_time_hours: Some(10.0),
+        median_time_to_first_review_hours: Some(2.0),
+        median_pr_size_lines: Some(120.0),
+        median_iteration_count: Some(1.0),
+        total_prs: 1,
+        merged_prs: 1,
+    };
+    let output = render_pr_cycle_stats(&stats);
+    assert!(output.contains("PR Cycle Time"));
+    assert!(output.contains("1 PRs opened"));
+    assert!(output.contains("1 merged"));
+    assert!(output.contains("10h 0m"));
+    assert!(output.contains("2h 0m"));
+    assert!(output.contains("120 lines"));
+    assert!(output.contains("1.0"));
+    assert!(output.contains("Add feature"));
+    assert!(output.contains("MERGED"));
+}
+
+#[test]
+fn render_pr_cycle_stats_na_for_none_medians() {
+    let stats = PrCycleStats {
+        prs: vec![PrMetrics {
+            pr_number: 1,
+            title: "Open PR".to_string(),
+            url: "https://github.com/test/repo/pull/1".to_string(),
+            state: "OPEN".to_string(),
+            cycle_time_hours: None,
+            time_to_first_review_hours: None,
+            size_lines: Some(40),
+            iteration_count: Some(0),
+            created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+            merged_at: None,
+        }],
+        median_cycle_time_hours: None,
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: Some(40.0),
+        median_iteration_count: Some(0.0),
+        total_prs: 1,
+        merged_prs: 0,
+    };
+    let output = render_pr_cycle_stats(&stats);
+    // cycle time and time to first review should show n/a
+    let lines: Vec<&str> = output.lines().collect();
+    let cycle_line = lines.iter().find(|l| l.contains("Cycle time")).unwrap();
+    assert!(cycle_line.contains("n/a"), "expected n/a for cycle time");
+    let review_line = lines.iter().find(|l| l.contains("first review")).unwrap();
+    assert!(review_line.contains("n/a"), "expected n/a for first review");
+}
+
+#[test]
+fn render_pr_cycle_stats_sort_order_merged_open_closed() {
+    let stats = PrCycleStats {
+        prs: vec![
+            PrMetrics {
+                pr_number: 1,
+                title: "Closed PR".to_string(),
+                url: "https://url/1".to_string(),
+                state: "CLOSED".to_string(),
+                cycle_time_hours: None,
+                time_to_first_review_hours: None,
+                size_lines: Some(10),
+                iteration_count: Some(0),
+                created_at: Some(Utc.with_ymd_and_hms(2025, 1, 10, 0, 0, 0).unwrap()),
+                merged_at: None,
+            },
+            PrMetrics {
+                pr_number: 2,
+                title: "Open PR".to_string(),
+                url: "https://url/2".to_string(),
+                state: "OPEN".to_string(),
+                cycle_time_hours: None,
+                time_to_first_review_hours: None,
+                size_lines: Some(20),
+                iteration_count: Some(0),
+                created_at: Some(Utc.with_ymd_and_hms(2025, 1, 12, 0, 0, 0).unwrap()),
+                merged_at: None,
+            },
+            PrMetrics {
+                pr_number: 3,
+                title: "Merged PR".to_string(),
+                url: "https://url/3".to_string(),
+                state: "MERGED".to_string(),
+                cycle_time_hours: Some(5.0),
+                time_to_first_review_hours: None,
+                size_lines: Some(30),
+                iteration_count: Some(0),
+                created_at: Some(Utc.with_ymd_and_hms(2025, 1, 14, 0, 0, 0).unwrap()),
+                merged_at: Some(Utc.with_ymd_and_hms(2025, 1, 14, 5, 0, 0).unwrap()),
+            },
+        ],
+        median_cycle_time_hours: Some(5.0),
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: Some(20.0),
+        median_iteration_count: Some(0.0),
+        total_prs: 3,
+        merged_prs: 1,
+    };
+    let output = render_pr_cycle_stats(&stats);
+    // Find positions of PR titles in the output — merged should come first
+    let merged_pos = output.find("Merged PR").expect("should contain Merged PR");
+    let open_pos = output.find("Open PR").expect("should contain Open PR");
+    let closed_pos = output.find("Closed PR").expect("should contain Closed PR");
+    assert!(merged_pos < open_pos, "merged before open");
+    assert!(open_pos < closed_pos, "open before closed");
+}
+
+#[test]
+fn render_pr_cycle_stats_truncates_long_title() {
+    let long_title = "A".repeat(60);
+    let stats = PrCycleStats {
+        prs: vec![PrMetrics {
+            pr_number: 1,
+            title: long_title.clone(),
+            url: "https://url/1".to_string(),
+            state: "MERGED".to_string(),
+            cycle_time_hours: Some(1.0),
+            time_to_first_review_hours: None,
+            size_lines: Some(10),
+            iteration_count: Some(0),
+            created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+            merged_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 11, 0, 0).unwrap()),
+        }],
+        median_cycle_time_hours: Some(1.0),
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: Some(10.0),
+        median_iteration_count: Some(0.0),
+        total_prs: 1,
+        merged_prs: 1,
+    };
+    let output = render_pr_cycle_stats(&stats);
+    // Should not contain the full 60-char title
+    assert!(!output.contains(&long_title));
+    // Should contain truncated version (40 chars + ...)
+    assert!(output.contains(&"A".repeat(40)));
 }

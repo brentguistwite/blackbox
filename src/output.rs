@@ -846,6 +846,99 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     lines.join("\n")
 }
 
+// --- PR Cycle Time ---
+
+fn format_hours(h: f64) -> String {
+    let total_minutes = (h * 60.0).round() as i64;
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes)
+    }
+}
+
+fn state_sort_key(state: &str) -> u8 {
+    match state {
+        "MERGED" => 0,
+        "OPEN" => 1,
+        _ => 2, // CLOSED or anything else
+    }
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max])
+    }
+}
+
+/// Render PrCycleStats as pretty terminal output.
+pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    if stats.total_prs == 0 {
+        lines.push("No PR data available for this period".dimmed().to_string());
+        return lines.join("\n");
+    }
+
+    lines.push(format!("=== PR Cycle Time ===").bold().cyan().to_string());
+    lines.push(String::new());
+
+    lines.push(format!("{} PRs opened  {} merged", stats.total_prs, stats.merged_prs));
+    lines.push(String::new());
+
+    // Median stats
+    let ct = stats.median_cycle_time_hours
+        .map(|h| format_hours(h))
+        .unwrap_or_else(|| "n/a".to_string());
+    let tfr = stats.median_time_to_first_review_hours
+        .map(|h| format_hours(h))
+        .unwrap_or_else(|| "n/a".to_string());
+    let size = stats.median_pr_size_lines
+        .map(|s| format!("{} lines", s.round() as i64))
+        .unwrap_or_else(|| "n/a".to_string());
+    let iter = stats.median_iteration_count
+        .map(|i| format!("{:.1}", i))
+        .unwrap_or_else(|| "n/a".to_string());
+
+    lines.push(format!("{:<34} {}", "Cycle time (median):", ct));
+    lines.push(format!("{:<34} {}", "Time to first review (median):", tfr));
+    lines.push(format!("{:<34} {}", "PR size (median):", size));
+    lines.push(format!("{:<34} {}", "Iteration count (median):", iter));
+    lines.push(String::new());
+
+    // Per-PR table sorted: merged, open, closed
+    let mut sorted_prs: Vec<&crate::query::PrMetrics> = stats.prs.iter().collect();
+    sorted_prs.sort_by_key(|pr| state_sort_key(&pr.state));
+
+    for pr in sorted_prs {
+        let title = truncate(&pr.title, 40);
+        let cycle = pr.cycle_time_hours
+            .map(|h| format_hours(h))
+            .unwrap_or_else(|| "-".to_string());
+        let size = pr.size_lines
+            .map(|s| format!("{} lines", s))
+            .unwrap_or_else(|| "-".to_string());
+
+        let state_colored = match pr.state.as_str() {
+            "MERGED" => pr.state.magenta().to_string(),
+            "OPEN" => pr.state.green().to_string(),
+            "CLOSED" => pr.state.dimmed().to_string(),
+            _ => pr.state.clone(),
+        };
+
+        lines.push(format!(
+            "  #{:<5} {:<43} {:8} {:>10} {:>10}",
+            pr.pr_number, title, state_colored, cycle, size,
+        ));
+    }
+
+    lines.join("\n")
+}
+
 // --- Rhythm report ---
 
 /// Aggregated rhythm analysis report for a time window.
