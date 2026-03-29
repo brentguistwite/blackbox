@@ -314,6 +314,7 @@ fn time_invested_with_ai_sessions() {
         reviews: vec![],
         ai_sessions: vec![
             AiSessionInfo {
+                tool: "claude-code".into(),
                 session_id: "s1".into(),
                 started_at: t1,
                 ended_at: Some(t2),
