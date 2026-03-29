@@ -102,7 +102,11 @@ impl Config {
     pub fn week_start_weekday(&self) -> Weekday {
         match self.week_start_day.as_deref() {
             Some("sunday") => Weekday::Sun,
-            _ => Weekday::Mon,
+            Some("monday") | None => Weekday::Mon,
+            Some(other) => {
+                eprintln!("Warning: invalid week_start_day '{other}', falling back to monday");
+                Weekday::Mon
+            }
         }
     }
 
