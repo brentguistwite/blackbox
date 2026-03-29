@@ -227,6 +227,28 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
     Ok(ids)
 }
 
+/// Get active session IDs filtered by tool name.
+pub fn get_active_sessions_by_tool(conn: &Connection, tool: &str) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id FROM ai_sessions WHERE ended_at IS NULL AND tool = ?1",
+    )?;
+    let ids = stmt.query_map(rusqlite::params![tool], |row| row.get(0))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(ids)
+}
+
+/// Get all active sessions as (session_id, tool) pairs.
+pub fn get_active_sessions_all(conn: &Connection) -> anyhow::Result<Vec<(String, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT session_id, tool FROM ai_sessions WHERE ended_at IS NULL",
+    )?;
+    let pairs = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(pairs)
+}
+
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
 /// (commits, merges) to leverage the partial unique index. Branch switch events
 /// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
