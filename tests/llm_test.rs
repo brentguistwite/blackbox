@@ -65,6 +65,45 @@ fn test_system_prompt_is_concise() {
     assert!(llm::SYSTEM_PROMPT.contains("3-5 sentences"));
 }
 
+// --- US-003: INSIGHTS_SYSTEM_PROMPT ---
+
+#[test]
+fn insights_system_prompt_requests_quantitative_insights() {
+    let p = llm::INSIGHTS_SYSTEM_PROMPT;
+    // Must ask for 4-6 insights
+    assert!(p.contains("4") && p.contains("6"), "should specify 4-6 insights");
+    // Each insight must start with quantitative claim
+    assert!(p.to_lowercase().contains("quantitative") || p.to_lowercase().contains("specific number") || p.to_lowercase().contains("data reference"),
+        "should require data-backed claims");
+}
+
+#[test]
+fn insights_system_prompt_requires_bullet_format() {
+    let p = llm::INSIGHTS_SYSTEM_PROMPT;
+    assert!(p.to_lowercase().contains("bullet"), "should specify bullet point format");
+    assert!(p.contains("1-2 sentence") || p.contains("1–2 sentence"), "should limit to 1-2 sentences per bullet");
+}
+
+#[test]
+fn insights_system_prompt_prohibits_filler() {
+    let p = llm::INSIGHTS_SYSTEM_PROMPT;
+    let lower = p.to_lowercase();
+    // Must explicitly prohibit generic advice/filler
+    assert!(lower.contains("great job") || lower.contains("consider") || lower.contains("generic"),
+        "should mention prohibited phrases");
+}
+
+#[test]
+fn insights_system_prompt_under_200_words() {
+    let words: Vec<&str> = llm::INSIGHTS_SYSTEM_PROMPT.split_whitespace().collect();
+    assert!(words.len() <= 200, "system prompt has {} words, max 200", words.len());
+}
+
+#[test]
+fn insights_system_prompt_distinct_from_summarize() {
+    assert_ne!(llm::INSIGHTS_SYSTEM_PROMPT, llm::SYSTEM_PROMPT);
+}
+
 #[test]
 fn test_summarize_unsupported_provider() {
     let llm_config = llm::LlmConfig {
