@@ -287,3 +287,72 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    fn setup_db() -> (Connection, NamedTempFile) {
+        let tmp = NamedTempFile::new().unwrap();
+        let conn = crate::db::open_db(tmp.path()).unwrap();
+        (conn, tmp)
+    }
+
+    fn test_config(enabled: bool, time: &str) -> Config {
+        Config {
+            notifications_enabled: enabled,
+            notification_time: time.to_string(),
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn notification_disabled_no_db_write() {
+        let (conn, _tmp) = setup_db();
+        let config = test_config(false, "00:01");
+        maybe_send_daily_notification(&config, &conn);
+        let today = chrono::Local::now().date_naive().to_string();
+        let sent = crate::db::notification_was_sent(&conn, &today, "daily_summary").unwrap();
+        assert!(!sent);
+    }
+
+    #[test]
+    fn notification_future_time_no_db_write() {
+        let (conn, _tmp) = setup_db();
+        let config = test_config(true, "23:59");
+        maybe_send_daily_notification(&config, &conn);
+        let today = chrono::Local::now().date_naive().to_string();
+        let sent = crate::db::notification_was_sent(&conn, &today, "daily_summary").unwrap();
+        assert!(!sent);
+    }
+
+    #[test]
+    fn notification_past_time_no_activity_no_db_write() {
+        let (conn, _tmp) = setup_db();
+        let config = test_config(true, "00:01");
+        maybe_send_daily_notification(&config, &conn);
+        let today = chrono::Local::now().date_naive().to_string();
+        let sent = crate::db::notification_was_sent(&conn, &today, "daily_summary").unwrap();
+        assert!(!sent);
+    }
+
+    #[test]
+    fn notification_already_sent_idempotent() {
+        let (conn, _tmp) = setup_db();
+        let today = chrono::Local::now().date_naive().to_string();
+        crate::db::record_notification_sent(&conn, &today, "daily_summary").unwrap();
+
+        let config = test_config(true, "00:01");
+        maybe_send_daily_notification(&config, &conn);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notification_log WHERE date = ?1",
+                rusqlite::params![today],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+}
