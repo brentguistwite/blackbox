@@ -74,7 +74,7 @@ pub fn generate_insights(config: &LlmConfig, prompt: &str, max_tokens: u32) -> a
 }
 
 /// Core streaming helper — routes to Anthropic/OpenAI, handles 429/errors, streams to stdout.
-fn call_llm_streaming(
+pub fn call_llm_streaming(
     config: &LlmConfig,
     system_prompt: &str,
     user_content: &str,
