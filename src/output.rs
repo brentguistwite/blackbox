@@ -1630,3 +1630,59 @@ fn render_digest_inner(digest: &WeeklyDigest) -> String {
     lines.join("\n")
 }
 
+/// Render hint lines as dim+italic text. Returns "" when hints is empty.
+pub fn render_suggestions(hints: &[String]) -> String {
+    if hints.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n");
+    for hint in hints {
+        let line = format!("  hint: {}", hint).dimmed().italic().to_string();
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_suggestions_empty_returns_empty_string() {
+        let result = render_suggestions(&[]);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn render_suggestions_single_hint() {
+        colored::control::set_override(false);
+        let hints = vec!["blackbox start".to_string()];
+        let result = render_suggestions(&hints);
+        colored::control::unset_override();
+
+        assert!(result.starts_with('\n'), "should start with blank separator line");
+        assert!(result.contains("hint:"), "should contain 'hint:' prefix");
+        assert!(result.contains("blackbox start"), "should contain hint text");
+    }
+
+    #[test]
+    fn render_suggestions_multiple_hints() {
+        colored::control::set_override(false);
+        let hints = vec![
+            "blackbox start".to_string(),
+            "blackbox today --summarize".to_string(),
+            "blackbox live".to_string(),
+        ];
+        let result = render_suggestions(&hints);
+        colored::control::unset_override();
+
+        assert!(result.starts_with('\n'));
+        for hint in &hints {
+            assert!(result.contains(&format!("  hint: {}", hint)));
+        }
+        // 1 leading newline + 3 hint lines (each ending \n) = 4 newlines total
+        assert_eq!(result.matches('\n').count(), 4);
+    }
+}
+
