@@ -193,17 +193,7 @@ pub fn run_churn(window: Option<u32>, repo: Option<String>, _format: OutputForma
         return Ok(());
     }
 
-    for report in &reports {
-        println!(
-            "{}: {:.1}% churn ({} churned / {} written, {} commits, {}-day window)",
-            report.repo_path,
-            report.churn_rate_pct,
-            report.churned_lines,
-            report.total_lines_written,
-            report.commit_count,
-            report.window_days,
-        );
-    }
+    print!("{}", crate::output::render_churn_pretty(&reports));
 
     Ok(())
 }
