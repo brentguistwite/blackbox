@@ -347,12 +347,132 @@ impl AiToolDetector for CopilotDetector {
     }
 }
 
+/// Cursor workspace.json schema: `{"folder": "/path/to/project"}`
+#[derive(Deserialize)]
+struct CursorWorkspace {
+    folder: Option<String>,
+}
+
+/// Cursor session detector.
+/// Scans Cursor's workspaceStorage for workspace.json files.
+pub struct CursorDetector {
+    workspace_dir: Option<PathBuf>,
+}
+
+impl Default for CursorDetector {
+    fn default() -> Self {
+        Self { workspace_dir: None }
+    }
+}
+
+impl CursorDetector {
+    pub fn with_workspace_dir(dir: PathBuf) -> Self {
+        Self { workspace_dir: Some(dir) }
+    }
+
+    fn resolve_workspace_dir(&self) -> Option<PathBuf> {
+        if let Some(dir) = &self.workspace_dir {
+            return Some(dir.clone());
+        }
+        let home = etcetera::home_dir().ok()?;
+        #[cfg(target_os = "macos")]
+        let base = home.join("Library/Application Support/Cursor/User/workspaceStorage");
+        #[cfg(not(target_os = "macos"))]
+        let base = home.join(".config/Cursor/User/workspaceStorage");
+        Some(base)
+    }
+}
+
+impl AiToolDetector for CursorDetector {
+    fn tool_name(&self) -> &'static str {
+        "cursor"
+    }
+
+    fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
+        let ws_dir = match self.resolve_workspace_dir() {
+            Some(d) if d.exists() => d,
+            _ => {
+                log::debug!("cursor data dir not found, skipping");
+                return;
+            }
+        };
+
+        let entries = match std::fs::read_dir(&ws_dir) {
+            Ok(e) => e,
+            Err(_) => {
+                log::debug!("cursor: failed to read workspaceStorage dir");
+                return;
+            }
+        };
+
+        let cursor_running = is_any_process_running("Cursor");
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let subdir = entry.path();
+            if !subdir.is_dir() {
+                continue;
+            }
+
+            let hash = match subdir.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let workspace_path = subdir.join("workspace.json");
+            if !workspace_path.exists() {
+                continue;
+            }
+
+            // Parse workspace.json
+            let json_content = match std::fs::read_to_string(&workspace_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::debug!("cursor: failed to read {}", workspace_path.display());
+                    continue;
+                }
+            };
+            let workspace: CursorWorkspace = match serde_json::from_str(&json_content) {
+                Ok(w) => w,
+                Err(_) => {
+                    log::debug!("cursor: malformed workspace.json in {}", subdir.display());
+                    continue;
+                }
+            };
+            let folder = match workspace.folder {
+                Some(f) if !f.is_empty() && !f.contains("://") => f,
+                _ => continue,
+            };
+
+            let session_id = format!("cursor-{hash}");
+            let repo_path = map_to_repo(&folder, watched_repos);
+            let started_at = mtime_rfc3339(&workspace_path)
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            match db::insert_ai_session(conn, "cursor", &repo_path, &session_id, &started_at) {
+                Ok(true) => log::debug!("Recorded cursor session: {}", session_id),
+                Ok(false) => {} // already exists
+                Err(e) => log::warn!("Failed to insert cursor session {}: {}", session_id, e),
+            }
+
+            // turns: None (no conversation log available)
+
+            // Still running: Cursor process running AND workspace.json mtime within 30 min
+            let is_recent = modified_within_minutes(&workspace_path, 30);
+            if !cursor_running || !is_recent {
+                let ended_at = Utc::now().to_rfc3339();
+                let _ = db::update_session_ended(conn, &session_id, &ended_at, None);
+            }
+        }
+    }
+}
+
 /// Poll all registered AI tool detectors.
 pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     let detectors: Vec<Box<dyn AiToolDetector>> = vec![
         Box::new(ClaudeDetector::default()),
         Box::new(CodexDetector::default()),
         Box::new(CopilotDetector::default()),
+        Box::new(CursorDetector::default()),
     ];
     for detector in &detectors {
         detector.poll(conn, watched_repos);

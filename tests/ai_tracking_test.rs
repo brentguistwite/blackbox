@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector};
+use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector, CursorDetector};
 use blackbox::db;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -363,4 +363,133 @@ fn test_copilot_detector_missing_state_dir_no_error() {
 fn test_copilot_detector_tool_name() {
     let detector = CopilotDetector::default();
     assert_eq!(detector.tool_name(), "copilot-cli");
+}
+
+// --- US-014: Cursor detector parsing tests ---
+
+/// Helper: create a cursor workspaceStorage dir with hash subdirs and workspace.json
+fn create_cursor_workspace(
+    base: &std::path::Path,
+    hash: &str,
+    json_content: &str,
+) -> std::path::PathBuf {
+    let dir = base.join(hash);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace.json"), json_content).unwrap();
+    dir
+}
+
+#[test]
+fn test_cursor_detector_valid_local_folder_inserts_row() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(
+        &ws_dir,
+        "abc123hash",
+        r#"{"folder": "/tmp/test-repo"}"#,
+    );
+
+    let detector = CursorDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let (tool, repo, sid): (String, String, String) = conn
+        .query_row(
+            "SELECT tool, repo_path, session_id FROM ai_sessions LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(tool, "cursor");
+    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(sid, "cursor-abc123hash");
+}
+
+#[test]
+fn test_cursor_detector_vscode_remote_uri_skipped() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(
+        &ws_dir,
+        "remote-hash",
+        r#"{"folder": "vscode-remote://ssh-remote+myhost/path/to/project"}"#,
+    );
+
+    let detector = CursorDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "vscode-remote:// URIs should be skipped");
+}
+
+#[test]
+fn test_cursor_detector_missing_folder_key_skipped() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(
+        &ws_dir,
+        "no-folder-hash",
+        r#"{"someOtherKey": "value"}"#,
+    );
+
+    let detector = CursorDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "missing folder key should be skipped");
+}
+
+#[test]
+fn test_cursor_detector_missing_workspace_dir_no_error() {
+    let (_tmp, conn) = setup_db();
+    let nonexistent = PathBuf::from("/tmp/definitely-does-not-exist-cursor-ws");
+
+    let detector = CursorDetector::with_workspace_dir(nonexistent);
+    detector.poll(&conn, &[]); // should not panic
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_cursor_detector_turns_are_none() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(
+        &ws_dir,
+        "turns-hash",
+        r#"{"folder": "/tmp/test-repo"}"#,
+    );
+
+    let detector = CursorDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let turns_null: bool = conn
+        .query_row(
+            "SELECT turns IS NULL FROM ai_sessions WHERE session_id = 'cursor-turns-hash'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(turns_null, "Cursor sessions should have NULL turns");
+}
+
+#[test]
+fn test_cursor_detector_tool_name() {
+    let detector = CursorDetector::default();
+    assert_eq!(detector.tool_name(), "cursor");
 }
