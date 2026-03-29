@@ -535,3 +535,55 @@ fn cli_insights_json_no_llm_key_required() {
         .assert()
         .success();
 }
+
+// --- US-017: empty activity short-circuit ---
+
+/// Helper: init config + open DB but insert NO commits.
+fn setup_empty_insights_cli_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Init config (no llm_api_key)
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    // Ensure DB exists but is empty
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = blackbox::db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    (tmp, config_dir, data_dir)
+}
+
+#[test]
+fn cli_insights_empty_db_exits_zero_with_no_activity_msg() {
+    let (_tmp, config_dir, data_dir) = setup_empty_insights_cli_env();
+
+    // No API key, no commits — should short-circuit before LLM check
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["insights"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No activity"),
+        "stdout should contain 'No activity', got: {stdout}"
+    );
+    // Must NOT be an API key error
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("llm_api_key") && !stderr.contains("llm_api_key"),
+        "should not hit API key error path"
+    );
+}
