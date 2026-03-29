@@ -320,3 +320,89 @@ fn prompt_has_prs_marker_on_repos() {
     // repo-0 has has_prs=true (i%3==0)
     assert!(prompt.contains("[has PRs]"));
 }
+
+// --- US-006: InsightsData JSON serialization ---
+
+#[test]
+fn render_insights_json_valid_pretty_json() {
+    let data = make_insights_data(3);
+    let json_str = blackbox::output::render_insights_json(&data);
+
+    // Must be valid JSON
+    let val: serde_json::Value = serde_json::from_str(&json_str).expect("should be valid JSON");
+
+    // Pretty-printed = contains newlines
+    assert!(json_str.contains('\n'), "should be pretty-printed");
+
+    // Snake_case keys
+    let obj = val.as_object().unwrap();
+    assert!(obj.contains_key("period_label"));
+    assert!(obj.contains_key("total_commits"));
+    assert!(obj.contains_key("commits_by_dow"));
+    assert!(obj.contains_key("commits_by_hour"));
+    assert!(obj.contains_key("avg_msg_len_by_dow"));
+    assert!(obj.contains_key("bugfix_commits"));
+    assert!(obj.contains_key("pr_merge_times_hours"));
+    assert!(obj.contains_key("per_repo"));
+}
+
+#[test]
+fn render_insights_json_array_lengths() {
+    let data = make_insights_data(3);
+    let json_str = blackbox::output::render_insights_json(&data);
+    let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    // commits_by_dow: 7 elements
+    let dow = val["commits_by_dow"].as_array().unwrap();
+    assert_eq!(dow.len(), 7);
+
+    // commits_by_hour: 24 elements
+    let hour = val["commits_by_hour"].as_array().unwrap();
+    assert_eq!(hour.len(), 24);
+
+    // pr_merge_times_hours: 3 f64s from test data
+    let prs = val["pr_merge_times_hours"].as_array().unwrap();
+    assert_eq!(prs.len(), 3);
+    assert_eq!(prs[0].as_f64().unwrap(), 2.5);
+    assert_eq!(prs[1].as_f64().unwrap(), 4.0);
+    assert_eq!(prs[2].as_f64().unwrap(), 8.0);
+}
+
+#[test]
+fn render_insights_json_per_repo_fields() {
+    let data = make_insights_data(2);
+    let json_str = blackbox::output::render_insights_json(&data);
+    let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let repos = val["per_repo"].as_array().unwrap();
+    assert_eq!(repos.len(), 2);
+
+    let r0 = &repos[0];
+    assert!(r0["repo_name"].is_string());
+    assert!(r0["commits"].is_number());
+    assert!(r0["estimated_minutes"].is_number());
+    assert!(r0["branches_touched"].is_number());
+    assert!(r0["has_prs"].is_boolean());
+    assert!(r0["avg_commit_msg_len"].is_number());
+}
+
+#[test]
+fn render_insights_json_empty_data() {
+    let data = InsightsData {
+        period_label: "This Week".to_string(),
+        total_commits: 0,
+        total_repos: 0,
+        commits_by_dow: [0u32; 7],
+        commits_by_hour: [0u32; 24],
+        avg_msg_len_by_dow: [0.0f64; 7],
+        bugfix_commits: 0,
+        total_commits_with_msg: 0,
+        pr_merge_times_hours: vec![],
+        per_repo: vec![],
+    };
+    let json_str = blackbox::output::render_insights_json(&data);
+    let val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    assert_eq!(val["total_commits"], 0);
+    assert!(val["per_repo"].as_array().unwrap().is_empty());
+    assert!(val["pr_merge_times_hours"].as_array().unwrap().is_empty());
+}
