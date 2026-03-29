@@ -1,10 +1,12 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use git2::{Commit, DiffOptions, Repository};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
+use crate::config;
 use crate::db;
+use crate::output::OutputFormat;
 
 #[derive(Debug, Clone)]
 pub struct FileLineStat {
@@ -155,4 +157,53 @@ pub fn compute_churn(conn: &Connection, repo_path: &str, window_days: u32) -> Re
         commit_count,
         churn_event_count,
     })
+}
+
+/// CLI entry point for `blackbox churn`.
+pub fn run_churn(window: Option<u32>, repo: Option<String>, _format: OutputFormat) -> Result<()> {
+    let cfg = config::load_config()?;
+    let data_dir = config::data_dir()?;
+    let db_path = data_dir.join("blackbox.db");
+    let conn = db::open_db(&db_path)
+        .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+    let window_days = window.unwrap_or(cfg.churn_window_days);
+
+    let repo_paths = if let Some(ref path) = repo {
+        vec![path.clone()]
+    } else {
+        db::repos_with_line_stats(&conn)?
+    };
+
+    if repo_paths.is_empty() {
+        println!("No churn data \u{2014} run blackbox start to collect data.");
+        return Ok(());
+    }
+
+    let mut reports = Vec::new();
+    for rp in &repo_paths {
+        let report = compute_churn(&conn, rp, window_days)?;
+        reports.push(report);
+    }
+
+    // Check if ALL repos had zero data (filtered repo case)
+    let any_data = reports.iter().any(|r| r.total_lines_written > 0);
+    if !any_data && repo.is_some() {
+        println!("No churn data \u{2014} run blackbox start to collect data.");
+        return Ok(());
+    }
+
+    for report in &reports {
+        println!(
+            "{}: {:.1}% churn ({} churned / {} written, {} commits, {}-day window)",
+            report.repo_path,
+            report.churn_rate_pct,
+            report.churned_lines,
+            report.total_lines_written,
+            report.commit_count,
+            report.window_days,
+        );
+    }
+
+    Ok(())
 }

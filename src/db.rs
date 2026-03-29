@@ -320,3 +320,16 @@ pub fn query_commit_line_stats_for_repo(
     }
     Ok(stats)
 }
+
+/// Return distinct repo_paths that have commit_line_stats data.
+pub fn repos_with_line_stats(conn: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT repo_path FROM commit_line_stats ORDER BY repo_path",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut paths = Vec::new();
+    for r in rows {
+        paths.push(r?);
+    }
+    Ok(paths)
+}
