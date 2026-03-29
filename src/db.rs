@@ -85,6 +85,20 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_line_stats_dedup ON commit_line_stats(repo_path, commit_hash, file_path);"
         ),
+        // US-002: churn events — raw evidence for churn rate computation
+        M::up(
+            "CREATE TABLE IF NOT EXISTS churn_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                original_commit_hash TEXT NOT NULL,
+                churn_commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_churned INTEGER NOT NULL,
+                churn_window_days INTEGER NOT NULL,
+                detected_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_churn_events_dedup ON churn_events(repo_path, original_commit_hash, churn_commit_hash, file_path);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
