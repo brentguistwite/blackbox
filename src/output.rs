@@ -918,6 +918,11 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
     lines.push(format!("Total: ~{} across {} {}", format_duration_plain(summary.total_estimated_time), summary.total_repos, repo_word));
 
+    if summary.total_branch_switches >= 5 {
+        let cost = summary.total_branch_switches as i64 * FOCUS_COST_PER_SWITCH_MINS;
+        lines.push(format!("- Context switches: {} (est. ~{}m focus cost)", summary.total_branch_switches, cost));
+    }
+
     lines.join("\n")
 }
 

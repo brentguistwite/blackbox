@@ -1,4 +1,4 @@
-use blackbox::output::{render_summary_to_string, FOCUS_COST_PER_SWITCH_MINS};
+use blackbox::output::{render_standup, render_summary_to_string, FOCUS_COST_PER_SWITCH_MINS};
 use blackbox::query::{ActivityEvent, ActivitySummary, RepoSummary};
 use chrono::{Duration, TimeZone, Utc};
 
@@ -143,6 +143,43 @@ fn per_repo_no_switch_line_when_zero() {
 
     let output = render_summary_to_string(&summary);
     assert!(!output.contains("branch switch"), "should not show switch line for repo with 0 switches, got:\n{}", output);
+}
+
+/// US-CS-08: standup includes context-switch line when total_branch_switches >= 5
+#[test]
+fn standup_includes_switch_line_when_above_threshold() {
+    let ts = Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap();
+    let events = vec![
+        make_event("commit", Some("main"), Some("abc1234"), Some("init"), ts),
+    ];
+    let repo = base_repo("myrepo", 1, 6, events);
+    let summary = base_summary(vec![repo]);
+
+    let output = render_standup(&summary);
+    let focus_cost = 6 * FOCUS_COST_PER_SWITCH_MINS;
+    assert!(
+        output.contains(&format!("Context switches: 6 (est. ~{}m focus cost)", focus_cost)),
+        "standup should include context-switch line for 6 switches, got:\n{}",
+        output
+    );
+}
+
+/// US-CS-08: standup omits context-switch line when total_branch_switches < 5
+#[test]
+fn standup_omits_switch_line_when_below_threshold() {
+    let ts = Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap();
+    let events = vec![
+        make_event("commit", Some("main"), Some("abc1234"), Some("init"), ts),
+    ];
+    let repo = base_repo("myrepo", 1, 4, events);
+    let summary = base_summary(vec![repo]);
+
+    let output = render_standup(&summary);
+    assert!(
+        !output.contains("Context switches"),
+        "standup should NOT include context-switch line for 4 switches, got:\n{}",
+        output
+    );
 }
 
 /// Focus cost constant is 23 (Gloria Mark research)
