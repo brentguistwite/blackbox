@@ -1474,6 +1474,26 @@ pub fn aggregate_insights_data(repos: &[RepoSummary], period_label: &str) -> Ins
         }
     }
 
+    // Compute PR merge times from enrichment data
+    let mut pr_merge_times_hours = Vec::new();
+    for repo in repos {
+        if let Some(prs) = &repo.pr_info {
+            for pr in prs {
+                if pr.state == "MERGED" {
+                    if let (Some(created), Some(merged)) = (&pr.created_at, &pr.merged_at) {
+                        if let (Ok(c), Ok(m)) = (
+                            DateTime::parse_from_rfc3339(created),
+                            DateTime::parse_from_rfc3339(merged),
+                        ) {
+                            let hours = (m - c).num_minutes() as f64 / 60.0;
+                            pr_merge_times_hours.push(hours);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     InsightsData {
         period_label: period_label.to_string(),
         total_commits,
@@ -1483,7 +1503,7 @@ pub fn aggregate_insights_data(repos: &[RepoSummary], period_label: &str) -> Ins
         avg_msg_len_by_dow,
         bugfix_commits,
         total_commits_with_msg,
-        pr_merge_times_hours: vec![],
+        pr_merge_times_hours,
         per_repo,
     }
 }

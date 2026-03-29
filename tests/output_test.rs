@@ -586,7 +586,7 @@ fn standup_includes_pr_info() {
             branches: vec!["main".to_string()],
             estimated_time: Duration::minutes(30),
             events: vec![ActivityEvent { event_type: "commit".to_string(), branch: Some("main".to_string()), commit_hash: Some("x".to_string()), message: Some("m".to_string()), timestamp: Utc::now() }],
-            pr_info: Some(vec![PrInfo { number: 472, title: "Auth refactor".to_string(), state: "MERGED".to_string(), head_ref_name: "feat/auth".to_string() }]),
+            pr_info: Some(vec![PrInfo { number: 472, title: "Auth refactor".to_string(), state: "MERGED".to_string(), head_ref_name: "feat/auth".to_string(), created_at: None, merged_at: None }]),
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],

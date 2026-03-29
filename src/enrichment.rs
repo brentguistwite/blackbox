@@ -12,6 +12,10 @@ pub struct PrInfo {
     pub state: String,
     #[serde(rename = "headRefName")]
     pub head_ref_name: String,
+    #[serde(rename = "createdAt", default)]
+    pub created_at: Option<String>,
+    #[serde(rename = "mergedAt", default)]
+    pub merged_at: Option<String>,
 }
 
 /// Check once if `gh` CLI is available on PATH.
@@ -32,10 +36,12 @@ fn fetch_prs(repo_path: &str) -> Option<Vec<PrInfo>> {
         .args([
             "pr",
             "list",
+            "--state",
+            "all",
             "--json",
-            "number,title,state,headRefName",
+            "number,title,state,headRefName,createdAt,mergedAt",
             "--limit",
-            "5",
+            "20",
         ])
         .current_dir(repo_path)
         .stdout(std::process::Stdio::piped())
