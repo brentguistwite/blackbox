@@ -195,6 +195,27 @@ pub enum Commands {
         #[arg(long)]
         to: Option<String>,
     },
+    /// Show structured weekly digest
+    Digest {
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Week offset: 0=current, -1=last week
+        #[arg(long, default_value = "0")]
+        week: i32,
+        /// Write output to file instead of stdout
+        #[arg(long)]
+        output_file: Option<std::path::PathBuf>,
+        /// Include week-over-week comparison (default: true)
+        #[arg(long, default_value = "true")]
+        compare: bool,
+        /// Summarize using LLM
+        #[arg(long)]
+        summarize: bool,
+        /// Send OS notification with summary
+        #[arg(long)]
+        notify: bool,
+    },
     /// Show code churn rate for tracked repos
     Churn {
         /// Time window in days to detect churn (default: from config)
