@@ -1,10 +1,18 @@
 use crate::enrichment::PrInfo;
 use crate::query::ActivitySummary;
-use chrono::{Datelike, Duration, Local};
+use chrono::{Datelike, DateTime, Duration, Local, Utc};
 use colored::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
+
+/// Digest data: current week summary + optional previous week for comparison.
+pub struct WeeklyDigest {
+    pub current: ActivitySummary,
+    pub previous: Option<ActivitySummary>,
+    pub week_start: DateTime<Utc>,
+    pub week_end: DateTime<Utc>,
+}
 
 /// Gloria Mark (UC Irvine): avg 23 min to regain deep focus after a context switch.
 pub const FOCUS_COST_PER_SWITCH_MINS: i64 = 23;
@@ -1292,3 +1300,296 @@ pub fn render_rhythm_json(report: &RhythmReport) -> String {
 pub fn render_insights_json(data: &crate::query::InsightsData) -> String {
     serde_json::to_string_pretty(data).expect("JSON serialization should not fail")
 }
+
+// --- Weekly Digest Pretty Formatter ---
+
+/// Render digest to a String (for testing/file output). Disables colors via colored override.
+pub fn render_digest_to_string(digest: &WeeklyDigest) -> String {
+    // Temporarily disable colors so output is plain text
+    colored::control::set_override(false);
+    let result = render_digest_inner(digest);
+    colored::control::unset_override();
+    result
+}
+
+/// Print digest pretty output to stdout.
+pub fn render_digest(digest: &WeeklyDigest) {
+    print!("{}", render_digest_inner(digest));
+}
+
+fn render_digest_inner(digest: &WeeklyDigest) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let summary = &digest.current;
+
+    // Empty week
+    if summary.repos.is_empty() && summary.total_commits == 0 {
+        let start_local = digest.week_start.with_timezone(&Local);
+        lines.push(
+            format!(
+                "No activity for week of {}.",
+                start_local.format("%b %-d, %Y")
+            )
+            .dimmed()
+            .to_string(),
+        );
+        return lines.join("\n");
+    }
+
+    // Header: === Weekly Digest — Mar 24–30, 2025 ===
+    let start_local = digest.week_start.with_timezone(&Local);
+    let end_local = digest.week_end.with_timezone(&Local);
+    let header = if start_local.month() == end_local.month() {
+        format!(
+            "=== Weekly Digest \u{2014} {} {}\u{2013}{}, {} ===",
+            start_local.format("%b"),
+            start_local.format("%-d"),
+            end_local.format("%-d"),
+            start_local.format("%Y"),
+        )
+    } else {
+        format!(
+            "=== Weekly Digest \u{2014} {} {}\u{2013}{} {}, {} ===",
+            start_local.format("%b"),
+            start_local.format("%-d"),
+            end_local.format("%b"),
+            end_local.format("%-d"),
+            end_local.format("%Y"),
+        )
+    };
+    lines.push(header.bold().cyan().to_string());
+    lines.push(String::new());
+
+    // Top-level stats: 5h 20m  |  23 commits  |  3 repos  |  2 reviews  |  AI: 1h 10m
+    let mut stats_parts = vec![
+        format_duration(summary.total_estimated_time),
+        format!("{} commits", summary.total_commits),
+        format!(
+            "{} {}",
+            summary.total_repos,
+            if summary.total_repos == 1 { "repo" } else { "repos" }
+        ),
+    ];
+    if summary.total_reviews > 0 {
+        stats_parts.push(format!(
+            "{} {}",
+            summary.total_reviews,
+            if summary.total_reviews == 1 {
+                "review"
+            } else {
+                "reviews"
+            }
+        ));
+    }
+    if summary.total_ai_session_time > Duration::zero() {
+        stats_parts.push(format!(
+            "AI: {}",
+            format_duration(summary.total_ai_session_time)
+        ));
+    }
+    lines.push(stats_parts.join("  |  "));
+    lines.push(String::new());
+
+    // Daily breakdown: group all events by local date
+    let day_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let mut day_commits: BTreeMap<chrono::NaiveDate, usize> = BTreeMap::new();
+    for repo in &summary.repos {
+        for event in &repo.events {
+            if event.event_type == "commit" {
+                let local_date = event.timestamp.with_timezone(&Local).date_naive();
+                *day_commits.entry(local_date).or_default() += 1;
+            }
+        }
+    }
+
+    // Walk each day of the week
+    let total_commits_for_time = day_commits.values().sum::<usize>();
+    let mut current_day = start_local.date_naive();
+    let end_date = end_local.date_naive();
+    while current_day <= end_date {
+        let weekday_idx = current_day.weekday().num_days_from_monday() as usize;
+        let label = day_labels[weekday_idx];
+        let date_str = current_day.format("%b %-d").to_string();
+
+        if let Some(&count) = day_commits.get(&current_day) {
+            // Proportional time estimate
+            let day_time = if total_commits_for_time > 0 {
+                Duration::minutes(
+                    summary.total_estimated_time.num_minutes() * count as i64
+                        / total_commits_for_time as i64,
+                )
+            } else {
+                Duration::zero()
+            };
+            lines.push(format!(
+                "{}  {}   {} {}   {}",
+                label,
+                date_str,
+                count,
+                if count == 1 { "commit " } else { "commits" },
+                format_duration(day_time),
+            ));
+        } else {
+            lines.push(format!("{}  {}   \u{2014}", label, date_str));
+        }
+        current_day += Duration::days(1);
+    }
+    lines.push(String::new());
+
+    // --- Repos ---
+    lines.push("--- Repos ---".bold().to_string());
+    for repo in &summary.repos {
+        let branches_str = repo.branches.join(", ");
+        let pr_str = repo
+            .pr_info
+            .as_ref()
+            .map(|prs| {
+                prs.iter()
+                    .map(|pr| format!("[PR #{}: {}]", pr.number, pr.title))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let pr_suffix = if pr_str.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", pr_str.cyan())
+        };
+        lines.push(format!(
+            "{} [{}] ({}){}",
+            repo.repo_name.bold().green(),
+            branches_str.dimmed(),
+            format_duration(repo.estimated_time).yellow(),
+            pr_suffix,
+        ));
+
+        for event in &repo.events {
+            match event.event_type.as_str() {
+                "commit" => {
+                    let hash = event
+                        .commit_hash
+                        .as_deref()
+                        .map(|h| if h.len() > 7 { &h[..7] } else { h })
+                        .unwrap_or("-------");
+                    let msg = event.message.as_deref().unwrap_or("");
+                    lines.push(format!("  {} {}", hash.dimmed(), msg));
+                }
+                other => {
+                    let detail = event
+                        .branch
+                        .as_deref()
+                        .map(|b| format!(" -> {}", b))
+                        .unwrap_or_default();
+                    lines.push(format!("  {} {}{}", "~".dimmed(), other.italic(), detail));
+                }
+            }
+        }
+
+        // Reviews
+        if !repo.reviews.is_empty() {
+            let mut pr_map: BTreeMap<i64, &crate::query::ReviewInfo> = BTreeMap::new();
+            for review in &repo.reviews {
+                let entry = pr_map.entry(review.pr_number).or_insert(review);
+                if review_priority(&review.action) > review_priority(&entry.action) {
+                    *entry = review;
+                }
+            }
+            let unique: Vec<_> = pr_map.values().collect();
+            let review_word = if unique.len() == 1 { "PR" } else { "PRs" };
+            lines.push(format!(
+                "  {} Reviewed {} {}",
+                "~".dimmed(),
+                unique.len(),
+                review_word,
+            ));
+            for review in unique {
+                let icon = review_action_icon(&review.action);
+                lines.push(format!(
+                    "    {} PR #{}: {}",
+                    icon, review.pr_number, review.pr_title,
+                ));
+            }
+        }
+
+        // AI Sessions
+        if !repo.ai_sessions.is_empty() {
+            let total_session_time: Duration = repo
+                .ai_sessions
+                .iter()
+                .map(|s| s.duration)
+                .fold(Duration::zero(), |a, b| a + b);
+            let word = if repo.ai_sessions.len() == 1 {
+                "session"
+            } else {
+                "sessions"
+            };
+            lines.push(format!(
+                "  {} {} AI {} ({})",
+                "~".dimmed(),
+                repo.ai_sessions.len(),
+                word,
+                format_duration(total_session_time).magenta(),
+            ));
+        }
+
+        lines.push(String::new());
+    }
+
+    // --- vs Last Week ---
+    if let Some(prev) = &digest.previous {
+        lines.push("--- vs Last Week ---".bold().to_string());
+
+        // Commits delta
+        let commit_delta = summary.total_commits as i64 - prev.total_commits as i64;
+        let commit_line = if commit_delta == 0 {
+            format!(
+                "Commits:  same ({})",
+                summary.total_commits,
+            )
+        } else {
+            format!(
+                "Commits:  {:+}  ({} vs {})",
+                commit_delta, summary.total_commits, prev.total_commits,
+            )
+        };
+        lines.push(commit_line);
+
+        // Time delta
+        let time_delta = summary.total_estimated_time - prev.total_estimated_time;
+        let time_line = if time_delta.num_minutes() == 0 {
+            format!(
+                "Time:     same ({})",
+                format_duration(summary.total_estimated_time),
+            )
+        } else {
+            let sign = if time_delta.num_minutes() > 0 { "+" } else { "" };
+            format!(
+                "Time:     {}{}  ({} vs {})",
+                sign,
+                format_duration_plain(time_delta.abs()),
+                format_duration(summary.total_estimated_time),
+                format_duration(prev.total_estimated_time),
+            )
+        };
+        lines.push(time_line);
+
+        // Reviews delta
+        let review_delta = summary.total_reviews as i64 - prev.total_reviews as i64;
+        let review_line = if review_delta == 0 {
+            format!(
+                "Reviews:  same ({})",
+                summary.total_reviews,
+            )
+        } else {
+            format!(
+                "Reviews:  {:+}  ({} vs {})",
+                review_delta, summary.total_reviews, prev.total_reviews,
+            )
+        };
+        lines.push(review_line);
+
+        lines.push(String::new());
+    }
+
+    lines.join("\n")
+}
+
