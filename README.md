@@ -41,6 +41,7 @@ blackbox today
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
 | `rhythm` | Work rhythm analysis (`--days N`, `--format pretty\|json`) |
+| `reload` | Send SIGHUP to running daemon to reload config without restart |
 | `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
@@ -92,6 +93,16 @@ Today - 3 repos, 12 commits, 4h 30m estimated
 The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
 
 **Repo deep dive:** `blackbox repo <path>` -- onefetch-inspired single-repo analysis showing language breakdown (via git2 tree walk), most-changed files, all-time estimated time, branch activity, and PR history. Works on any git repo; repos not yet tracked by blackbox show git-derived data with an "untracked" indicator.
+
+## Live Config Reload
+
+Edit `~/.config/blackbox/config.toml` while the daemon is running, then:
+
+```
+blackbox reload
+```
+
+The daemon picks up the new config (watch dirs, poll interval, etc.) without restarting. If the config file is missing or invalid, the daemon logs a warning and keeps the previous config.
 
 ## How It Works
 
