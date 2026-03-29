@@ -1034,6 +1034,185 @@ pub fn burst_pattern(
     })
 }
 
+// --- PR cycle time types and queries ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PrMetrics {
+    pub pr_number: i64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub cycle_time_hours: Option<f64>,
+    pub time_to_first_review_hours: Option<f64>,
+    pub size_lines: Option<i64>,
+    pub iteration_count: Option<i64>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub merged_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PrCycleStats {
+    pub prs: Vec<PrMetrics>,
+    pub median_cycle_time_hours: Option<f64>,
+    pub median_time_to_first_review_hours: Option<f64>,
+    pub median_pr_size_lines: Option<f64>,
+    pub median_iteration_count: Option<f64>,
+    pub total_prs: usize,
+    pub merged_prs: usize,
+}
+
+fn median_f64(mut values: Vec<f64>) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
+}
+
+fn parse_dt_opt(s: &Option<String>) -> Option<DateTime<Utc>> {
+    s.as_deref().and_then(|v| {
+        DateTime::parse_from_rfc3339(v)
+            .map(|dt| dt.with_timezone(&Utc))
+            .ok()
+    })
+}
+
+/// Query pr_snapshots for cycle time metrics over a date range.
+/// Filters on created_at_gh within [from, to]. Optional repo_path_filter.
+pub fn query_pr_cycle_stats(
+    conn: &Connection,
+    repo_path_filter: Option<&str>,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<PrCycleStats> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match repo_path_filter {
+        Some(repo) => (
+            "SELECT pr_number, title, url, state, created_at_gh, merged_at, closed_at,
+                    first_review_at, additions, deletions, commits, iteration_count
+             FROM pr_snapshots
+             WHERE created_at_gh >= ?1 AND created_at_gh <= ?2 AND repo_path = ?3
+             ORDER BY created_at_gh ASC".to_string(),
+            vec![
+                Box::new(from_str) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(to_str),
+                Box::new(repo.to_string()),
+            ],
+        ),
+        None => (
+            "SELECT pr_number, title, url, state, created_at_gh, merged_at, closed_at,
+                    first_review_at, additions, deletions, commits, iteration_count
+             FROM pr_snapshots
+             WHERE created_at_gh >= ?1 AND created_at_gh <= ?2
+             ORDER BY created_at_gh ASC".to_string(),
+            vec![
+                Box::new(from_str) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(to_str),
+            ],
+        ),
+    };
+
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<i64>>(8)?,
+            row.get::<_, Option<i64>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, Option<i64>>(11)?,
+        ))
+    })?;
+
+    let mut prs = Vec::new();
+    let mut cycle_times = Vec::new();
+    let mut review_times = Vec::new();
+    let mut sizes = Vec::new();
+    let mut iterations = Vec::new();
+    let mut merged_count = 0usize;
+
+    for row in rows {
+        let (pr_number, title, url, state, created_at_str, merged_at_str, _closed_at_str,
+             first_review_at_str, additions, deletions, _commits, iteration_count) = row?;
+
+        let created_at = parse_dt_opt(&created_at_str);
+        let merged_at = parse_dt_opt(&merged_at_str);
+        let first_review_at = parse_dt_opt(&first_review_at_str);
+
+        let cycle_time_hours = match (created_at, merged_at) {
+            (Some(c), Some(m)) => Some((m - c).num_seconds() as f64 / 3600.0),
+            _ => None,
+        };
+
+        let time_to_first_review_hours = match (created_at, first_review_at) {
+            (Some(c), Some(r)) => Some((r - c).num_seconds() as f64 / 3600.0),
+            _ => None,
+        };
+
+        let size_lines = match (additions, deletions) {
+            (Some(a), Some(d)) => Some(a + d),
+            (Some(a), None) => Some(a),
+            (None, Some(d)) => Some(d),
+            (None, None) => None,
+        };
+
+        if state == "MERGED" {
+            merged_count += 1;
+        }
+        if let Some(ct) = cycle_time_hours {
+            cycle_times.push(ct);
+        }
+        if let Some(rt) = time_to_first_review_hours {
+            review_times.push(rt);
+        }
+        if let Some(s) = size_lines {
+            sizes.push(s as f64);
+        }
+        if let Some(ic) = iteration_count {
+            iterations.push(ic as f64);
+        }
+
+        prs.push(PrMetrics {
+            pr_number,
+            title,
+            url,
+            state,
+            cycle_time_hours,
+            time_to_first_review_hours,
+            size_lines,
+            iteration_count,
+            created_at,
+            merged_at,
+        });
+    }
+
+    let total_prs = prs.len();
+
+    Ok(PrCycleStats {
+        prs,
+        median_cycle_time_hours: median_f64(cycle_times),
+        median_time_to_first_review_hours: median_f64(review_times),
+        median_pr_size_lines: median_f64(sizes),
+        median_iteration_count: median_f64(iterations),
+        total_prs,
+        merged_prs: merged_count,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

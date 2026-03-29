@@ -1,5 +1,7 @@
 use blackbox::db::{open_db, upsert_pr_snapshot};
 use blackbox::enrichment::{collect_pr_snapshots, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
+use blackbox::query::query_pr_cycle_stats;
+use chrono::{TimeZone, Utc};
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
@@ -266,4 +268,204 @@ fn collect_pr_snapshots_handles_nonexistent_repo_path() {
         .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+// --- US-006: query_pr_cycle_stats tests ---
+
+fn insert_pr_snapshot(
+    conn: &rusqlite::Connection,
+    repo: &str,
+    pr_number: i64,
+    title: &str,
+    state: &str,
+    created_at: &str,
+    merged_at: Option<&str>,
+    closed_at: Option<&str>,
+    first_review_at: Option<&str>,
+    additions: Option<i64>,
+    deletions: Option<i64>,
+    commits: Option<i64>,
+    iteration_count: Option<i64>,
+) {
+    conn.execute(
+        "INSERT INTO pr_snapshots
+         (repo_path, pr_number, title, url, state, head_ref, base_ref,
+          author_login, created_at_gh, merged_at, closed_at, first_review_at,
+          additions, deletions, commits, iteration_count)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        rusqlite::params![
+            repo,
+            pr_number,
+            title,
+            format!("https://github.com/test/repo/pull/{pr_number}"),
+            state,
+            "feature/test",
+            "main",
+            "testuser",
+            created_at,
+            merged_at,
+            closed_at,
+            first_review_at,
+            additions,
+            deletions,
+            commits,
+            iteration_count,
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn query_pr_cycle_stats_empty_table() {
+    let (conn, _tmp) = setup_db();
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+    assert_eq!(stats.total_prs, 0);
+    assert_eq!(stats.merged_prs, 0);
+    assert!(stats.median_cycle_time_hours.is_none());
+    assert!(stats.median_time_to_first_review_hours.is_none());
+    assert!(stats.median_pr_size_lines.is_none());
+    assert!(stats.median_iteration_count.is_none());
+    assert!(stats.prs.is_empty());
+}
+
+#[test]
+fn query_pr_cycle_stats_single_merged_pr() {
+    let (conn, _tmp) = setup_db();
+    // Created at 10:00, merged at 20:00 = 10h cycle time
+    // First review at 12:00 = 2h to first review
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "PR #1", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        Some("2025-01-15T12:00:00Z"),
+        Some(80), Some(20), Some(5), Some(1),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 1);
+    assert_eq!(stats.merged_prs, 1);
+    assert!((stats.median_cycle_time_hours.unwrap() - 10.0).abs() < 0.01);
+    assert!((stats.median_time_to_first_review_hours.unwrap() - 2.0).abs() < 0.01);
+    assert!((stats.median_pr_size_lines.unwrap() - 100.0).abs() < 0.01);
+    assert!((stats.median_iteration_count.unwrap() - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn query_pr_cycle_stats_two_merged_prs_median() {
+    let (conn, _tmp) = setup_db();
+    // PR1: created 10:00, merged 14:00 = 4h
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "PR #1", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T14:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+    // PR2: created 10:00, merged 18:00 = 8h
+    insert_pr_snapshot(
+        &conn, "/repo/test", 2, "PR #2", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T18:00:00Z"), None,
+        None, Some(90), Some(30), Some(5), Some(2),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 2);
+    assert_eq!(stats.merged_prs, 2);
+    // median of [4, 8] = 6.0
+    assert!((stats.median_cycle_time_hours.unwrap() - 6.0).abs() < 0.01);
+    // no reviews → None
+    assert!(stats.median_time_to_first_review_hours.is_none());
+    // median size: [60, 120] = 90.0
+    assert!((stats.median_pr_size_lines.unwrap() - 90.0).abs() < 0.01);
+}
+
+#[test]
+fn query_pr_cycle_stats_open_pr_no_cycle_time() {
+    let (conn, _tmp) = setup_db();
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "Open PR", "OPEN",
+        "2025-01-15T10:00:00Z", None, None,
+        Some("2025-01-15T11:00:00Z"),
+        Some(30), Some(10), Some(2), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 1);
+    assert_eq!(stats.merged_prs, 0);
+    assert!(stats.median_cycle_time_hours.is_none());
+    // first review exists → 1h
+    assert!((stats.median_time_to_first_review_hours.unwrap() - 1.0).abs() < 0.01);
+    assert!(stats.prs[0].cycle_time_hours.is_none());
+}
+
+#[test]
+fn query_pr_cycle_stats_date_filter_excludes() {
+    let (conn, _tmp) = setup_db();
+    // PR created in January
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "Jan PR", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+    // PR created in March — outside filter
+    insert_pr_snapshot(
+        &conn, "/repo/test", 2, "Mar PR", "MERGED",
+        "2025-03-15T10:00:00Z", Some("2025-03-15T20:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 1);
+    assert_eq!(stats.prs[0].pr_number, 1);
+}
+
+#[test]
+fn query_pr_cycle_stats_repo_filter() {
+    let (conn, _tmp) = setup_db();
+    insert_pr_snapshot(
+        &conn, "/repo/alpha", 1, "Alpha PR", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+    insert_pr_snapshot(
+        &conn, "/repo/beta", 2, "Beta PR", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, Some("/repo/alpha"), from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 1);
+    assert_eq!(stats.prs[0].title, "Alpha PR");
+}
+
+#[test]
+fn query_pr_cycle_stats_null_additions_deletions() {
+    let (conn, _tmp) = setup_db();
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "No size", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        None, None, None, Some(3), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert!(stats.prs[0].size_lines.is_none());
+    assert!(stats.median_pr_size_lines.is_none());
 }
