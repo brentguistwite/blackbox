@@ -21,6 +21,9 @@ fn default_worktree_dir_name() -> Option<String> {
 fn default_streak_exclude_weekends() -> bool {
     false
 }
+fn default_churn_window_days() -> u32 {
+    14
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -46,6 +49,8 @@ pub struct Config {
     pub worktree_dir_name: Option<String>,
     #[serde(default = "default_streak_exclude_weekends")]
     pub streak_exclude_weekends: bool,
+    #[serde(default = "default_churn_window_days")]
+    pub churn_window_days: u32,
 }
 
 impl Default for Config {
@@ -62,6 +67,7 @@ impl Default for Config {
             scan_dirs: None,
             worktree_dir_name: default_worktree_dir_name(),
             streak_exclude_weekends: false,
+            churn_window_days: default_churn_window_days(),
         }
     }
 }
