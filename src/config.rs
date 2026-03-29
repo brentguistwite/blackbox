@@ -24,6 +24,9 @@ fn default_streak_exclude_weekends() -> bool {
 fn default_churn_window_days() -> u32 {
     14
 }
+fn default_notification_time() -> String {
+    "17:00".to_string()
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -51,6 +54,10 @@ pub struct Config {
     pub streak_exclude_weekends: bool,
     #[serde(default = "default_churn_window_days")]
     pub churn_window_days: u32,
+    #[serde(default)]
+    pub notifications_enabled: bool,
+    #[serde(default = "default_notification_time")]
+    pub notification_time: String,
 }
 
 impl Default for Config {
@@ -68,6 +75,8 @@ impl Default for Config {
             worktree_dir_name: default_worktree_dir_name(),
             streak_exclude_weekends: false,
             churn_window_days: default_churn_window_days(),
+            notifications_enabled: false,
+            notification_time: default_notification_time(),
         }
     }
 }

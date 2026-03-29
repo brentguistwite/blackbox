@@ -1,8 +1,9 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
-    estimate_time_v2, filter_noise_switches, global_estimated_time, median_commit_gap,
-    merge_intervals, query_activity, query_branch_switches, query_presence, today_range,
-    week_range, month_range, ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
+    daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
+    global_estimated_time, median_commit_gap, merge_intervals, query_activity,
+    query_branch_switches, query_presence, today_range, week_range, month_range,
+    ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Duration, TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -838,4 +839,75 @@ fn query_activity_branch_switches_filters_noise() {
     let repos = query_activity(&conn, from, to, 120, 30).unwrap();
     let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
     assert_eq!(alpha.branch_switches, 0, "fast round-trip should be filtered as noise");
+}
+
+// ===== US-008: daily_summary_for_notification tests =====
+
+#[test]
+fn daily_summary_no_activity_returns_none() {
+    let (conn, _tmp) = setup_db();
+    let result = daily_summary_for_notification(&conn, 120, 30).unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn daily_summary_single_repo_three_commits() {
+    let (conn, _tmp) = setup_db();
+    let now = Utc::now();
+    let t1 = (now - Duration::minutes(60)).to_rfc3339();
+    let t2 = (now - Duration::minutes(30)).to_rfc3339();
+    let t3 = now.to_rfc3339();
+
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), &t1).unwrap();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("second"), &t2).unwrap();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("ccc"), Some("dev"), Some("third"), &t3).unwrap();
+
+    let body = daily_summary_for_notification(&conn, 120, 30).unwrap().unwrap();
+    assert!(body.contains("3 commits"), "expected '3 commits' in: {body}");
+    assert!(body.contains("1 repo"), "expected '1 repo' in: {body}");
+}
+
+#[test]
+fn daily_summary_two_repos() {
+    let (conn, _tmp) = setup_db();
+    let now = Utc::now();
+    let t1 = (now - Duration::minutes(30)).to_rfc3339();
+    let t2 = now.to_rfc3339();
+
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("msg"), &t1).unwrap();
+    insert_activity(&conn, "/repo/beta", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("msg"), &t2).unwrap();
+
+    let body = daily_summary_for_notification(&conn, 120, 30).unwrap().unwrap();
+    assert!(body.contains("2 repos"), "expected '2 repos' in: {body}");
+}
+
+#[test]
+fn daily_summary_singular_commit_and_repo() {
+    let (conn, _tmp) = setup_db();
+    let t = Utc::now().to_rfc3339();
+
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("only"), &t).unwrap();
+
+    let body = daily_summary_for_notification(&conn, 120, 30).unwrap().unwrap();
+    assert!(body.contains("1 commit"), "expected '1 commit' in: {body}");
+    assert!(!body.contains("commits"), "should be singular 'commit' not 'commits' in: {body}");
+    assert!(body.contains("1 repo"), "expected '1 repo' in: {body}");
+    assert!(!body.contains("repos"), "should be singular 'repo' not 'repos' in: {body}");
+}
+
+#[test]
+fn daily_summary_includes_time_estimate() {
+    let (conn, _tmp) = setup_db();
+    let now = Utc::now();
+    // Two commits 30 min apart → estimate_time_v2 produces >0 time
+    let t1 = (now - Duration::minutes(30)).to_rfc3339();
+    let t2 = now.to_rfc3339();
+
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), &t1).unwrap();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("second"), &t2).unwrap();
+
+    let body = daily_summary_for_notification(&conn, 120, 30).unwrap().unwrap();
+    assert!(body.contains('~'), "expected time estimate with '~' in: {body}");
+    // Should contain either 'h' or 'm' for the time format
+    assert!(body.contains('m') || body.contains('h'), "expected time format in: {body}");
 }

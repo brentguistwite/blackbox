@@ -677,6 +677,43 @@ pub fn global_estimated_time(
     total
 }
 
+/// Build a compact notification body for today's activity.
+/// Returns None if no commits today (no notification needed).
+pub fn daily_summary_for_notification(
+    conn: &Connection,
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> anyhow::Result<Option<String>> {
+    let (from, to) = today_range();
+    let repos = query_activity(conn, from, to, session_gap_minutes, first_commit_minutes)?;
+
+    let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    if total_commits == 0 {
+        return Ok(None);
+    }
+
+    let repo_count = repos.len();
+    let total_time = global_estimated_time(&repos, session_gap_minutes, first_commit_minutes);
+
+    let commit_word = if total_commits == 1 { "commit" } else { "commits" };
+    let repo_word = if repo_count == 1 { "repo" } else { "repos" };
+
+    let mins = total_time.num_minutes();
+    let h = mins / 60;
+    let m = mins % 60;
+    let time_str = match (h, m) {
+        (0, 0) => "< 1m".to_string(),
+        (0, _) => format!("{}m", m),
+        (_, 0) => format!("{}h", h),
+        _ => format!("{}h {}m", h, m),
+    };
+
+    Ok(Some(format!(
+        "{} {} across {} {} — ~{}",
+        total_commits, commit_word, repo_count, repo_word, time_str
+    )))
+}
+
 /// Query review_activity table for a given time range, grouped by repo.
 fn query_reviews(
     conn: &Connection,
