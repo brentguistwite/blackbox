@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector, CursorDetector, WindsurfDetector};
+use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector, CursorDetector, WindsurfDetector, processes_matching, is_any_process_running};
 use blackbox::db;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -617,4 +617,26 @@ fn test_windsurf_detector_synthetic_session_id_format() {
     let session_id = format!("windsurf-{slug}-{today}");
     assert!(session_id.starts_with("windsurf-my-app-"));
     assert!(session_id.contains(&today));
+}
+
+// --- US-015: Process detection helper tests ---
+
+#[test]
+fn test_processes_matching_nonexistent_returns_empty_vec() {
+    let pids = processes_matching("definitely-not-a-real-process-name-xyz");
+    assert!(pids.is_empty(), "nonexistent process should return empty vec");
+}
+
+#[test]
+fn test_is_any_process_running_nonexistent_returns_false() {
+    assert!(
+        !is_any_process_running("definitely-not-a-real-process-name-xyz"),
+        "nonexistent process should return false"
+    );
+}
+
+#[test]
+fn test_processes_matching_empty_pattern_does_not_panic() {
+    // Empty pattern may match processes or not — just must not panic
+    let _pids = processes_matching("");
 }

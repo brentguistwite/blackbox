@@ -32,7 +32,7 @@ impl AiToolDetector for ClaudeDetector {
 
 /// Return PIDs of running processes whose name matches `name_pattern` (case-insensitive).
 /// Uses `pgrep -i` subprocess. Returns empty vec on any failure.
-fn processes_matching(name_pattern: &str) -> Vec<u32> {
+pub fn processes_matching(name_pattern: &str) -> Vec<u32> {
     let pattern = name_pattern.to_string();
     let handle = std::thread::spawn(move || {
         Command::new("pgrep")
@@ -51,7 +51,7 @@ fn processes_matching(name_pattern: &str) -> Vec<u32> {
 }
 
 /// Check if any process matching `name_pattern` is currently running.
-fn is_any_process_running(name_pattern: &str) -> bool {
+pub fn is_any_process_running(name_pattern: &str) -> bool {
     !processes_matching(name_pattern).is_empty()
 }
 
