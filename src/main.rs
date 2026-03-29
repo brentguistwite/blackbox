@@ -96,14 +96,17 @@ fn main() -> anyhow::Result<()> {
             let data_dir = blackbox::config::data_dir()?;
             blackbox::daemon::daemon_status(&data_dir)?;
         }
-        Commands::Today { format, summarize } => {
-            run_query("Today", blackbox::query::today_range, format, summarize)?;
+        Commands::Today { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv);
+            run_query("Today", blackbox::query::today_range, fmt, summarize)?;
         }
-        Commands::Week { format, summarize } => {
-            run_query("This Week", blackbox::query::week_range, format, summarize)?;
+        Commands::Week { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv);
+            run_query("This Week", blackbox::query::week_range, fmt, summarize)?;
         }
-        Commands::Month { format, summarize } => {
-            run_query("This Month", blackbox::query::month_range, format, summarize)?;
+        Commands::Month { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv);
+            run_query("This Month", blackbox::query::month_range, fmt, summarize)?;
         }
         Commands::Install => {
             blackbox::service::install()?;

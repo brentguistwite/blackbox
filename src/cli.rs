@@ -31,6 +31,12 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Emit JSON output (shorthand for --format json)
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
@@ -40,6 +46,12 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Emit JSON output (shorthand for --format json)
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
@@ -49,6 +61,12 @@ pub enum Commands {
         /// Output format: pretty, json, csv
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
+        /// Emit JSON output (shorthand for --format json)
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
