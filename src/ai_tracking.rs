@@ -466,6 +466,178 @@ impl AiToolDetector for CursorDetector {
     }
 }
 
+/// Windsurf session detector.
+/// Tries workspaceStorage (same layout as Cursor), falls back to process-only detection.
+pub struct WindsurfDetector {
+    workspace_dir: Option<PathBuf>,
+}
+
+impl Default for WindsurfDetector {
+    fn default() -> Self {
+        Self { workspace_dir: None }
+    }
+}
+
+impl WindsurfDetector {
+    pub fn with_workspace_dir(dir: PathBuf) -> Self {
+        Self { workspace_dir: Some(dir) }
+    }
+
+    fn resolve_workspace_dir(&self) -> Option<PathBuf> {
+        if let Some(dir) = &self.workspace_dir {
+            return Some(dir.clone());
+        }
+        let home = etcetera::home_dir().ok()?;
+        #[cfg(target_os = "macos")]
+        let base = home.join("Library/Application Support/Windsurf/User/workspaceStorage");
+        #[cfg(not(target_os = "macos"))]
+        let base = home.join(".config/Windsurf/User/workspaceStorage");
+        Some(base)
+    }
+
+    /// Workspace-based detection (same structure as Cursor).
+    /// Returns true if workspace dir existed and was scanned.
+    fn poll_workspace_mode(&self, conn: &Connection, watched_repos: &[PathBuf]) -> bool {
+        let ws_dir = match self.resolve_workspace_dir() {
+            Some(d) if d.exists() => d,
+            _ => return false,
+        };
+
+        let entries = match std::fs::read_dir(&ws_dir) {
+            Ok(e) => e,
+            Err(_) => {
+                log::debug!("windsurf: failed to read workspaceStorage dir");
+                return false;
+            }
+        };
+
+        let windsurf_running = is_any_process_running("Windsurf");
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let subdir = entry.path();
+            if !subdir.is_dir() {
+                continue;
+            }
+
+            let hash = match subdir.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let workspace_path = subdir.join("workspace.json");
+            if !workspace_path.exists() {
+                continue;
+            }
+
+            let json_content = match std::fs::read_to_string(&workspace_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::debug!("windsurf: failed to read {}", workspace_path.display());
+                    continue;
+                }
+            };
+            let workspace: CursorWorkspace = match serde_json::from_str(&json_content) {
+                Ok(w) => w,
+                Err(_) => {
+                    log::debug!("windsurf: malformed workspace.json in {}", subdir.display());
+                    continue;
+                }
+            };
+            let folder = match workspace.folder {
+                Some(f) if !f.is_empty() && !f.contains("://") => f,
+                _ => continue,
+            };
+
+            let session_id = format!("windsurf-{hash}");
+            let repo_path = map_to_repo(&folder, watched_repos);
+            let started_at = mtime_rfc3339(&workspace_path)
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            match db::insert_ai_session(conn, "windsurf", &repo_path, &session_id, &started_at) {
+                Ok(true) => log::debug!("Recorded windsurf session: {}", session_id),
+                Ok(false) => {}
+                Err(e) => log::warn!("Failed to insert windsurf session {}: {}", session_id, e),
+            }
+
+            // turns: None
+
+            let is_recent = modified_within_minutes(&workspace_path, 30);
+            if !windsurf_running || !is_recent {
+                let ended_at = Utc::now().to_rfc3339();
+                let _ = db::update_session_ended(conn, &session_id, &ended_at, None);
+            }
+        }
+
+        true
+    }
+
+    /// Process-only fallback: create synthetic sessions for watched repos with recent git activity.
+    fn poll_process_mode(&self, conn: &Connection, watched_repos: &[PathBuf]) {
+        if !is_any_process_running("Windsurf") {
+            // Not running → mark all open windsurf sessions as ended
+            if let Ok(active) = db::get_active_sessions_by_tool(conn, "windsurf") {
+                let now = Utc::now().to_rfc3339();
+                for sid in active {
+                    let _ = db::update_session_ended(conn, &sid, &now, None);
+                }
+            }
+            return;
+        }
+
+        // Windsurf is running — create synthetic sessions for repos with recent activity
+        let cutoff = (Utc::now() - chrono::Duration::minutes(30)).to_rfc3339();
+        let recent_repos: Vec<String> = conn
+            .prepare(
+                "SELECT DISTINCT repo_path FROM git_activity WHERE timestamp > ?1",
+            )
+            .and_then(|mut stmt| {
+                let rows = stmt
+                    .query_map(rusqlite::params![cutoff], |r| r.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect();
+                Ok(rows)
+            })
+            .unwrap_or_default();
+
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let midnight = format!("{today}T00:00:00Z");
+
+        for repo in &recent_repos {
+            // Only create sessions for watched repos
+            let repo_path = Path::new(repo);
+            let is_watched = watched_repos.iter().any(|w| repo_path.starts_with(w) || repo_path == w.as_path());
+            if !is_watched && !watched_repos.is_empty() {
+                continue;
+            }
+
+            let slug = Path::new(repo)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("unknown");
+            let session_id = format!("windsurf-{slug}-{today}");
+
+            match db::insert_ai_session(conn, "windsurf", repo, &session_id, &midnight) {
+                Ok(true) => log::debug!("Recorded synthetic windsurf session: {}", session_id),
+                Ok(false) => {}
+                Err(e) => log::warn!("Failed to insert windsurf session {}: {}", session_id, e),
+            }
+        }
+    }
+}
+
+impl AiToolDetector for WindsurfDetector {
+    fn tool_name(&self) -> &'static str {
+        "windsurf"
+    }
+
+    fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
+        // Try workspace-based detection first; fall back to process-only
+        if !self.poll_workspace_mode(conn, watched_repos) {
+            self.poll_process_mode(conn, watched_repos);
+        }
+    }
+}
+
 /// Poll all registered AI tool detectors.
 pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     let detectors: Vec<Box<dyn AiToolDetector>> = vec![
@@ -473,6 +645,7 @@ pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
         Box::new(CodexDetector::default()),
         Box::new(CopilotDetector::default()),
         Box::new(CursorDetector::default()),
+        Box::new(WindsurfDetector::default()),
     ];
     for detector in &detectors {
         detector.poll(conn, watched_repos);
