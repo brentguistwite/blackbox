@@ -84,6 +84,12 @@ pub enum Commands {
     Setup,
     /// Live TUI dashboard
     Live,
+    /// Show contribution heatmap (GitHub-style green squares)
+    Heatmap {
+        /// Number of weeks to display (1-260)
+        #[arg(long, default_value_t = 52)]
+        weeks: u32,
+    },
     /// Output activity in Slack/Teams-friendly format
     Standup {
         /// Show this week's activity instead of today
