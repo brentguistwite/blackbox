@@ -176,6 +176,15 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// LLM-powered behavioral analysis of activity patterns
+    Insights {
+        /// Time window to analyze: week or month (default: week)
+        #[arg(long, default_value = "week", value_parser = ["week", "month"])]
+        window: String,
+        /// Output format: pretty (LLM stream) or json (raw data, no LLM call)
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Show code churn rate for tracked repos
     Churn {
         /// Time window in days to detect churn (default: from config)

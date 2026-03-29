@@ -1287,3 +1287,8 @@ pub fn render_rhythm_json(report: &RhythmReport) -> String {
     };
     serde_json::to_string_pretty(&json).expect("JSON serialization should not fail")
 }
+
+/// Render InsightsData as pretty-printed JSON.
+pub fn render_insights_json(data: &crate::query::InsightsData) -> String {
+    serde_json::to_string_pretty(data).expect("JSON serialization should not fail")
+}
