@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
 
-use crate::claude_tracking;
+use crate::ai_tracking;
 use crate::config::{self, Config};
 use crate::db;
 use crate::enrichment;
@@ -91,7 +91,7 @@ fn full_scan(
     poll_all_repos(&repos, repo_states, conn);
     enrichment::collect_reviews(&repos, conn);
     enrichment::collect_pr_snapshots(&repos, conn);
-    claude_tracking::poll_claude_sessions(conn, &repos);
+    ai_tracking::poll_all_ai_sessions(conn, &repos);
     repos
 }
 

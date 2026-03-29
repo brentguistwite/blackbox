@@ -239,6 +239,7 @@ pub struct ReviewInfo {
 
 #[derive(Debug, Clone)]
 pub struct AiSessionInfo {
+    pub tool: String,
     pub session_id: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
@@ -765,7 +766,7 @@ fn query_ai_sessions(
     let to_str = to.to_rfc3339();
 
     let mut stmt = conn.prepare(
-        "SELECT repo_path, session_id, started_at, ended_at, turns
+        "SELECT repo_path, tool, session_id, started_at, ended_at, turns
          FROM ai_sessions
          WHERE started_at >= ?1 AND started_at <= ?2
          ORDER BY repo_path, started_at ASC",
@@ -777,14 +778,15 @@ fn query_ai_sessions(
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
-            row.get::<_, Option<String>>(3)?,
-            row.get::<_, Option<i64>>(4)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<i64>>(5)?,
         ))
     })?;
 
     let mut map: BTreeMap<String, Vec<AiSessionInfo>> = BTreeMap::new();
     for row in rows {
-        let (repo_path, session_id, started_at_str, ended_at_str, turns) = row?;
+        let (repo_path, tool, session_id, started_at_str, ended_at_str, turns) = row?;
         let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
         let ended_at = ended_at_str
             .as_deref()
@@ -794,6 +796,7 @@ fn query_ai_sessions(
         let duration = end - started_at;
 
         map.entry(repo_path).or_default().push(AiSessionInfo {
+            tool,
             session_id,
             started_at,
             ended_at,

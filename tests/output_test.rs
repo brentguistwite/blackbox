@@ -402,6 +402,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
             reviews: vec![],
             ai_sessions: vec![
                 AiSessionInfo {
+                    tool: "claude-code".to_string(),
                     session_id: "sess-001".to_string(),
                     started_at: started,
                     ended_at: Some(ended),
@@ -409,6 +410,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
                     turns: Some(15),
                 },
                 AiSessionInfo {
+                    tool: "claude-code".to_string(),
                     session_id: "sess-002".to_string(),
                     started_at: Utc::now() - Duration::minutes(5),
                     ended_at: None,
@@ -427,7 +429,7 @@ fn render_pretty_shows_ai_session_count() {
     colored::control::set_override(false);
     let summary = make_summary_with_ai_sessions();
     let output = render_summary_to_string(&summary);
-    assert!(output.contains("2 Claude Code sessions"), "should show session count per repo");
+    assert!(output.contains("2 AI sessions"), "should show session count per repo");
 }
 
 #[test]
@@ -483,7 +485,7 @@ fn render_csv_includes_ai_session_rows() {
     // header + 1 commit event + 2 ai_session rows = 4
     assert_eq!(lines.len(), 4);
     assert!(csv_str.contains("ai_session"), "should have ai_session event_type");
-    assert!(csv_str.contains("Claude Code session"), "should have session description");
+    assert!(csv_str.contains("claude-code session"), "should have session description");
 }
 
 // --- Standup output tests ---
@@ -607,7 +609,7 @@ fn standup_includes_reviews() {
 fn standup_includes_ai_sessions() {
     let summary = make_summary_with_ai_sessions();
     let output = render_standup(&summary);
-    assert!(output.contains("Claude Code session"), "should show AI sessions");
+    assert!(output.contains("AI session"), "should show AI sessions");
 }
 
 // --- JSON streak tests (US-004) ---
@@ -1031,4 +1033,84 @@ fn focus_report_singular_switch() {
     let output = render_focus_report(&summary);
     assert!(output.contains("1 branch switch across 1 repo"), "should use singular for 1 switch");
     assert!(output.contains("repo-a: 1 switch\n") || output.contains("repo-a: 1 switch"), "per-repo should use singular");
+}
+
+// --- US-009: tool field in output ---
+
+fn make_summary_with_multi_tool_sessions() -> ActivitySummary {
+    let started = Utc::now() - Duration::minutes(60);
+    let ended = Utc::now();
+    ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 1,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(30),
+        total_ai_session_time: Duration::minutes(120),
+        streak_days: 0,
+        total_branch_switches: 0,
+        repos: vec![RepoSummary {
+            repo_path: "/home/user/code/myproject".to_string(),
+            repo_name: "myproject".to_string(),
+            commits: 1,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(30),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("abc1234".to_string()),
+                message: Some("fix bug".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![
+                AiSessionInfo {
+                    tool: "claude-code".to_string(),
+                    session_id: "sess-cc".to_string(),
+                    started_at: started,
+                    ended_at: Some(ended),
+                    duration: ended - started,
+                    turns: Some(10),
+                },
+                AiSessionInfo {
+                    tool: "cursor".to_string(),
+                    session_id: "sess-cur".to_string(),
+                    started_at: started,
+                    ended_at: None,
+                    duration: Duration::minutes(30),
+                    turns: None,
+                },
+            ],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        }],
+    }
+}
+
+#[test]
+fn json_output_includes_tool_field() {
+    let summary = make_summary_with_multi_tool_sessions();
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+    let sessions = v["repos"][0]["ai_sessions"].as_array().unwrap();
+    assert_eq!(sessions[0]["tool"], "claude-code");
+    assert_eq!(sessions[1]["tool"], "cursor");
+}
+
+#[test]
+fn pretty_output_shows_tool_name() {
+    colored::control::set_override(false);
+    let summary = make_summary_with_multi_tool_sessions();
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("claude-code"), "pretty output should show claude-code tool name");
+    assert!(output.contains("cursor"), "pretty output should show cursor tool name");
+}
+
+#[test]
+fn csv_output_includes_tool_in_message() {
+    let summary = make_summary_with_multi_tool_sessions();
+    let csv_str = render_csv(&summary);
+    assert!(csv_str.contains("claude-code"), "CSV should include claude-code tool name");
+    assert!(csv_str.contains("cursor"), "CSV should include cursor tool name");
 }

@@ -924,6 +924,7 @@ mod tests {
     #[test]
     fn test_format_session_msg_active() {
         let ses = AiSessionInfo {
+            tool: "claude-code".into(),
             session_id: "test".into(),
             started_at: Utc::now(),
             ended_at: None,
@@ -936,6 +937,7 @@ mod tests {
     #[test]
     fn test_format_session_msg_ended() {
         let ses = AiSessionInfo {
+            tool: "claude-code".into(),
             session_id: "test".into(),
             started_at: Utc::now() - chrono::Duration::minutes(45),
             ended_at: Some(Utc::now()),
