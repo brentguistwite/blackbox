@@ -593,3 +593,88 @@ fn test_insert_activity_branch_switch() {
 
     assert_eq!(etype, "branch_switch");
 }
+
+#[test]
+fn test_commit_line_stats_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='commit_line_stats'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["commit_line_stats"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(commit_line_stats)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"id".to_string()));
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"commit_hash".to_string()));
+    assert!(columns.contains(&"file_path".to_string()));
+    assert!(columns.contains(&"lines_added".to_string()));
+    assert!(columns.contains(&"lines_deleted".to_string()));
+    assert!(columns.contains(&"committed_at".to_string()));
+    assert!(columns.contains(&"created_at".to_string()));
+}
+
+#[test]
+fn test_commit_line_stats_unique_index() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let idx: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_commit_line_stats_dedup'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(idx.contains("UNIQUE"));
+    assert!(idx.contains("repo_path"));
+    assert!(idx.contains("commit_hash"));
+    assert!(idx.contains("file_path"));
+}
+
+#[test]
+fn test_commit_line_stats_insert_or_ignore() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // First insert succeeds
+    conn.execute(
+        "INSERT INTO commit_line_stats (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at)
+         VALUES ('/repo', 'abc123', 'src/main.rs', 10, 5, '2026-03-20T10:00:00Z')",
+        [],
+    ).unwrap();
+
+    // Duplicate insert via OR IGNORE should not error
+    conn.execute(
+        "INSERT OR IGNORE INTO commit_line_stats (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at)
+         VALUES ('/repo', 'abc123', 'src/main.rs', 20, 15, '2026-03-20T10:00:00Z')",
+        [],
+    ).unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM commit_line_stats", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // Original values preserved (not replaced)
+    let added: i64 = conn
+        .query_row(
+            "SELECT lines_added FROM commit_line_stats WHERE commit_hash = 'abc123'",
+            [], |r| r.get(0),
+        ).unwrap();
+    assert_eq!(added, 10);
+}
