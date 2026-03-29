@@ -4,7 +4,7 @@ Flight recorder for your dev day.
 
 ## What it does
 
-Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Zero config after `blackbox init`.
+Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Shows your current commit streak as ambient data in `today` output -- positive framing only, no nagging. Zero config after `blackbox init`.
 
 ## Install
 
@@ -69,12 +69,13 @@ Config lives at `~/.config/blackbox/config.toml`:
 | `poll_interval_secs` | `300` | Seconds between daemon polls |
 | `session_gap_minutes` | `120` | Minutes of inactivity before new session |
 | `first_commit_minutes` | `30` | Time credit for first commit in a session |
+| `streak_exclude_weekends` | `false` | Skip weekends when computing commit streak |
 
 ## Output Formats
 
 **Pretty** (default):
 ```
-Today - 3 repos, 12 commits, 4h 30m estimated
+Today - 3 repos, 12 commits, 4h 30m estimated  12-day streak
 
   myproject        8 commits   3h 15m
   other-repo       3 commits   1h 00m
@@ -116,6 +117,14 @@ blackbox rhythm              # last 30 days, pretty output
 blackbox rhythm --days 7     # last 7 days
 blackbox rhythm --format json
 ```
+
+## Commit Streak
+
+`blackbox today` shows your current consecutive-day commit streak as ambient info on the summary line. Streak is computed from local-time day boundaries — if you haven't committed yet today, your streak from yesterday is still alive until end of day.
+
+Set `streak_exclude_weekends = true` in config to let weekends pass without counting as gaps (weekend commits still count toward the streak).
+
+Streak of 0 shows nothing. No negative messaging — only what you've built.
 
 ## License
 
