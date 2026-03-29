@@ -22,7 +22,7 @@
         "Score is deterministic \u2014 same input always same output",
         "Unit tests cover all scoring branches in tests/commit_quality.rs"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-02",
