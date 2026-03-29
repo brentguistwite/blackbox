@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rusqlite::Connection;
@@ -81,6 +83,10 @@ fn full_scan(
 }
 
 pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
+    // Register SIGHUP handler — sets atomic flag, checked each loop iteration
+    let reload_requested = Arc::new(AtomicBool::new(false));
+    signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&reload_requested))?;
+
     let db_path = config::data_dir()?.join("blackbox.db");
     let conn = db::open_db(&db_path)?;
     let mut repo_states: HashMap<PathBuf, RepoState> = HashMap::new();
