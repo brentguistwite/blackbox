@@ -1,4 +1,5 @@
-use blackbox::churn::diff_commit_stats;
+use blackbox::churn::{compute_churn, diff_commit_stats};
+use blackbox::db;
 use git2::{Repository, Signature};
 use std::path::Path;
 use tempfile::TempDir;
@@ -137,4 +138,80 @@ fn test_initial_commit_no_parent() {
     let b = stats.iter().find(|s| s.file_path == "b.txt").unwrap();
     assert_eq!(b.lines_added, 1);
     assert_eq!(b.lines_deleted, 0);
+}
+
+// --- US-007: compute_churn tests ---
+
+fn setup_db() -> (tempfile::NamedTempFile, rusqlite::Connection) {
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let conn = db::open_db(tmp.path()).unwrap();
+    (tmp, conn)
+}
+
+#[test]
+fn test_churn_two_commits_same_file_within_window() {
+    let (_tmp, conn) = setup_db();
+    let repo_path = "/test/repo";
+
+    // Commit A: adds 10 lines to file.txt
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, "2026-03-20T10:00:00+00:00").unwrap();
+    // Commit B: deletes 4 lines from file.txt (within 14-day window)
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, "2026-03-21T10:00:00+00:00").unwrap();
+
+    let report = compute_churn(&conn, repo_path, 14).unwrap();
+    // churned = min(A.lines_added=10, B.lines_deleted=4) = 4
+    // total_written = 10 + 2 = 12
+    // churn_rate = 4/12 * 100 ≈ 33.33
+    assert_eq!(report.churned_lines, 4);
+    assert_eq!(report.total_lines_written, 12);
+    assert!(report.churn_rate_pct > 33.0 && report.churn_rate_pct < 34.0);
+    assert_eq!(report.churn_event_count, 1);
+    assert_eq!(report.commit_count, 2);
+    assert_eq!(report.window_days, 14);
+    assert_eq!(report.repo_path, repo_path);
+}
+
+#[test]
+fn test_churn_two_commits_same_file_outside_window() {
+    let (_tmp, conn) = setup_db();
+    let repo_path = "/test/repo";
+
+    // Commit A: 2026-03-01
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, "2026-03-01T10:00:00+00:00").unwrap();
+    // Commit B: 2026-03-20 — 19 days later, outside 14-day window
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, "2026-03-20T10:00:00+00:00").unwrap();
+
+    let report = compute_churn(&conn, repo_path, 14).unwrap();
+    assert_eq!(report.churned_lines, 0);
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.churn_event_count, 0);
+}
+
+#[test]
+fn test_churn_two_commits_different_files() {
+    let (_tmp, conn) = setup_db();
+    let repo_path = "/test/repo";
+
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "a.txt", 10, 0, "2026-03-20T10:00:00+00:00").unwrap();
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "b.txt", 5, 3, "2026-03-21T10:00:00+00:00").unwrap();
+
+    let report = compute_churn(&conn, repo_path, 14).unwrap();
+    // Different files → no churn pairs
+    assert_eq!(report.churned_lines, 0);
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.churn_event_count, 0);
+    assert_eq!(report.total_lines_written, 15);
+}
+
+#[test]
+fn test_churn_no_data_zero_rate() {
+    let (_tmp, conn) = setup_db();
+    let repo_path = "/test/empty";
+
+    let report = compute_churn(&conn, repo_path, 14).unwrap();
+    assert_eq!(report.total_lines_written, 0);
+    assert_eq!(report.churned_lines, 0);
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.commit_count, 0);
+    assert_eq!(report.churn_event_count, 0);
 }
