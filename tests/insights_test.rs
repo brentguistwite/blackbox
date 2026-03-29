@@ -621,6 +621,34 @@ fn cli_insights_empty_db_exits_zero_with_no_activity_msg() {
     );
 }
 
+// --- US-018: missing API key error path ---
+
+#[test]
+fn cli_insights_pretty_missing_api_key_exits_nonzero() {
+    let (_tmp, config_dir, data_dir) = setup_insights_cli_env();
+
+    // Pretty mode (default) with populated DB but no llm_api_key → non-zero exit
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["insights"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "should exit non-zero without API key");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("llm_api_key"),
+        "stderr should mention 'llm_api_key', got: {stderr}"
+    );
+    // Error should include config snippet example
+    assert!(
+        stderr.contains("config.toml"),
+        "stderr should include config.toml example, got: {stderr}"
+    );
+}
+
 // --- US-015: INSIGHTS_SYSTEM_PROMPT content assertions ---
 
 #[test]
