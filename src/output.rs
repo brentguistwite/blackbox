@@ -50,6 +50,7 @@ pub struct JsonSummary {
     pub total_estimated_minutes: i64,
     pub total_ai_session_minutes: i64,
     pub streak_days: u32,
+    pub total_branch_switches: usize,
     pub repos: Vec<JsonRepo>,
 }
 
@@ -58,6 +59,7 @@ pub struct JsonRepo {
     pub repo_name: String,
     pub repo_path: String,
     pub commits: usize,
+    pub branch_switches: usize,
     pub branches: Vec<String>,
     pub estimated_minutes: i64,
     pub events: Vec<JsonEvent>,
@@ -121,6 +123,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
         total_estimated_minutes: summary.total_estimated_time.num_minutes(),
         total_ai_session_minutes: summary.total_ai_session_time.num_minutes(),
         streak_days: summary.streak_days,
+        total_branch_switches: summary.total_branch_switches,
         repos: summary
             .repos
             .iter()
@@ -128,6 +131,7 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                 repo_name: r.repo_name.clone(),
                 repo_path: r.repo_path.clone(),
                 commits: r.commits,
+                branch_switches: r.branch_switches,
                 branches: r.branches.clone(),
                 estimated_minutes: r.estimated_time.num_minutes(),
                 events: r

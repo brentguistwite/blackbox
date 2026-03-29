@@ -150,3 +150,24 @@ fn per_repo_no_switch_line_when_zero() {
 fn focus_cost_constant_is_23() {
     assert_eq!(FOCUS_COST_PER_SWITCH_MINS, 23);
 }
+
+/// US-CS-06 AC4: render_json includes total_branch_switches and per-repo branch_switches
+#[test]
+fn render_json_includes_branch_switch_counts() {
+    use blackbox::output::render_json;
+
+    let ts = Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap();
+    let events = vec![
+        make_event("commit", Some("main"), Some("abc1234"), Some("init"), ts),
+        make_event("branch_switch", Some("feature-a"), None, None, ts + Duration::minutes(10)),
+        make_event("branch_switch", Some("main"), None, None, ts + Duration::minutes(20)),
+    ];
+    let repo = base_repo("myrepo", 1, 2, events);
+    let summary = base_summary(vec![repo]);
+
+    let json_str = render_json(&summary);
+    let v: serde_json::Value = serde_json::from_str(&json_str).expect("valid JSON");
+
+    assert_eq!(v["total_branch_switches"], 2, "top-level total_branch_switches");
+    assert_eq!(v["repos"][0]["branch_switches"], 2, "per-repo branch_switches");
+}
