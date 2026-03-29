@@ -20,11 +20,17 @@ pub fn is_tty() -> bool {
     std::io::stdout().is_terminal()
 }
 
-/// Resolve output format from --format, --json, and --csv flags.
-/// Priority: --json > --csv > --format value.
-pub fn resolve_format(format: OutputFormat, json: bool, csv: bool) -> OutputFormat {
+/// Resolve output format from --format, --json, --csv flags, and TTY state.
+/// Priority: --json > --csv > explicit --format > TTY auto-detect.
+/// When stdout is not a TTY and no flags are set, defaults to JSON for pipe-friendliness.
+/// Note: Clap's default_value="pretty" is indistinguishable from explicit --format pretty,
+/// so piped output with default format will auto-detect to JSON.
+pub fn resolve_format(format: OutputFormat, json: bool, csv: bool, tty: bool) -> OutputFormat {
     if json { return OutputFormat::Json; }
     if csv { return OutputFormat::Csv; }
+    if !tty && matches!(format, OutputFormat::Pretty) {
+        return OutputFormat::Json;
+    }
     format
 }
 
