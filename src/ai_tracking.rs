@@ -57,14 +57,9 @@ pub fn is_any_process_running(name_pattern: &str) -> bool {
 
 /// Codex CLI session detector.
 /// Scans ~/.codex/sessions/ recursively for rollout-*.jsonl files.
+#[derive(Default)]
 pub struct CodexDetector {
     sessions_dir: Option<PathBuf>,
-}
-
-impl Default for CodexDetector {
-    fn default() -> Self {
-        Self { sessions_dir: None }
-    }
 }
 
 impl CodexDetector {
@@ -203,14 +198,9 @@ impl AiToolDetector for CodexDetector {
 
 /// Copilot CLI session detector.
 /// Scans ~/.copilot/session-state/<uuid>/workspace.yaml files.
+#[derive(Default)]
 pub struct CopilotDetector {
     session_state_dir: Option<PathBuf>,
-}
-
-impl Default for CopilotDetector {
-    fn default() -> Self {
-        Self { session_state_dir: None }
-    }
 }
 
 impl CopilotDetector {
@@ -355,14 +345,9 @@ struct CursorWorkspace {
 
 /// Cursor session detector.
 /// Scans Cursor's workspaceStorage for workspace.json files.
+#[derive(Default)]
 pub struct CursorDetector {
     workspace_dir: Option<PathBuf>,
-}
-
-impl Default for CursorDetector {
-    fn default() -> Self {
-        Self { workspace_dir: None }
-    }
 }
 
 impl CursorDetector {
@@ -468,14 +453,9 @@ impl AiToolDetector for CursorDetector {
 
 /// Windsurf session detector.
 /// Tries workspaceStorage (same layout as Cursor), falls back to process-only detection.
+#[derive(Default)]
 pub struct WindsurfDetector {
     workspace_dir: Option<PathBuf>,
-}
-
-impl Default for WindsurfDetector {
-    fn default() -> Self {
-        Self { workspace_dir: None }
-    }
 }
 
 impl WindsurfDetector {
@@ -641,7 +621,7 @@ impl AiToolDetector for WindsurfDetector {
 /// Poll all registered AI tool detectors.
 pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     let detectors: Vec<Box<dyn AiToolDetector>> = vec![
-        Box::new(ClaudeDetector::default()),
+        Box::new(ClaudeDetector),
         Box::new(CodexDetector::default()),
         Box::new(CopilotDetector::default()),
         Box::new(CursorDetector::default()),

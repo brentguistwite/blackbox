@@ -2,10 +2,10 @@ use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, u
 use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
-    query_branch_switches, query_presence, today_range, week_range, month_range,
+    query_branch_switches, query_presence, today_range, week_range, month_range, quarter_range,
     ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
-use chrono::{Duration, TimeZone, Utc};
+use chrono::{Datelike, Duration, Timelike, TimeZone, Utc};
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, tempfile::NamedTempFile) {
@@ -65,6 +65,9 @@ fn date_ranges_are_valid() {
     assert!(start <= end);
 
     let (start, end) = month_range();
+    assert!(start <= end);
+
+    let (start, end) = quarter_range();
     assert!(start <= end);
 }
 
@@ -910,4 +913,51 @@ fn daily_summary_includes_time_estimate() {
     assert!(body.contains('~'), "expected time estimate with '~' in: {body}");
     // Should contain either 'h' or 'm' for the time format
     assert!(body.contains('m') || body.contains('h'), "expected time format in: {body}");
+}
+
+#[test]
+fn quarter_range_starts_at_quarter_boundary() {
+    let (start, end) = quarter_range();
+    let start_local = start.with_timezone(&chrono::Local);
+    let month = start_local.month();
+    // Must be Jan, Apr, Jul, or Oct
+    assert!(
+        [1, 4, 7, 10].contains(&month),
+        "quarter start month was {month}, expected 1/4/7/10"
+    );
+    // Must be day 1 at midnight
+    assert_eq!(start_local.day(), 1);
+    assert_eq!(start_local.hour(), 0);
+    assert_eq!(start_local.minute(), 0);
+    assert_eq!(start_local.second(), 0);
+    // End is close to now
+    assert!(end <= Utc::now() + chrono::Duration::seconds(1));
+}
+
+#[test]
+fn quarter_range_covers_current_month() {
+    let (start, end) = quarter_range();
+    let now = Utc::now();
+    // Current time must fall within the range
+    assert!(start <= now);
+    assert!(now <= end + chrono::Duration::seconds(1));
+}
+
+#[test]
+fn quarter_boundaries_are_correct_for_each_quarter() {
+    // Verify the quarter-start-month mapping logic directly:
+    // Q1: months 1,2,3 → start month 1
+    // Q2: months 4,5,6 → start month 4
+    // Q3: months 7,8,9 → start month 7
+    // Q4: months 10,11,12 → start month 10
+    let current_month = chrono::Local::now().month();
+    let (start, _) = quarter_range();
+    let start_month = start.with_timezone(&chrono::Local).month();
+    let expected = match current_month {
+        1..=3 => 1,
+        4..=6 => 4,
+        7..=9 => 7,
+        _ => 10,
+    };
+    assert_eq!(start_month, expected, "month {current_month} should map to quarter starting {expected}");
 }

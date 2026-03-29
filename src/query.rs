@@ -349,6 +349,26 @@ pub fn month_range() -> (DateTime<Utc>, DateTime<Utc>) {
     (start_utc, now)
 }
 
+/// Returns (quarter_start_midnight_local_as_utc, now_utc).
+/// Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec.
+pub fn quarter_range() -> (DateTime<Utc>, DateTime<Utc>) {
+    let now = Utc::now();
+    let local_today = Local::now().date_naive();
+    let quarter_start_month = match local_today.month() {
+        1..=3 => 1,
+        4..=6 => 4,
+        7..=9 => 7,
+        _ => 10,
+    };
+    let first_of_quarter = NaiveDate::from_ymd_opt(local_today.year(), quarter_start_month, 1).unwrap();
+    let start_local = first_of_quarter.and_hms_opt(0, 0, 0).unwrap();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+    (start_utc, now)
+}
+
 /// Returns date range for heatmap: last N weeks aligned to calendar weeks.
 /// Start = Monday of (current_week - weeks) at 00:00 local, end = today 23:59:59 local.
 pub fn heatmap_range(weeks: u32) -> (DateTime<Utc>, DateTime<Utc>) {
@@ -1479,16 +1499,15 @@ pub fn aggregate_insights_data(repos: &[RepoSummary], period_label: &str) -> Ins
     for repo in repos {
         if let Some(prs) = &repo.pr_info {
             for pr in prs {
-                if pr.state == "MERGED" {
-                    if let (Some(created), Some(merged)) = (&pr.created_at, &pr.merged_at) {
-                        if let (Ok(c), Ok(m)) = (
-                            DateTime::parse_from_rfc3339(created),
-                            DateTime::parse_from_rfc3339(merged),
-                        ) {
-                            let hours = (m - c).num_minutes() as f64 / 60.0;
-                            pr_merge_times_hours.push(hours);
-                        }
-                    }
+                if pr.state == "MERGED"
+                    && let (Some(created), Some(merged)) = (&pr.created_at, &pr.merged_at)
+                    && let (Ok(c), Ok(m)) = (
+                        DateTime::parse_from_rfc3339(created),
+                        DateTime::parse_from_rfc3339(merged),
+                    )
+                {
+                    let hours = (m - c).num_minutes() as f64 / 60.0;
+                    pr_merge_times_hours.push(hours);
                 }
             }
         }
