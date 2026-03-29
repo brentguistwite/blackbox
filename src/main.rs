@@ -69,6 +69,39 @@ fn run_query(
     Ok(())
 }
 
+fn run_focus_query(week: bool) -> anyhow::Result<()> {
+    let config = blackbox::config::load_config()?;
+    let data_dir = blackbox::config::data_dir()?;
+    let db_path = data_dir.join("blackbox.db");
+    let conn = blackbox::db::open_db(&db_path)
+        .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+    let (label, range_fn): (&str, fn() -> (DateTime<Utc>, DateTime<Utc>)) = if week {
+        ("This Week", blackbox::query::week_range)
+    } else {
+        ("Today", blackbox::query::today_range)
+    };
+
+    let (from, to) = range_fn();
+    let repos = blackbox::query::query_activity(
+        &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+    )?;
+
+    let summary = ActivitySummary {
+        period_label: label.to_string(),
+        total_commits: repos.iter().map(|r| r.commits).sum(),
+        total_reviews: 0,
+        total_repos: repos.len(),
+        total_estimated_time: chrono::Duration::zero(),
+        total_ai_session_time: chrono::Duration::zero(),
+        total_branch_switches: repos.iter().map(|r| r.branch_switches).sum(),
+        repos,
+    };
+
+    println!("{}", blackbox::output::render_focus_report(&summary));
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
@@ -167,6 +200,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Rhythm { days, format } => {
             blackbox::rhythm::run_rhythm(days, format)?;
+        }
+        Commands::Focus { week } => {
+            run_focus_query(week)?;
         }
         Commands::Repo { path, format } => {
             let config = blackbox::config::load_config()?;

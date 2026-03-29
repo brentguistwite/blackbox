@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, is_tty, resolve_format, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_focus_report, is_tty, resolve_format, OutputFormat};
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
@@ -804,4 +804,97 @@ fn standup_week_header() {
     let output = render_standup(&summary);
     assert!(output.starts_with("**This Week"), "week standup should start with week header");
     assert!(output.contains(" - "), "week header should have date range with dash");
+}
+
+// --- Focus report tests ---
+
+fn make_focus_summary(label: &str, switches: &[(&str, &str, usize)]) -> ActivitySummary {
+    let total: usize = switches.iter().map(|(_, _, s)| s).sum();
+    ActivitySummary {
+        period_label: label.to_string(),
+        total_commits: 0,
+        total_reviews: 0,
+        total_repos: switches.len(),
+        total_estimated_time: Duration::zero(),
+        total_ai_session_time: Duration::zero(),
+        total_branch_switches: total,
+        repos: switches.iter().map(|(path, name, bs)| RepoSummary {
+            repo_path: path.to_string(),
+            repo_name: name.to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: *bs,
+        }).collect(),
+    }
+}
+
+#[test]
+fn focus_report_header_contains_period_label() {
+    let summary = make_focus_summary("Today", &[("/code/a", "repo-a", 8)]);
+    let output = render_focus_report(&summary);
+    assert!(output.contains("=== Focus Report: Today ==="), "header should contain period label");
+}
+
+#[test]
+fn focus_report_shows_total_switches_and_repos() {
+    let summary = make_focus_summary("Today", &[
+        ("/code/a", "repo-a", 8),
+        ("/code/b", "repo-b", 4),
+        ("/code/c", "repo-c", 2),
+    ]);
+    let output = render_focus_report(&summary);
+    assert!(output.contains("14 branch switches across 3 repos"), "should show total switches and repo count");
+}
+
+#[test]
+fn focus_report_shows_focus_cost() {
+    let summary = make_focus_summary("Today", &[
+        ("/code/a", "repo-a", 8),
+        ("/code/b", "repo-b", 6),
+    ]);
+    let output = render_focus_report(&summary);
+    // 14 * 23 = 322
+    assert!(output.contains("~322m focus cost"), "should show focus cost");
+}
+
+#[test]
+fn focus_report_per_repo_breakdown_sorted_desc() {
+    let summary = make_focus_summary("Today", &[
+        ("/code/a", "repo-a", 2),
+        ("/code/b", "repo-b", 8),
+        ("/code/c", "repo-c", 4),
+    ]);
+    let output = render_focus_report(&summary);
+    let a_pos = output.find("repo-b: 8 switches").expect("repo-b line");
+    let b_pos = output.find("repo-c: 4 switches").expect("repo-c line");
+    let c_pos = output.find("repo-a: 2 switches").expect("repo-a line");
+    assert!(a_pos < b_pos && b_pos < c_pos, "repos should be sorted by switches descending");
+}
+
+#[test]
+fn focus_report_zero_switches_clean_day() {
+    let summary = make_focus_summary("Today", &[]);
+    let output = render_focus_report(&summary);
+    assert!(output.contains("No branch switches recorded. Clean focus day."), "zero switches should show clean day message");
+}
+
+#[test]
+fn focus_report_week_label() {
+    let summary = make_focus_summary("This Week", &[("/code/a", "repo-a", 3)]);
+    let output = render_focus_report(&summary);
+    assert!(output.contains("=== Focus Report: This Week ==="), "should use week label");
+}
+
+#[test]
+fn focus_report_singular_switch() {
+    let summary = make_focus_summary("Today", &[("/code/a", "repo-a", 1)]);
+    let output = render_focus_report(&summary);
+    assert!(output.contains("1 branch switch across 1 repo"), "should use singular for 1 switch");
+    assert!(output.contains("repo-a: 1 switch\n") || output.contains("repo-a: 1 switch"), "per-repo should use singular");
 }

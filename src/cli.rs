@@ -146,6 +146,12 @@ pub enum Commands {
     },
     /// Send SIGHUP to running daemon to reload config
     Reload,
+    /// Show context-switch focus report
+    Focus {
+        /// Show this week instead of today
+        #[arg(long)]
+        week: bool,
+    },
     /// Single-repo deep dive (language breakdown, top files, time invested, PR history)
     Repo {
         /// Path to the git repository
