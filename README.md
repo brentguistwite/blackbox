@@ -58,6 +58,7 @@ blackbox today
 | `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `prs` | PR cycle time metrics (`--days N`, `--repo <path>`, `--format pretty\|json`) |
 | `churn` | Code churn rate analysis (`--window N`, `--repo <path>`, `--format pretty\|json\|csv`) |
+| `insights` | LLM-powered behavioral analysis of activity patterns (`--window week\|month`, `--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -236,6 +237,32 @@ Works without a running daemon — shows last-known state from the database. Wor
 blackbox status                # pretty output (default)
 blackbox status --format json  # machine-readable JSON
 ```
+
+## LLM Insights
+
+`blackbox insights` uses an LLM to analyze your activity patterns and surface behavioral insights — commit cadence by day/hour, bug-fix ratios, commit message length trends, and PR merge times.
+
+```
+blackbox insights                 # this week, streamed LLM analysis
+blackbox insights --window month  # this month
+blackbox insights --format json   # raw data only, no LLM call
+```
+
+Requires `llm_api_key` in config (Anthropic or OpenAI). The `--format json` path skips the LLM entirely and emits the aggregated stats as JSON.
+
+Insights include:
+- Commit distribution by day-of-week and hour-of-day
+- Bug-fix commit ratio (messages matching fix/bug/hotfix/patch/revert)
+- Commit message length trend across the week
+- PR merge times (when `gh` CLI is available)
+- Per-repo breakdown: commits, estimated time, branches touched
+
+Configure defaults in `~/.config/blackbox/config.toml`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `insights_max_tokens` | `1024` | Max tokens for LLM response |
+| `insights_window` | `"week"` | Default time window (`week` or `month`) |
 
 ## License
 

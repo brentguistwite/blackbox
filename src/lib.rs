@@ -4,6 +4,7 @@ pub mod claude_tracking;
 pub mod cli;
 pub mod heatmap;
 pub mod config;
+pub mod insights;
 pub mod daemon;
 pub mod doctor;
 pub mod db;
