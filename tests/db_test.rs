@@ -678,3 +678,86 @@ fn test_commit_line_stats_insert_or_ignore() {
         ).unwrap();
     assert_eq!(added, 10);
 }
+
+#[test]
+fn test_churn_events_table_exists() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='churn_events'")
+        .unwrap();
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(tables, vec!["churn_events"]);
+
+    let mut stmt = conn.prepare("PRAGMA table_info(churn_events)").unwrap();
+    let columns: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert!(columns.contains(&"id".to_string()));
+    assert!(columns.contains(&"repo_path".to_string()));
+    assert!(columns.contains(&"original_commit_hash".to_string()));
+    assert!(columns.contains(&"churn_commit_hash".to_string()));
+    assert!(columns.contains(&"file_path".to_string()));
+    assert!(columns.contains(&"lines_churned".to_string()));
+    assert!(columns.contains(&"churn_window_days".to_string()));
+    assert!(columns.contains(&"detected_at".to_string()));
+}
+
+#[test]
+fn test_churn_events_unique_index() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let idx: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_churn_events_dedup'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(idx.contains("UNIQUE"));
+    assert!(idx.contains("repo_path"));
+    assert!(idx.contains("original_commit_hash"));
+    assert!(idx.contains("churn_commit_hash"));
+    assert!(idx.contains("file_path"));
+}
+
+#[test]
+fn test_churn_events_insert_or_ignore() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    conn.execute(
+        "INSERT INTO churn_events (repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at)
+         VALUES ('/repo', 'aaa', 'bbb', 'src/main.rs', 5, 14, '2026-03-20T10:00:00Z')",
+        [],
+    ).unwrap();
+
+    conn.execute(
+        "INSERT OR IGNORE INTO churn_events (repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at)
+         VALUES ('/repo', 'aaa', 'bbb', 'src/main.rs', 99, 14, '2026-03-20T12:00:00Z')",
+        [],
+    ).unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM churn_events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    let churned: i64 = conn
+        .query_row(
+            "SELECT lines_churned FROM churn_events WHERE original_commit_hash = 'aaa'",
+            [], |r| r.get(0),
+        ).unwrap();
+    assert_eq!(churned, 5);
+}
