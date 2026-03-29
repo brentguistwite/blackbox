@@ -909,6 +909,58 @@ pub fn render_churn_pretty(reports: &[crate::churn::ChurnReport]) -> String {
     lines.join("\n")
 }
 
+// --- Churn JSON/CSV ---
+
+#[derive(Serialize)]
+struct ChurnReportJson {
+    repo_path: String,
+    repo_name: String,
+    window_days: u32,
+    total_lines_written: u64,
+    churned_lines: u64,
+    churn_rate_pct: f64,
+    commit_count: usize,
+    churn_event_count: usize,
+}
+
+impl From<&crate::churn::ChurnReport> for ChurnReportJson {
+    fn from(r: &crate::churn::ChurnReport) -> Self {
+        let repo_name = r.repo_path.rsplit('/').next().unwrap_or(&r.repo_path).to_string();
+        Self {
+            repo_path: r.repo_path.clone(),
+            repo_name,
+            window_days: r.window_days,
+            total_lines_written: r.total_lines_written,
+            churned_lines: r.churned_lines,
+            churn_rate_pct: r.churn_rate_pct,
+            commit_count: r.commit_count,
+            churn_event_count: r.churn_event_count,
+        }
+    }
+}
+
+/// Render churn reports as pretty-printed JSON array.
+pub fn render_churn_json(reports: &[crate::churn::ChurnReport]) -> String {
+    let json_reports: Vec<ChurnReportJson> = reports.iter().map(ChurnReportJson::from).collect();
+    serde_json::to_string_pretty(&json_reports).expect("JSON serialization should not fail")
+}
+
+/// Render churn reports as CSV with header row.
+pub fn render_churn_csv(reports: &[crate::churn::ChurnReport]) -> String {
+    let mut wtr = csv::Writer::from_writer(vec![]);
+    if reports.is_empty() {
+        wtr.write_record(["repo_path", "repo_name", "window_days", "total_lines_written", "churned_lines", "churn_rate_pct", "commit_count", "churn_event_count"])
+            .expect("CSV header write should not fail");
+    } else {
+        for r in reports {
+            let json: ChurnReportJson = r.into();
+            wtr.serialize(json).expect("CSV serialization should not fail");
+        }
+    }
+    let data = String::from_utf8(wtr.into_inner().expect("flush")).expect("utf8");
+    data.trim_end().to_string()
+}
+
 // --- Rhythm report ---
 
 /// Aggregated rhythm analysis report for a time window.
