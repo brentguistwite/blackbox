@@ -24,6 +24,22 @@ fn create_test_repo(tmp: &TempDir) -> Repository {
     repo
 }
 
+/// Create a commit with actual file content changes (needed for commit_line_stats tests).
+fn add_commit_with_files(repo: &Repository, message: &str, files: &[(&str, &str)]) -> git2::Oid {
+    let sig = Signature::now("Test", "test@test.com").unwrap();
+    let mut index = repo.index().unwrap();
+    for (name, content) in files {
+        std::fs::write(repo.workdir().unwrap().join(name), content).unwrap();
+        index.add_path(std::path::Path::new(name)).unwrap();
+    }
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&head])
+        .unwrap()
+}
+
 fn add_commit(repo: &Repository, message: &str) -> git2::Oid {
     let sig = Signature::now("Test", "test@test.com").unwrap();
     let head = repo.head().unwrap().peel_to_commit().unwrap();
@@ -443,6 +459,94 @@ fn test_regular_repo_main_repo_path_equals_key() {
         )
         .unwrap();
     assert_eq!(recorded, path_str);
+}
+
+// --- US-006: commit_line_stats backfill tests ---
+
+fn count_line_stats(conn: &rusqlite::Connection) -> i64 {
+    conn.query_row(
+        "SELECT COUNT(*) FROM commit_line_stats",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+#[test]
+fn test_poll_backfills_commit_line_stats() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    // Add two commits with actual file changes
+    add_commit_with_files(&repo, "add file", &[("hello.txt", "line1\nline2\nline3\n")]);
+    add_commit_with_files(&repo, "edit file", &[("hello.txt", "line1\nchanged\nline3\n")]);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // First poll — backfills today's commits
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    // Should have commit_line_stats rows for the two file-changing commits
+    // (initial empty commit produces no file stats)
+    let total = count_line_stats(&conn);
+    assert!(total >= 2, "expected >=2 commit_line_stats rows, got {total}");
+
+    // Verify committed_at is stored as RFC3339
+    let ts: String = conn
+        .query_row(
+            "SELECT committed_at FROM commit_line_stats LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(ts.contains('T'), "committed_at should be RFC3339, got: {ts}");
+}
+
+#[test]
+fn test_poll_repoll_no_duplicate_line_stats() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    add_commit_with_files(&repo, "add file", &[("a.txt", "content\n")]);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    let count_after_first = count_line_stats(&conn);
+
+    // Reset state to force re-backfill of same commits
+    let mut state2 = RepoState::default();
+    poll_repo(repo_tmp.path(), &path_str, &mut state2, &conn).unwrap();
+
+    let count_after_second = count_line_stats(&conn);
+    assert_eq!(count_after_first, count_after_second, "re-poll should not create duplicate line stats");
+}
+
+#[test]
+fn test_poll_incremental_commit_gets_line_stats() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // Seed poll
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    let before = count_line_stats(&conn);
+
+    // Add new commit after initial poll
+    add_commit_with_files(&repo, "new file", &[("new.txt", "a\nb\nc\n")]);
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    let after = count_line_stats(&conn);
+    assert!(after > before, "incremental commit should add line stats: before={before}, after={after}");
 }
 
 #[test]

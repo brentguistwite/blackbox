@@ -97,6 +97,34 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_snapshots_repo_pr ON pr_snapshots(repo_path, pr_number);
             CREATE INDEX IF NOT EXISTS idx_pr_snapshots_repo_state ON pr_snapshots(repo_path, state);"
         ),
+        // US-001: per-commit per-file line stats for churn detection
+        M::up(
+            "CREATE TABLE IF NOT EXISTS commit_line_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_added INTEGER NOT NULL,
+                lines_deleted INTEGER NOT NULL,
+                committed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_line_stats_dedup ON commit_line_stats(repo_path, commit_hash, file_path);"
+        ),
+        // US-002: churn events — raw evidence for churn rate computation
+        M::up(
+            "CREATE TABLE IF NOT EXISTS churn_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                original_commit_hash TEXT NOT NULL,
+                churn_commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_churned INTEGER NOT NULL,
+                churn_window_days INTEGER NOT NULL,
+                detected_at TEXT NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_churn_events_dedup ON churn_events(repo_path, original_commit_hash, churn_commit_hash, file_path);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -197,6 +225,7 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
 /// (commits, merges) to leverage the partial unique index. Branch switch events
 /// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_activity(
     conn: &Connection,
     repo_path: &str,
@@ -270,4 +299,114 @@ pub fn upsert_pr_snapshot(
         ],
     )?;
     Ok(())
+}
+
+/// Insert a churn event. Returns true if inserted, false if duplicate.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_churn_event(
+    conn: &Connection,
+    repo_path: &str,
+    original_commit_hash: &str,
+    churn_commit_hash: &str,
+    file_path: &str,
+    lines_churned: i64,
+    churn_window_days: i64,
+    detected_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO churn_events (repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Per-file line stats from a single commit.
+#[derive(Debug, Clone)]
+pub struct CommitLineStat {
+    pub repo_path: String,
+    pub commit_hash: String,
+    pub file_path: String,
+    pub lines_added: i64,
+    pub lines_deleted: i64,
+    pub committed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Insert per-file line stats for a commit. Returns true if inserted, false if duplicate.
+pub fn insert_commit_line_stats(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+    lines_added: i64,
+    lines_deleted: i64,
+    committed_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO commit_line_stats (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Query commit_line_stats for a repo since a given time, ordered by committed_at ASC.
+pub fn query_commit_line_stats_for_repo(
+    conn: &Connection,
+    repo_path: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Vec<CommitLineStat>> {
+    let since_str = since.to_rfc3339();
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at
+         FROM commit_line_stats
+         WHERE repo_path = ?1 AND committed_at >= ?2
+         ORDER BY committed_at ASC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![repo_path, since_str], |row| {
+        let committed_at_str: String = row.get(5)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            committed_at_str,
+        ))
+    })?;
+    let mut stats = Vec::new();
+    for r in rows {
+        let (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at_str) = r?;
+        let committed_at = chrono::DateTime::parse_from_rfc3339(&committed_at_str)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        stats.push(CommitLineStat {
+            repo_path,
+            commit_hash,
+            file_path,
+            lines_added,
+            lines_deleted,
+            committed_at,
+        });
+    }
+    Ok(stats)
+}
+
+/// Return distinct repo_paths that have commit_line_stats data.
+pub fn repos_with_line_stats(conn: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT repo_path FROM commit_line_stats ORDER BY repo_path",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut paths = Vec::new();
+    for r in rows {
+        paths.push(r?);
+    }
+    Ok(paths)
 }

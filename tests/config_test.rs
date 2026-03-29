@@ -330,3 +330,30 @@ fn test_streak_exclude_weekends_roundtrip() {
     let deserialized: Config = toml::from_str(&serialized).unwrap();
     assert!(deserialized.streak_exclude_weekends);
 }
+
+// --- US-008: churn_window_days ---
+
+#[test]
+fn test_default_config_churn_window_days() {
+    let cfg = Config::default();
+    assert_eq!(cfg.churn_window_days, 14);
+}
+
+#[test]
+fn test_parse_churn_window_days_missing_uses_default() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.churn_window_days, 14);
+}
+
+#[test]
+fn test_parse_churn_window_days_custom() {
+    let toml_str = r#"
+        watch_dirs = []
+        churn_window_days = 7
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.churn_window_days, 7);
+}

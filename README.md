@@ -45,6 +45,7 @@ blackbox today
 | `focus` | Context-switch focus report (`--week` for weekly) |
 | `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `prs` | PR cycle time metrics (`--days N`, `--repo <path>`, `--format pretty\|json`) |
+| `churn` | Code churn rate analysis (`--window N`, `--repo <path>`, `--format pretty\|json\|csv`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -166,6 +167,25 @@ blackbox rhythm --format json
 Set `streak_exclude_weekends = true` in config to let weekends pass without counting as gaps (weekend commits still count toward the streak).
 
 Streak of 0 shows nothing. No negative messaging — only what you've built.
+
+## Code Churn
+
+`blackbox churn` measures how much of your recently written code gets reworked within a configurable time window. High churn (>25%) may indicate unclear requirements or premature implementation; low churn (<10%) suggests stable, well-directed work.
+
+The algorithm approximates churn using per-file line stats: for each pair of commits touching the same file within the window, `min(lines_added_by_A, lines_deleted_by_B)` counts as churned lines. This is the same heuristic GitClear uses.
+
+```
+blackbox churn                    # default 14-day window, pretty output
+blackbox churn --window 7         # 7-day window
+blackbox churn --repo /path/to/repo
+blackbox churn --format json
+```
+
+Configure the default window in `~/.config/blackbox/config.toml`:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `churn_window_days` | `14` | Days to look back for churn detection |
 
 ## License
 

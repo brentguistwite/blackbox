@@ -630,6 +630,129 @@ fn test_reload_prints_not_running_when_no_daemon() {
         .stdout(predicate::str::contains("Daemon not running"));
 }
 
+// --- US-009: CLI integration test: blackbox churn ---
+
+#[test]
+fn test_churn_help_exits_zero_and_contains_churn() {
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["churn", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("churn"));
+}
+
+#[test]
+fn test_churn_first_run_shows_welcome() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("churn")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Welcome to blackbox"),
+        "churn should trigger first-run when no config, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_churn_no_data_shows_message() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("churn")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "churn with no data should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("No churn data"),
+        "should show no-data message, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_churn_window_flag_accepted() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["churn", "--window", "7"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn test_churn_repo_flag_accepted() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["churn", "--repo", "/tmp/repos/foo"])
+        .assert()
+        .success();
+}
+
 // --- US-018: CLI integration test: blackbox rhythm ---
 
 /// Helper: init config + open DB + insert sample commits, returns (config_dir, data_dir)
