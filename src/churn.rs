@@ -160,7 +160,7 @@ pub fn compute_churn(conn: &Connection, repo_path: &str, window_days: u32) -> Re
 }
 
 /// CLI entry point for `blackbox churn`.
-pub fn run_churn(window: Option<u32>, repo: Option<String>, _format: OutputFormat) -> Result<()> {
+pub fn run_churn(window: Option<u32>, repo: Option<String>, format: OutputFormat) -> Result<()> {
     let cfg = config::load_config()?;
     let data_dir = config::data_dir()?;
     let db_path = data_dir.join("blackbox.db");
@@ -193,7 +193,12 @@ pub fn run_churn(window: Option<u32>, repo: Option<String>, _format: OutputForma
         return Ok(());
     }
 
-    print!("{}", crate::output::render_churn_pretty(&reports));
+    let output = match format {
+        OutputFormat::Pretty => crate::output::render_churn_pretty(&reports),
+        OutputFormat::Json => crate::output::render_churn_json(&reports),
+        OutputFormat::Csv => crate::output::render_churn_csv(&reports),
+    };
+    print!("{}", output);
 
     Ok(())
 }
