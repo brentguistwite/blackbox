@@ -6,6 +6,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
+/// Gloria Mark (UC Irvine): avg 23 min to regain deep focus after a context switch.
+pub const FOCUS_COST_PER_SWITCH_MINS: i64 = 23;
+
 #[derive(Clone, Debug, Default, clap::ValueEnum)]
 pub enum OutputFormat {
     #[default]
@@ -318,11 +321,18 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     } else {
         String::new()
     };
+    let switch_suffix = if summary.total_branch_switches > 0 {
+        let cost = summary.total_branch_switches as i64 * FOCUS_COST_PER_SWITCH_MINS;
+        format!(", {} branch switches (~{}m focus cost)", summary.total_branch_switches, cost)
+    } else {
+        String::new()
+    };
     lines.push(format!(
-        "{} commits{}{} across {} {} ({}){}",
+        "{} commits{}{}{} across {} {} ({}){}",
         summary.total_commits,
         review_suffix,
         ai_suffix,
+        switch_suffix,
         summary.total_repos,
         repo_word,
         format_duration(summary.total_estimated_time),
@@ -430,6 +440,33 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
                     turns_str,
                 ));
             }
+        }
+
+        // Branch switches with breadcrumb trail
+        if repo.branch_switches > 0 {
+            let switch_branches: Vec<&str> = repo
+                .events
+                .iter()
+                .filter(|e| e.event_type == "branch_switch")
+                .filter_map(|e| e.branch.as_deref())
+                .collect();
+            let breadcrumb = if switch_branches.len() > 3 {
+                let tail = &switch_branches[switch_branches.len() - 3..];
+                format!("...->{}",  tail.join("->"))
+            } else {
+                switch_branches.join("->")
+            };
+            let crumb_suffix = if breadcrumb.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", breadcrumb)
+            };
+            lines.push(format!(
+                "  {} {} branch switches{}",
+                "~".dimmed(),
+                repo.branch_switches,
+                crumb_suffix,
+            ));
         }
 
         lines.push(String::new());
