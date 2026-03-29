@@ -272,6 +272,43 @@ fn collect_pr_snapshots_handles_nonexistent_repo_path() {
     assert_eq!(count, 0);
 }
 
+// --- US-015: edge case: repos with no PRs / gh not installed ---
+
+#[test]
+fn collect_pr_snapshots_real_non_github_dir_skipped_silently() {
+    let (conn, _tmp) = setup_db();
+    let tmpdir = tempfile::tempdir().unwrap();
+    let paths = vec![tmpdir.path().to_path_buf()];
+    // Real dir but not a GitHub repo — fetch_pr_details returns None, skip silently
+    collect_pr_snapshots(&paths, &conn);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn query_pr_cycle_stats_repo_filter_no_match_returns_empty() {
+    let (conn, _tmp) = setup_db();
+    // Insert data for repo-a
+    insert_pr_snapshot(
+        &conn, "/repo/alpha", 1, "Alpha PR", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        None, Some(50), Some(10), Some(3), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    // Filter to a repo with no data
+    let stats = query_pr_cycle_stats(&conn, Some("/repo/nonexistent"), from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 0);
+    assert_eq!(stats.merged_prs, 0);
+    assert!(stats.median_cycle_time_hours.is_none());
+    assert!(stats.prs.is_empty());
+}
+
 // --- US-006: query_pr_cycle_stats tests ---
 
 fn insert_pr_snapshot(

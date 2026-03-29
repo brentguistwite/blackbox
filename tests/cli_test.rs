@@ -889,6 +889,43 @@ fn test_prs_days_zero_errors() {
         .stderr(predicate::str::contains("--days must be >= 1"));
 }
 
+// --- US-015: edge case: repos with no PRs / gh not installed ---
+
+#[test]
+fn test_prs_repo_filter_no_match_exits_zero() {
+    let (_tmp, config_dir, data_dir) = setup_prs_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["prs", "--repo", "/nonexistent/repo"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No PR data available for this period"));
+}
+
+#[test]
+fn test_prs_json_repo_filter_no_match_valid_empty_json() {
+    let (_tmp, config_dir, data_dir) = setup_prs_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["prs", "--format", "json", "--repo", "/nonexistent/repo"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "prs --format json --repo /nonexistent should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("stdout should be valid JSON");
+    assert_eq!(parsed["total_prs"], 0);
+    assert_eq!(parsed["merged_prs"], 0);
+    assert!(parsed["prs"].as_array().unwrap().is_empty());
+}
+
 // --- US-004: Strip ANSI codes in non-TTY ---
 
 #[test]
