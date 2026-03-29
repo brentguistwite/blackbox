@@ -47,7 +47,7 @@ pub fn start_daemon(config: Config, data_dir: &Path) -> anyhow::Result<()> {
                 .filter_level(log::LevelFilter::Info)
                 .init();
             log::info!("Daemon started (PID {})", std::process::id());
-            if let Err(e) = poller::run_poll_loop(&config) {
+            if let Err(e) = poller::run_poll_loop(config) {
                 log::error!("Poll loop error: {}", e);
             }
             Ok(())
@@ -105,7 +105,7 @@ pub fn run_foreground(config: Config, data_dir: &Path) -> anyhow::Result<()> {
         .filter_level(log::LevelFilter::Info)
         .init();
     log::info!("Running in foreground (PID {})", std::process::id());
-    poller::run_poll_loop(&config)
+    poller::run_poll_loop(config)
 }
 
 pub fn daemon_status(data_dir: &Path) -> anyhow::Result<()> {
