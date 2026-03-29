@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector};
+use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector};
 use blackbox::db;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -117,4 +117,122 @@ fn test_claude_detector_valid_session_inserts_row() {
 fn test_claude_detector_tool_name() {
     let detector = ClaudeDetector::default();
     assert_eq!(detector.tool_name(), "claude-code");
+}
+
+// --- US-012: Codex detector parsing tests ---
+
+/// Helper: create a temp dir mimicking ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl
+fn create_codex_session(base: &std::path::Path, date_parts: (&str, &str, &str), stem: &str, lines: &[&str]) -> std::path::PathBuf {
+    let dir = base.join(date_parts.0).join(date_parts.1).join(date_parts.2);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file_path = dir.join(format!("{stem}.jsonl"));
+    std::fs::write(&file_path, lines.join("\n")).unwrap();
+    file_path
+}
+
+#[test]
+fn test_codex_detector_valid_session_inserts_row() {
+    let (_tmp, conn) = setup_db();
+    let sessions_tmp = TempDir::new().unwrap();
+    let sessions_dir = sessions_tmp.path().to_path_buf();
+
+    let meta_line = serde_json::json!({
+        "cwd": "/tmp/test-repo",
+        "createdAt": "2024-03-15T10:00:00Z",
+        "updatedAt": "2024-03-15T10:05:00Z"
+    }).to_string();
+
+    create_codex_session(
+        &sessions_dir,
+        ("2024", "03", "15"),
+        "rollout-abc",
+        &[&meta_line, r#"{"type":"input"}"#, r#"{"type":"output"}"#, r#"{"type":"input"}"#],
+    );
+
+    let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let (tool, repo, sid, turns): (String, String, String, i64) = conn
+        .query_row(
+            "SELECT tool, repo_path, session_id, turns FROM ai_sessions LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+
+    assert_eq!(tool, "codex");
+    assert_eq!(repo, "/tmp/test-repo");
+    assert!(sid.contains("2024-03-15") && sid.contains("rollout-abc"), "session_id={sid}");
+    assert_eq!(turns, 4); // 1 meta + 3 data lines
+}
+
+#[test]
+fn test_codex_detector_no_duplicate_on_second_poll() {
+    let (_tmp, conn) = setup_db();
+    let sessions_tmp = TempDir::new().unwrap();
+    let sessions_dir = sessions_tmp.path().to_path_buf();
+
+    let meta_line = serde_json::json!({
+        "cwd": "/tmp/test-repo",
+        "createdAt": "2024-03-15T10:00:00Z",
+        "updatedAt": "2024-03-15T10:05:00Z"
+    }).to_string();
+
+    create_codex_session(
+        &sessions_dir,
+        ("2024", "03", "15"),
+        "rollout-dup",
+        &[&meta_line, r#"{"type":"input"}"#],
+    );
+
+    let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
+    detector.poll(&conn, &[]);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions WHERE tool = 'codex'", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "INSERT OR IGNORE should prevent duplicates");
+}
+
+#[test]
+fn test_codex_detector_invalid_first_line_skipped() {
+    let (_tmp, conn) = setup_db();
+    let sessions_tmp = TempDir::new().unwrap();
+    let sessions_dir = sessions_tmp.path().to_path_buf();
+
+    create_codex_session(
+        &sessions_dir,
+        ("2024", "03", "15"),
+        "rollout-bad",
+        &["NOT VALID JSON", r#"{"type":"input"}"#],
+    );
+
+    let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
+    detector.poll(&conn, &[]); // should not panic
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "malformed first line should be skipped");
+}
+
+#[test]
+fn test_codex_detector_missing_sessions_dir_no_error() {
+    let (_tmp, conn) = setup_db();
+    let nonexistent = PathBuf::from("/tmp/definitely-does-not-exist-codex-sessions");
+
+    let detector = CodexDetector::with_sessions_dir(nonexistent);
+    detector.poll(&conn, &[]); // should not panic or error
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_codex_detector_tool_name() {
+    let detector = CodexDetector::default();
+    assert_eq!(detector.tool_name(), "codex");
 }
