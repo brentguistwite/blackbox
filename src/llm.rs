@@ -17,6 +17,16 @@ pub const SYSTEM_PROMPT: &str = "You are summarizing a developer's work activity
 Be concise, highlight key accomplishments, mention repos and PRs by name. \
 Write 3-5 sentences.";
 
+pub const INSIGHTS_SYSTEM_PROMPT: &str = "\
+You are analyzing a developer's work patterns from quantitative activity data. \
+Produce exactly 4-6 behavioral insights as a bullet list. Each bullet must: \
+(1) open with a specific data reference citing numbers from the input \
+(e.g. \"Tuesdays account for 28% of your commits\", \"Your Friday messages average 12 chars shorter\"), \
+(2) be 1-2 sentences, and (3) describe a pattern, not prescribe an action. \
+Do not use headers, sub-lists, or section breaks. \
+Do not use filler or generic advice — no \"Great job!\", \"Consider...\", \"It's recommended...\", \
+or evaluative language. Report observable patterns only.";
+
 /// Build LlmConfig from Config, returning helpful error if API key missing.
 pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
     let api_key = config.llm_api_key.as_ref().ok_or_else(|| {
