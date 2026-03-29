@@ -596,37 +596,79 @@ fn is_tty_returns_bool() {
     assert!(!result, "stdout should not be a TTY when running under cargo test");
 }
 
-#[test]
-// --- US-002: resolve_format tests ---
+// --- US-002 + US-003: resolve_format tests ---
 
 #[test]
-fn resolve_format_no_flags_returns_provided_format() {
-    // No --json, no --csv → use provided format as-is
-    assert!(matches!(resolve_format(OutputFormat::Pretty, false, false), OutputFormat::Pretty));
-    assert!(matches!(resolve_format(OutputFormat::Json, false, false), OutputFormat::Json));
-    assert!(matches!(resolve_format(OutputFormat::Csv, false, false), OutputFormat::Csv));
+fn resolve_format_no_flags_tty_returns_pretty() {
+    // TTY + no flags → Pretty (unchanged default behavior)
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, false, true), OutputFormat::Pretty));
+}
+
+#[test]
+fn resolve_format_no_flags_tty_preserves_explicit_format() {
+    // TTY + explicit --format json/csv → preserved
+    assert!(matches!(resolve_format(OutputFormat::Json, false, false, true), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Csv, false, false, true), OutputFormat::Csv));
 }
 
 #[test]
 fn resolve_format_json_flag_wins() {
-    // --json overrides any provided format
-    assert!(matches!(resolve_format(OutputFormat::Pretty, true, false), OutputFormat::Json));
-    assert!(matches!(resolve_format(OutputFormat::Csv, true, false), OutputFormat::Json));
-    assert!(matches!(resolve_format(OutputFormat::Json, true, false), OutputFormat::Json));
+    // --json overrides any provided format, regardless of TTY
+    assert!(matches!(resolve_format(OutputFormat::Pretty, true, false, true), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Csv, true, false, false), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Json, true, false, true), OutputFormat::Json));
 }
 
 #[test]
 fn resolve_format_csv_flag_wins() {
-    // --csv overrides any provided format (when --json is false)
-    assert!(matches!(resolve_format(OutputFormat::Pretty, false, true), OutputFormat::Csv));
-    assert!(matches!(resolve_format(OutputFormat::Json, false, true), OutputFormat::Csv));
-    assert!(matches!(resolve_format(OutputFormat::Csv, false, true), OutputFormat::Csv));
+    // --csv overrides any provided format (when --json is false), regardless of TTY
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, true, true), OutputFormat::Csv));
+    assert!(matches!(resolve_format(OutputFormat::Json, false, true, false), OutputFormat::Csv));
+    assert!(matches!(resolve_format(OutputFormat::Csv, false, true, true), OutputFormat::Csv));
 }
 
 #[test]
 fn resolve_format_json_takes_priority_over_csv() {
     // If both somehow true, json wins (clap prevents this, but function is defensive)
-    assert!(matches!(resolve_format(OutputFormat::Pretty, true, true), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Pretty, true, true, true), OutputFormat::Json));
+}
+
+// --- US-003: TTY auto-detection ---
+
+#[test]
+fn resolve_format_non_tty_no_flags_returns_json() {
+    // Non-TTY + no flags + default Pretty → auto-detect to Json
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, false, false), OutputFormat::Json));
+}
+
+#[test]
+fn resolve_format_non_tty_explicit_json_format_preserved() {
+    // Non-TTY + --format json (no shorthand flags) → Json
+    assert!(matches!(resolve_format(OutputFormat::Json, false, false, false), OutputFormat::Json));
+}
+
+#[test]
+fn resolve_format_non_tty_explicit_csv_format_preserved() {
+    // Non-TTY + --format csv (no shorthand flags) → Csv
+    assert!(matches!(resolve_format(OutputFormat::Csv, false, false, false), OutputFormat::Csv));
+}
+
+#[test]
+fn resolve_format_non_tty_json_flag() {
+    // Non-TTY + --json → Json (flag takes priority)
+    assert!(matches!(resolve_format(OutputFormat::Pretty, true, false, false), OutputFormat::Json));
+}
+
+#[test]
+fn resolve_format_non_tty_csv_flag() {
+    // Non-TTY + --csv → Csv (flag takes priority over auto-detect)
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, true, false), OutputFormat::Csv));
+}
+
+#[test]
+fn resolve_format_tty_csv_flag() {
+    // TTY + --csv → Csv
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, true, true), OutputFormat::Csv));
 }
 
 #[test]

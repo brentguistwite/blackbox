@@ -97,15 +97,15 @@ fn main() -> anyhow::Result<()> {
             blackbox::daemon::daemon_status(&data_dir)?;
         }
         Commands::Today { format, json, csv, summarize } => {
-            let fmt = blackbox::output::resolve_format(format, json, csv);
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
             run_query("Today", blackbox::query::today_range, fmt, summarize)?;
         }
         Commands::Week { format, json, csv, summarize } => {
-            let fmt = blackbox::output::resolve_format(format, json, csv);
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
             run_query("This Week", blackbox::query::week_range, fmt, summarize)?;
         }
         Commands::Month { format, json, csv, summarize } => {
-            let fmt = blackbox::output::resolve_format(format, json, csv);
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
             run_query("This Month", blackbox::query::month_range, fmt, summarize)?;
         }
         Commands::Install => {
