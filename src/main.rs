@@ -71,6 +71,11 @@ fn run_query(
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Strip ANSI codes when stdout is not a TTY (piped/redirected)
+    if !blackbox::output::is_tty() {
+        colored::control::set_override(false);
+    }
+
     // First-run detection: redirect to setup wizard if no config exists
     if !blackbox::config::config_exists() && !cli.command.is_exempt_from_config_check() {
         println!("Welcome to blackbox! No config found. Let's get you set up.\n");
@@ -107,14 +112,17 @@ fn main() -> anyhow::Result<()> {
             let data_dir = blackbox::config::data_dir()?;
             blackbox::daemon::reload_daemon(&data_dir)?;
         }
-        Commands::Today { format, summarize } => {
-            run_query("Today", blackbox::query::today_range, format, summarize)?;
+        Commands::Today { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
+            run_query("Today", blackbox::query::today_range, fmt, summarize)?;
         }
-        Commands::Week { format, summarize } => {
-            run_query("This Week", blackbox::query::week_range, format, summarize)?;
+        Commands::Week { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
+            run_query("This Week", blackbox::query::week_range, fmt, summarize)?;
         }
-        Commands::Month { format, summarize } => {
-            run_query("This Month", blackbox::query::month_range, format, summarize)?;
+        Commands::Month { format, json, csv, summarize } => {
+            let fmt = blackbox::output::resolve_format(format, json, csv, blackbox::output::is_tty());
+            run_query("This Month", blackbox::query::month_range, fmt, summarize)?;
         }
         Commands::Install => {
             blackbox::service::install()?;
@@ -173,7 +181,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Standup { week, summarize } => {
+        Commands::Standup { week, json, csv, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
             if week {
@@ -183,6 +191,7 @@ fn main() -> anyhow::Result<()> {
                 label = "Today";
                 range_fn = blackbox::query::today_range;
             }
+            let fmt = blackbox::output::resolve_format(OutputFormat::Pretty, json, csv, blackbox::output::is_tty());
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;
             let db_path = data_dir.join("blackbox.db");
@@ -216,7 +225,11 @@ fn main() -> anyhow::Result<()> {
                 let json = blackbox::output::render_json(&summary);
                 blackbox::llm::summarize_activity(&llm_config, &json)?;
             } else {
-                println!("{}", blackbox::output::render_standup(&summary));
+                match fmt {
+                    OutputFormat::Pretty => println!("{}", blackbox::output::render_standup(&summary)),
+                    OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
+                    OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
+                }
             }
         }
     }

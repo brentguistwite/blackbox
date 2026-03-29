@@ -4,6 +4,7 @@ use chrono::{Datelike, Duration, Local};
 use colored::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 
 #[derive(Clone, Debug, Default, clap::ValueEnum)]
 pub enum OutputFormat {
@@ -11,6 +12,28 @@ pub enum OutputFormat {
     Pretty,
     Json,
     Csv,
+}
+
+/// Returns true when stdout is an interactive terminal.
+/// Returns false when stdout is a pipe, file redirect, or non-terminal.
+pub fn is_tty() -> bool {
+    std::io::stdout().is_terminal()
+}
+
+/// Resolve output format from --format, --json, --csv flags, and TTY state.
+/// Priority: --json > --csv > explicit --format > TTY auto-detect.
+/// When stdout is not a TTY and no flags are set, defaults to JSON for pipe-friendliness.
+/// Note: Clap's default_value="pretty" is indistinguishable from explicit --format pretty,
+/// so piped output with default format will auto-detect to JSON.
+pub fn resolve_format(format: OutputFormat, json: bool, csv: bool, tty: bool) -> OutputFormat {
+    if json { return OutputFormat::Json; }
+    if csv { return OutputFormat::Csv; }
+    if !tty && matches!(format, OutputFormat::Pretty)
+        && std::env::var("BLACKBOX_FORMAT").as_deref() != Ok("pretty")
+    {
+        return OutputFormat::Json;
+    }
+    format
 }
 
 // --- JSON serialization structs ---
