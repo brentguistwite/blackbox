@@ -912,6 +912,42 @@ fn test_standup_week_json_flag() {
     assert_eq!(parsed["period_label"], "This Week");
 }
 
+// --- US-006: --json help text describes JSON schema ---
+
+#[test]
+fn test_today_help_shows_json_schema() {
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["today", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("period_label") && stdout.contains("total_commits") && stdout.contains("repos"),
+        "--json help should describe JSON shape, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_standup_help_shows_json_schema() {
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["standup", "--help"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("period_label") && stdout.contains("total_commits"),
+        "--json help on standup should describe JSON shape, got: {}",
+        stdout
+    );
+}
+
 #[test]
 fn test_json_flag_overrides_format_pretty() {
     let (_tmp, config_dir, data_dir) = setup_empty_env();
