@@ -238,12 +238,24 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::PerfReview { from, to } => {
-            let (_from_utc, _to_utc) = blackbox::query::resolve_perf_review_range(
+            let config = blackbox::config::load_config()?;
+            let (from_utc, to_utc) = blackbox::query::resolve_perf_review_range(
                 from.as_deref(),
                 to.as_deref(),
             )?;
-            // Full implementation in US-08
-            eprintln!("perf-review not yet fully implemented");
+            let period_label = blackbox::perf_review::perf_review_period_label(
+                from.as_deref(),
+                to.as_deref(),
+            );
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let summary = blackbox::perf_review::aggregate_perf_review(
+                &conn, &config, from_utc, to_utc, period_label,
+            )?;
+            // Full LLM integration in US-08; for now print JSON summary
+            println!("{}", blackbox::output::render_json(&summary));
         }
         Commands::Insights { window, format } => {
             blackbox::insights::run_insights(window.as_deref(), format)?;
