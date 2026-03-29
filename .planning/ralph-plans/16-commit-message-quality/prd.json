@@ -81,7 +81,7 @@
         "Only 'commit' event_type rows are included (not merges, not branch_switch)",
         "Unit test: insert known scores across 3 weeks, verify trend output"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-05",
@@ -101,7 +101,7 @@
         "Returns empty vec if no reverts found \u2014 no error",
         "Unit test: seed revert commit in git_activity, seed score, verify correlation result"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-06",
@@ -121,7 +121,7 @@
         "Uses existing load_config / open_db pattern from main.rs",
         "CLI integration test: cargo run -- commit-quality exits 0 with empty DB"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-07",
