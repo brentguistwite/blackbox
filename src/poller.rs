@@ -78,6 +78,7 @@ fn full_scan(
     let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
     poll_all_repos(&repos, repo_states, conn);
     enrichment::collect_reviews(&repos, conn);
+    enrichment::collect_pr_snapshots(&repos, conn);
     claude_tracking::poll_claude_sessions(conn, &repos);
     repos
 }
