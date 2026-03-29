@@ -110,6 +110,12 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             log::info!("SIGHUP received, reloading config");
             match config::reload_config() {
                 Ok(new_cfg) => {
+                    if new_cfg.watch_dirs != config.watch_dirs {
+                        log::info!("watch_dirs: {:?} -> {:?}", config.watch_dirs, new_cfg.watch_dirs);
+                    }
+                    if new_cfg.poll_interval_secs != config.poll_interval_secs {
+                        log::info!("poll_interval_secs: {} -> {}", config.poll_interval_secs, new_cfg.poll_interval_secs);
+                    }
                     config = new_cfg;
                     log::info!("Config reloaded successfully");
                     // Re-discover repos and recreate watcher with new config
