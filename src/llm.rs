@@ -59,101 +59,114 @@ pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
 
 /// Stream an LLM summary of activity JSON to stdout.
 pub fn summarize_activity(config: &LlmConfig, activity_json: &str) -> anyhow::Result<()> {
+    call_llm_streaming(
+        config,
+        SYSTEM_PROMPT,
+        &format!("Summarize this developer activity:\n\n{}", activity_json),
+        1024,
+        30,
+    )
+}
+
+/// Stream LLM-generated behavioral insights to stdout.
+pub fn generate_insights(config: &LlmConfig, prompt: &str) -> anyhow::Result<()> {
+    call_llm_streaming(config, INSIGHTS_SYSTEM_PROMPT, prompt, 1024, 60)
+}
+
+/// Core streaming helper — routes to Anthropic/OpenAI, handles 429/errors, streams to stdout.
+fn call_llm_streaming(
+    config: &LlmConfig,
+    system_prompt: &str,
+    user_content: &str,
+    max_tokens: u32,
+    timeout_secs: u64,
+) -> anyhow::Result<()> {
     let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(timeout_secs))
         .build()?;
 
     match config.provider.as_str() {
-        "anthropic" => stream_anthropic(&client, config, activity_json),
-        "openai" => stream_openai(&client, config, activity_json),
+        "anthropic" => {
+            let url = "https://api.anthropic.com/v1/messages";
+            let body = serde_json::json!({
+                "model": config.model,
+                "max_tokens": max_tokens,
+                "stream": true,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_content}]
+            });
+
+            let resp = client
+                .post(url)
+                .header("x-api-key", &config.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .context("Failed to connect to Anthropic API")?;
+
+            if resp.status() == 429 {
+                bail!("Rate limited by Anthropic. Try again in a moment.");
+            }
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().unwrap_or_default();
+                bail!("Anthropic API error ({}): {}", status, text);
+            }
+
+            parse_sse_stream(resp, |event| {
+                if event["type"] == "content_block_delta" {
+                    event["delta"]["text"].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+        }
+        "openai" => {
+            let base_url = config
+                .base_url
+                .as_deref()
+                .unwrap_or("https://api.openai.com");
+            let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
+
+            let body = serde_json::json!({
+                "model": config.model,
+                "max_tokens": max_tokens,
+                "stream": true,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content}
+                ]
+            });
+
+            let resp = client
+                .post(&url)
+                .header("Authorization", format!("Bearer {}", config.api_key))
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .context("Failed to connect to OpenAI-compatible API")?;
+
+            if resp.status() == 429 {
+                bail!("Rate limited by OpenAI. Try again in a moment.");
+            }
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let text = resp.text().unwrap_or_default();
+                bail!("OpenAI API error ({}): {}", status, text);
+            }
+
+            parse_sse_stream(resp, |event| {
+                event["choices"][0]["delta"]["content"]
+                    .as_str()
+                    .map(|s| s.to_string())
+            })
+        }
         other => bail!(
             "Unsupported LLM provider: '{}'. Use 'anthropic' or 'openai'.",
             other
         ),
     }
-}
-
-fn stream_anthropic(
-    client: &reqwest::blocking::Client,
-    config: &LlmConfig,
-    activity_json: &str,
-) -> anyhow::Result<()> {
-    let url = "https://api.anthropic.com/v1/messages";
-    let body = serde_json::json!({
-        "model": config.model,
-        "max_tokens": 1024,
-        "stream": true,
-        "system": SYSTEM_PROMPT,
-        "messages": [{
-            "role": "user",
-            "content": format!("Summarize this developer activity:\n\n{}", activity_json)
-        }]
-    });
-
-    let resp = client
-        .post(url)
-        .header("x-api-key", &config.api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .context("Failed to connect to Anthropic API")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        bail!("Anthropic API error ({}): {}", status, text);
-    }
-
-    parse_sse_stream(resp, |event| {
-        if event["type"] == "content_block_delta" {
-            event["delta"]["text"].as_str().map(|s| s.to_string())
-        } else {
-            None
-        }
-    })
-}
-
-fn stream_openai(
-    client: &reqwest::blocking::Client,
-    config: &LlmConfig,
-    activity_json: &str,
-) -> anyhow::Result<()> {
-    let base_url = config
-        .base_url
-        .as_deref()
-        .unwrap_or("https://api.openai.com");
-    let url = format!("{}/v1/chat/completions", base_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": config.model,
-        "max_tokens": 1024,
-        "stream": true,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": format!("Summarize this developer activity:\n\n{}", activity_json)}
-        ]
-    });
-
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {}", config.api_key))
-        .header("content-type", "application/json")
-        .json(&body)
-        .send()
-        .context("Failed to connect to OpenAI-compatible API")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        bail!("OpenAI API error ({}): {}", status, text);
-    }
-
-    parse_sse_stream(resp, |event| {
-        event["choices"][0]["delta"]["content"]
-            .as_str()
-            .map(|s| s.to_string())
-    })
 }
 
 // --- US-002: Insights prompt construction ---
