@@ -1,4 +1,5 @@
 use anyhow::Context;
+use chrono::Weekday;
 use etcetera::{choose_base_strategy, BaseStrategy};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -62,6 +63,8 @@ pub struct Config {
     pub insights_max_tokens: Option<u32>,
     #[serde(default)]
     pub insights_window: Option<String>,
+    #[serde(default)]
+    pub week_start_day: Option<String>,
 }
 
 impl Default for Config {
@@ -83,6 +86,7 @@ impl Default for Config {
             notification_time: default_notification_time(),
             insights_max_tokens: None,
             insights_window: None,
+            week_start_day: None,
         }
     }
 }
@@ -93,6 +97,13 @@ impl Config {
             anyhow::bail!("poll_interval_secs must be >= 10, got {}", self.poll_interval_secs);
         }
         Ok(())
+    }
+
+    pub fn week_start_weekday(&self) -> Weekday {
+        match self.week_start_day.as_deref() {
+            Some("sunday") => Weekday::Sun,
+            _ => Weekday::Mon,
+        }
     }
 
     pub fn expand_paths(&mut self) {

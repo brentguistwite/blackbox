@@ -1,4 +1,5 @@
 use blackbox::config::{self, Config};
+use chrono::Weekday;
 use std::path::PathBuf;
 
 #[test]
@@ -496,4 +497,51 @@ fn test_existing_config_without_insights_fields_still_parses() {
     assert!(cfg.insights_window.is_none());
     // All existing fields still parse correctly
     assert_eq!(cfg.llm_api_key.as_deref(), Some("sk-test"));
+}
+
+// --- weekly digest: week_start_day ---
+
+#[test]
+fn test_week_start_weekday_default_is_monday() {
+    let cfg = Config::default();
+    assert_eq!(cfg.week_start_weekday(), Weekday::Mon);
+}
+
+#[test]
+fn test_week_start_weekday_sunday() {
+    let toml_str = r#"
+        watch_dirs = []
+        week_start_day = "sunday"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.week_start_weekday(), Weekday::Sun);
+}
+
+#[test]
+fn test_week_start_weekday_invalid_falls_back_to_monday() {
+    let toml_str = r#"
+        watch_dirs = []
+        week_start_day = "wednesday"
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.week_start_weekday(), Weekday::Mon);
+}
+
+#[test]
+fn test_week_start_day_none_defaults_monday() {
+    let cfg = Config::default();
+    assert!(cfg.week_start_day.is_none());
+    assert_eq!(cfg.week_start_weekday(), Weekday::Mon);
+}
+
+#[test]
+fn test_week_start_day_roundtrip() {
+    let cfg = Config {
+        week_start_day: Some("sunday".to_string()),
+        ..Config::default()
+    };
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.week_start_day.as_deref(), Some("sunday"));
+    assert_eq!(deserialized.week_start_weekday(), Weekday::Sun);
 }
