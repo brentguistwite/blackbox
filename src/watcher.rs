@@ -140,6 +140,7 @@ impl RepoWatcher {
         }
     }
 
+    #[allow(clippy::collapsible_if)]
     fn process_event(
         &self,
         event_result: notify::Result<notify::Event>,

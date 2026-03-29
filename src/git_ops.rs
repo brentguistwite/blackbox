@@ -19,6 +19,7 @@ fn get_user_identity(repo: &Repository) -> Option<(Option<String>, Option<String
 }
 
 /// Check if a commit was authored by the local git user.
+#[allow(clippy::collapsible_if)]
 fn is_own_commit(commit: &git2::Commit, identity: &(Option<String>, Option<String>)) -> bool {
     let author = commit.author();
     if let Some(ref email) = identity.0 {
@@ -49,6 +50,7 @@ pub struct RepoState {
 /// Poll a repo for git activity.
 /// `repo_path` = filesystem path for git2 to open (worktree or regular).
 /// `db_repo_path` = path string for DB writes (always main repo path).
+#[allow(clippy::collapsible_if, clippy::explicit_counter_loop)]
 pub fn poll_repo(
     repo_path: &Path,
     db_repo_path: &str,
@@ -276,6 +278,7 @@ fn backfill_line_stats(
 
 /// Try to resolve the source branch of a merge from parent[1].
 /// Falls back to first 8 chars of parent OID if no branch found.
+#[allow(clippy::collapsible_if, clippy::manual_flatten)]
 fn resolve_source_branch(repo: &Repository, merge_commit: &git2::Commit) -> String {
     if merge_commit.parent_count() < 2 {
         return String::new();

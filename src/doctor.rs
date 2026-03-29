@@ -270,6 +270,7 @@ pub fn check_shell_hook() -> CheckResult {
 /// Parse launchctl list output to determine if service is loaded.
 /// Returns Some(pid) if running with a PID, Some(0) if loaded but no PID, None if not found.
 #[cfg(target_os = "macos")]
+#[allow(clippy::collapsible_if)]
 pub fn parse_launchctl_output(success: bool, stdout: &str) -> Option<u32> {
     if !success {
         return None;
