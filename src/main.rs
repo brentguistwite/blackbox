@@ -77,6 +77,7 @@ fn run_focus_query(week: bool) -> anyhow::Result<()> {
     let conn = blackbox::db::open_db(&db_path)
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
 
+    #[allow(clippy::type_complexity)]
     let (label, range_fn): (&str, fn() -> (DateTime<Utc>, DateTime<Utc>)) = if week {
         ("This Week", blackbox::query::week_range)
     } else {
@@ -140,9 +141,9 @@ fn main() -> anyhow::Result<()> {
             let data_dir = blackbox::config::data_dir()?;
             blackbox::daemon::stop_daemon(&data_dir)?;
         }
-        Commands::Status => {
+        Commands::Status { format } => {
             let data_dir = blackbox::config::data_dir()?;
-            blackbox::daemon::daemon_status(&data_dir)?;
+            blackbox::daemon::daemon_status(&data_dir, format)?;
         }
         Commands::Reload => {
             let data_dir = blackbox::config::data_dir()?;
