@@ -851,3 +851,51 @@ fn test_query_commit_line_stats_since_filter() {
     assert_eq!(stats.len(), 1);
     assert_eq!(stats[0].commit_hash, "new");
 }
+
+#[test]
+fn test_insert_churn_event() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_churn_event(
+        &conn, "/repo", "aaa", "bbb", "src/main.rs", 5, 14, "2026-03-20T10:00:00Z",
+    ).unwrap();
+    assert!(inserted);
+
+    let (rp, orig, churn, fp, lc, wd): (String, String, String, String, i64, i64) = conn
+        .query_row(
+            "SELECT repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days FROM churn_events WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        ).unwrap();
+    assert_eq!(rp, "/repo");
+    assert_eq!(orig, "aaa");
+    assert_eq!(churn, "bbb");
+    assert_eq!(fp, "src/main.rs");
+    assert_eq!(lc, 5);
+    assert_eq!(wd, 14);
+}
+
+#[test]
+fn test_insert_churn_event_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_churn_event(
+        &conn, "/repo", "aaa", "bbb", "src/main.rs", 5, 14, "2026-03-20T10:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Duplicate (same repo+original+churn+file) → ignored
+    let second = db::insert_churn_event(
+        &conn, "/repo", "aaa", "bbb", "src/main.rs", 99, 14, "2026-03-20T12:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM churn_events", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
