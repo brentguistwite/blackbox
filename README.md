@@ -88,7 +88,11 @@ The `--summarize` flag is available on `today`, `week`, `month`, and `standup` t
 
 ## How It Works
 
-A background daemon polls your watched directories for git repos, recording commits, branch switches, and merges to a local SQLite database. The CLI queries this database and estimates time using a session-gap algorithm: commits within `session_gap_minutes` of each other belong to the same work session, and the first commit in each session gets a configurable time credit. When `gh` CLI is available, output is enriched with PR titles and URLs.
+A background daemon polls your watched directories for git repos, recording commits, branch switches, and merges to a local SQLite database. The CLI queries this database and estimates time using a session-gap algorithm: commits within `session_gap_minutes` of each other belong to the same work session, and the first commit in each session gets a configurable time credit.
+
+When shell hooks are installed (see above), blackbox also records directory presence — when you enter and leave a repo directory. Presence data anchors git session start times to when you actually started working, rather than relying on estimated credits. This produces more accurate time estimates, especially for repos where you spend significant time before your first commit.
+
+When `gh` CLI is available, output is enriched with PR titles and URLs.
 
 ## License
 

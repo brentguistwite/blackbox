@@ -877,6 +877,7 @@ mod tests {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         }];
         app.feed_events = vec![FeedEvent {
             timestamp: Utc::now(),
@@ -912,6 +913,7 @@ mod tests {
             pr_info: None,
             reviews: vec![],
             ai_sessions: vec![],
+            presence_intervals: vec![],
         };
         // Empty repo should return MIN_UTC
         assert_eq!(latest_timestamp(&repo), DateTime::<Utc>::MIN_UTC);

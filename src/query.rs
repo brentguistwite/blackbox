@@ -54,21 +54,37 @@ pub fn median_commit_gap(events: &[ActivityEvent]) -> Option<Duration> {
     }
     gaps.sort();
     let mid = gaps.len() / 2;
-    if gaps.len() % 2 == 0 {
+    if gaps.len().is_multiple_of(2) {
         Some((gaps[mid - 1] + gaps[mid]) / 2)
     } else {
         Some(gaps[mid])
     }
 }
 
-/// Time estimation v2: git events + AI sessions, adaptive thresholds.
-/// No presence data. AI session intervals must be pre-clipped to query window.
+/// Time estimation v2: adaptive thresholds from commit cadence.
 ///
-/// With empty ai_sessions and < 2 commits, falls back to config gap/credit values
-/// (matching legacy behavior).
+/// # Inputs
+/// - `events` — git activity (commits, branch switches) sorted chronologically.
+/// - `ai_sessions` — AI tool session intervals, pre-clipped to query window.
+/// - `presence_intervals` — directory-presence intervals from shell hooks.
+///   Used to anchor git session starts: if a presence interval started before the
+///   tentative credit window and overlaps it, the session start is pulled back to
+///   `presence.start` instead of applying the estimated credit. This yields a more
+///   accurate start time when the developer was provably in the directory before
+///   committing. Presence-anchored sessions skip AI credit suppression.
+/// - `session_gap_minutes` / `first_commit_minutes` — fallback thresholds when < 2 commits.
+///
+/// # Algorithm
+/// 1. Compute adaptive `effective_gap` / `effective_credit` from median commit gap.
+/// 2. Group git events into sessions → tentative intervals `[first_event - credit, last_event]`.
+/// 3. Presence anchoring — replace tentative start with `presence.start` when applicable.
+/// 4. AI credit suppression — if an AI session overlaps the credit window (and not anchored),
+///    shrink session start to `first_event`.
+/// 5. Union git + AI + presence intervals, merge overlapping, return total duration.
 pub fn estimate_time_v2(
     events: &[ActivityEvent],
     ai_sessions: &[TimeInterval],
+    presence_intervals: &[TimeInterval],
     session_gap_minutes: u64,
     first_commit_minutes: u64,
 ) -> (Duration, Vec<TimeInterval>) {
@@ -76,8 +92,8 @@ pub fn estimate_time_v2(
     let (effective_gap, effective_credit) = match median_commit_gap(events) {
         Some(median) => {
             let median_mins = median.num_minutes();
-            let gap = (median_mins * 3).max(MIN_GAP_FLOOR_MINS).min(MAX_GAP_CAP_MINS);
-            let credit = median_mins.max(MIN_CREDIT_MINS).min(MAX_CREDIT_MINS);
+            let gap = (median_mins * 3).clamp(MIN_GAP_FLOOR_MINS, MAX_GAP_CAP_MINS);
+            let credit = median_mins.clamp(MIN_CREDIT_MINS, MAX_CREDIT_MINS);
             (Duration::minutes(gap), Duration::minutes(credit))
         }
         None => (
@@ -108,9 +124,25 @@ pub fn estimate_time_v2(
         }
     }
 
+    // Step 2b: Presence anchoring — if a presence interval started before the
+    // tentative start and overlaps the credit window, anchor session start to presence.start
+    let mut anchored = vec![false; git_intervals.len()];
+    for (i, iv) in git_intervals.iter_mut().enumerate() {
+        let tentative_start = iv.start;
+        if let Some(p) = presence_intervals.iter()
+            .filter(|p| p.start < tentative_start && p.end > tentative_start)
+            .min_by_key(|p| p.start)
+        {
+            iv.start = p.start;
+            anchored[i] = true;
+        }
+    }
+
     // Step 3: Credit suppression — if AI session covers [first_event - credit, first_event],
-    // shrink git interval start to first_event (real data > guess)
-    for iv in &mut git_intervals {
+    // shrink git interval start to first_event (real data > guess).
+    // Skip for presence-anchored intervals (presence > credit guess).
+    for (i, iv) in git_intervals.iter_mut().enumerate() {
+        if anchored[i] { continue; }
         let credit_window_start = iv.start;
         let credit_window_end = iv.start + effective_credit;
         let has_ai_overlap = ai_sessions.iter().any(|ai| {
@@ -121,10 +153,11 @@ pub fn estimate_time_v2(
         }
     }
 
-    // Step 4: Collect git + AI intervals
+    // Step 4: Collect git + AI + presence intervals
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     all_intervals.extend_from_slice(&git_intervals);
     all_intervals.extend_from_slice(ai_sessions);
+    all_intervals.extend_from_slice(presence_intervals);
 
     // Step 5: Merge and return total + intervals
     let (merged, total) = merge_intervals(&mut all_intervals);
@@ -216,6 +249,7 @@ pub struct RepoSummary {
     pub pr_info: Option<Vec<PrInfo>>,
     pub reviews: Vec<ReviewInfo>,
     pub ai_sessions: Vec<AiSessionInfo>,
+    pub presence_intervals: Vec<TimeInterval>,
 }
 
 #[derive(Debug, Clone)]
@@ -251,9 +285,9 @@ pub fn estimate_time(
         let gap = events[i].timestamp - events[i - 1].timestamp;
         if gap >= gap_threshold {
             // New session
-            total = total + first_credit;
+            total += first_credit;
         } else {
-            total = total + gap;
+            total += gap;
         }
     }
 
@@ -355,9 +389,12 @@ pub fn query_activity(
     // Query AI sessions in the same time range
     let ai_session_map = query_ai_sessions(conn, from, to)?;
 
+    // Query presence intervals once for all repos
+    let presence_map = query_presence(conn, from, to, session_gap_minutes)?;
+
     // Collect all repo paths. Filter out AI sessions from user's home dir.
     let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
-    let not_home = |k: &&String| home_dir.as_ref().map_or(true, |h| k.as_str() != h);
+    let not_home = |k: &&String| home_dir.as_ref().is_none_or(|h| k.as_str() != h);
     let all_repo_paths: std::collections::BTreeSet<String> = repo_map
         .keys()
         .chain(review_map.keys())
@@ -398,8 +435,10 @@ pub fn query_activity(
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
 
+        let presence: Vec<TimeInterval> = presence_map.get(&repo_path).cloned().unwrap_or_default();
+
         let (estimated_time, _) = estimate_time_v2(
-            &events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &events, &ai_intervals, &presence, session_gap_minutes, first_commit_minutes,
         );
 
         repos.push(RepoSummary {
@@ -412,6 +451,7 @@ pub fn query_activity(
             pr_info: None,
             reviews,
             ai_sessions,
+            presence_intervals: presence,
         });
     }
 
@@ -433,7 +473,7 @@ pub fn global_estimated_time(
             if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
         }).collect();
         let (_, intervals) = estimate_time_v2(
-            &repo.events, &ai_intervals, session_gap_minutes, first_commit_minutes,
+            &repo.events, &ai_intervals, &repo.presence_intervals, session_gap_minutes, first_commit_minutes,
         );
         all_intervals.extend_from_slice(&intervals);
     }
