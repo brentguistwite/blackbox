@@ -1,10 +1,43 @@
 use chrono::{DateTime, Datelike, Duration, Local, Utc};
 use rusqlite::Connection;
+use serde::Serialize;
 use std::collections::BTreeSet;
 
 use crate::config::Config;
 use crate::enrichment;
 use crate::query::{self, ActivitySummary};
+
+// --- US-07: PerfReviewContext struct ---
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PerfReviewContext {
+    pub period_label: String,
+    pub total_commits: usize,
+    pub total_reviews: usize,
+    pub total_repos: usize,
+    pub total_estimated_hours: f64,
+    pub total_ai_session_hours: f64,
+    pub repos: Vec<PerfReviewRepo>,
+    pub themes: Vec<String>,
+    pub pr_summary: PrSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PerfReviewRepo {
+    pub repo_name: String,
+    pub commits: usize,
+    pub branches: Vec<String>,
+    pub estimated_hours: f64,
+    pub recent_commit_messages: Vec<String>,
+    pub authored_prs: Vec<(String, u64, String)>,
+    pub reviewed_prs: Vec<(String, u64, String, String)>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PrSummary {
+    pub authored_prs: Vec<(String, u64, String)>,
+    pub reviewed_prs: Vec<(String, u64, String, String)>,
+}
 
 /// Build a human-readable period label for the perf review.
 /// Quarter default → "Q1 2025". Custom range → "Jan 1 – Mar 31 2025".
