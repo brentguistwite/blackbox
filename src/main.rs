@@ -434,6 +434,19 @@ fn main() -> anyhow::Result<()> {
         Commands::Digest { format, week, output_file, compare, summarize, notify } => {
             run_digest(week, format, output_file, summarize, compare, notify)?;
         }
+        Commands::CommitQuality { weeks, format, show_reverts } => {
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)?;
+            let trend = blackbox::query::commit_quality_trend(&conn, weeks)?;
+            let reverts = if show_reverts {
+                blackbox::query::find_reverted_commits(&conn)?
+            } else {
+                vec![]
+            };
+            let out = blackbox::output::render_commit_quality(&trend, &reverts, &format);
+            println!("{}", out);
+        }
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
         }

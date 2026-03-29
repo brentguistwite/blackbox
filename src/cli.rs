@@ -216,6 +216,18 @@ pub enum Commands {
         #[arg(long)]
         notify: bool,
     },
+    /// Show commit message quality scores and trends
+    CommitQuality {
+        /// Number of weeks to include in trend (1–52)
+        #[arg(long, default_value = "8", value_parser = clap::value_parser!(u32).range(1..=52))]
+        weeks: u32,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+        /// Include revert correlation analysis
+        #[arg(long)]
+        show_reverts: bool,
+    },
     /// Show code churn rate for tracked repos
     Churn {
         /// Time window in days to detect churn (default: from config)

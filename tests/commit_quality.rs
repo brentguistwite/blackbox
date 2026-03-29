@@ -271,3 +271,114 @@ fn migration_is_additive() {
     // commit_quality table should exist and be usable
     blackbox::db::insert_commit_quality(&conn2, "/repo", "aaa", 60, false).unwrap();
 }
+
+// --- Trend calculation tests (US-016-04) ---
+
+#[test]
+fn commit_quality_trend_empty_db() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    let trend = blackbox::query::commit_quality_trend(&conn, 4).unwrap();
+    assert_eq!(trend.len(), 4);
+    assert!(trend.iter().all(|w| w.commit_count == 0));
+    assert!(trend.iter().all(|w| w.avg_score == 0.0));
+}
+
+#[test]
+fn commit_quality_trend_with_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    // Insert activity + quality for current week
+    let now = chrono::Utc::now();
+    let ts = now.to_rfc3339();
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("aaa111"), Some("dev"), Some("feat: good msg"),
+        &ts,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "aaa111", 80, false).unwrap();
+
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("bbb222"), Some("dev"), Some("fix"),
+        &ts,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "bbb222", 25, true).unwrap();
+
+    let trend = blackbox::query::commit_quality_trend(&conn, 3).unwrap();
+    assert_eq!(trend.len(), 3);
+
+    // Last week should have the data
+    let last = trend.last().unwrap();
+    assert_eq!(last.commit_count, 2);
+    assert!((last.avg_score - 52.5).abs() < 0.1);
+    assert_eq!(last.vague_count, 1);
+    assert!((last.vague_pct - 50.0).abs() < 0.1);
+}
+
+// --- Revert correlation tests (US-016-05) ---
+
+#[test]
+fn find_reverted_commits_empty() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    let reverts = blackbox::query::find_reverted_commits(&conn).unwrap();
+    assert!(reverts.is_empty());
+}
+
+#[test]
+fn find_reverted_commits_with_revert() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    let ts = chrono::Utc::now().to_rfc3339();
+    let orig_hash = "a".repeat(40);
+
+    // Original commit
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some(&orig_hash), Some("dev"),
+        Some("feat: original change"), &ts,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", &orig_hash, 70, false).unwrap();
+
+    // Revert commit
+    let revert_msg = format!("Revert \"feat: original change\"\n\nThis reverts commit {}.", orig_hash);
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("bbbb"), Some("dev"),
+        Some(&revert_msg), &ts,
+    ).unwrap();
+
+    let reverts = blackbox::query::find_reverted_commits(&conn).unwrap();
+    assert_eq!(reverts.len(), 1);
+    assert_eq!(reverts[0].original_hash, orig_hash);
+    assert_eq!(reverts[0].score, Some(70));
+    assert_eq!(reverts[0].original_message, "feat: original change");
+}
+
+// --- CLI integration test (US-016-06) ---
+
+#[test]
+fn cli_commit_quality_exits_0_empty_db() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "watch_dirs = [\"/tmp\"]\npoll_interval = 30\n",
+    ).unwrap();
+
+    assert_cmd::Command::cargo_bin("blackbox")
+        .unwrap()
+        .arg("commit-quality")
+        .env("BLACKBOX_CONFIG_DIR", &config_dir)
+        .env("BLACKBOX_DATA_DIR", &data_dir)
+        .assert()
+        .success();
+}
