@@ -1,6 +1,6 @@
 use blackbox::llm::build_insights_prompt;
 use blackbox::query::{aggregate_insights_data, ActivityEvent, InsightsData, RepoInsights, RepoSummary};
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, Utc};
 
 /// Helper: build a RepoSummary with commit events at given timestamps+messages.
 fn repo(
@@ -64,8 +64,18 @@ fn commits_by_dow_bucketing() {
     )];
     let data = aggregate_insights_data(&repos, "This Week");
 
-    // Mon=0, Wed=2 in local time (depends on timezone but UTC 10:00 is likely same DOW)
-    // The exact DOW index depends on Local timezone conversion, but total should be 3
+    // Compute expected DOW indices at runtime (handles timezone differences)
+    let mon_local = chrono::DateTime::parse_from_rfc3339("2025-01-13T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let wed_local = chrono::DateTime::parse_from_rfc3339("2025-01-15T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let mon_idx = mon_local.weekday().num_days_from_monday() as usize;
+    let wed_idx = wed_local.weekday().num_days_from_monday() as usize;
+
+    assert_eq!(data.commits_by_dow[mon_idx], 2);
+    assert_eq!(data.commits_by_dow[wed_idx], 1);
     let total_dow: u32 = data.commits_by_dow.iter().sum();
     assert_eq!(total_dow, 3);
     assert_eq!(data.total_repos, 1);
@@ -103,21 +113,41 @@ fn empty_repos_returns_zeroed_struct() {
 
 #[test]
 fn avg_msg_len_by_dow() {
-    // Mon commit with 20-char msg, Fri commit with 8-char msg
     // 2025-01-13 = Monday, 2025-01-17 = Friday
+    let mon_msg = "twenty char message!"; // exactly 20 chars
+    let fri_msg = "short!!!"; // exactly 8 chars
+    assert_eq!(mon_msg.len(), 20);
+    assert_eq!(fri_msg.len(), 8);
+
     let repos = vec![repo(
         "alpha",
         vec![
-            ("2025-01-13T10:00:00Z", Some("twelve chars here!!")), // 19 chars
-            ("2025-01-17T10:00:00Z", Some("short!!!")),            // 8 chars
+            ("2025-01-13T10:00:00Z", Some(mon_msg)),
+            ("2025-01-17T10:00:00Z", Some(fri_msg)),
         ],
     )];
     let data = aggregate_insights_data(&repos, "This Week");
 
-    // Find which DOW indices got populated (depends on local timezone)
-    // At minimum: the two values should differ and be non-zero
-    let non_zero: Vec<f64> = data.avg_msg_len_by_dow.iter().copied().filter(|&v| v > 0.0).collect();
-    assert_eq!(non_zero.len(), 2);
+    // Compute expected DOW indices at runtime (handles timezone differences)
+    let mon_local = chrono::DateTime::parse_from_rfc3339("2025-01-13T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let fri_local = chrono::DateTime::parse_from_rfc3339("2025-01-17T10:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Local);
+    let mon_idx = mon_local.weekday().num_days_from_monday() as usize;
+    let fri_idx = fri_local.weekday().num_days_from_monday() as usize;
+
+    assert!(
+        (data.avg_msg_len_by_dow[mon_idx] - 20.0).abs() < 0.01,
+        "Mon avg_msg_len expected ~20, got {}",
+        data.avg_msg_len_by_dow[mon_idx]
+    );
+    assert!(
+        (data.avg_msg_len_by_dow[fri_idx] - 8.0).abs() < 0.01,
+        "Fri avg_msg_len expected ~8, got {}",
+        data.avg_msg_len_by_dow[fri_idx]
+    );
 }
 
 #[test]
