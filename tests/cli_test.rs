@@ -601,6 +601,33 @@ fn test_summarize_flag_accepted_standup() {
     );
 }
 
+// --- US-7: Integration test: blackbox reload ---
+
+#[test]
+fn test_reload_prints_not_running_when_no_daemon() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Create config so reload doesn't trigger first-run
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("reload")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Daemon not running"));
+}
+
 // --- US-018: CLI integration test: blackbox rhythm ---
 
 /// Helper: init config + open DB + insert sample commits, returns (config_dir, data_dir)
