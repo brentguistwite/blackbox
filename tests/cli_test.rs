@@ -683,3 +683,128 @@ fn test_rhythm_days_zero_errors() {
         .failure()
         .stderr(predicate::str::contains("days must be >= 1"));
 }
+
+// --- US-002: --json / --csv shorthand flags ---
+
+/// Helper: init config + open DB (no data), returns (TempDir, config_dir, data_dir)
+fn setup_empty_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    (tmp, config_dir, data_dir)
+}
+
+#[test]
+fn test_today_json_flag_outputs_valid_json() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "today --json should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("today --json stdout should be valid JSON");
+    assert!(parsed.get("period_label").is_some());
+}
+
+#[test]
+fn test_today_csv_flag_outputs_csv_header() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--csv"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "today --csv should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("period,repo_name,event_type"), "should contain CSV header");
+}
+
+#[test]
+fn test_week_json_flag_outputs_valid_json() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["week", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "week --json should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .expect("week --json stdout should be valid JSON");
+}
+
+#[test]
+fn test_month_csv_flag_outputs_csv() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["month", "--csv"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "month --csv should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("period,repo_name"), "should contain CSV header");
+}
+
+#[test]
+fn test_json_and_csv_conflict() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--json", "--csv"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_json_flag_overrides_format_pretty() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--format", "pretty", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str::<serde_json::Value>(&stdout)
+        .expect("--json should override --format pretty");
+}

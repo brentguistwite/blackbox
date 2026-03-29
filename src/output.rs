@@ -20,6 +20,14 @@ pub fn is_tty() -> bool {
     std::io::stdout().is_terminal()
 }
 
+/// Resolve output format from --format, --json, and --csv flags.
+/// Priority: --json > --csv > --format value.
+pub fn resolve_format(format: OutputFormat, json: bool, csv: bool) -> OutputFormat {
+    if json { return OutputFormat::Json; }
+    if csv { return OutputFormat::Csv; }
+    format
+}
+
 // --- JSON serialization structs ---
 
 #[derive(Serialize)]

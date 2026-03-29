@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, is_tty, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, is_tty, resolve_format, OutputFormat};
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
@@ -594,6 +594,39 @@ fn is_tty_returns_bool() {
     let result: bool = is_tty();
     // In test harness, stdout is piped → expect false
     assert!(!result, "stdout should not be a TTY when running under cargo test");
+}
+
+#[test]
+// --- US-002: resolve_format tests ---
+
+#[test]
+fn resolve_format_no_flags_returns_provided_format() {
+    // No --json, no --csv → use provided format as-is
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, false), OutputFormat::Pretty));
+    assert!(matches!(resolve_format(OutputFormat::Json, false, false), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Csv, false, false), OutputFormat::Csv));
+}
+
+#[test]
+fn resolve_format_json_flag_wins() {
+    // --json overrides any provided format
+    assert!(matches!(resolve_format(OutputFormat::Pretty, true, false), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Csv, true, false), OutputFormat::Json));
+    assert!(matches!(resolve_format(OutputFormat::Json, true, false), OutputFormat::Json));
+}
+
+#[test]
+fn resolve_format_csv_flag_wins() {
+    // --csv overrides any provided format (when --json is false)
+    assert!(matches!(resolve_format(OutputFormat::Pretty, false, true), OutputFormat::Csv));
+    assert!(matches!(resolve_format(OutputFormat::Json, false, true), OutputFormat::Csv));
+    assert!(matches!(resolve_format(OutputFormat::Csv, false, true), OutputFormat::Csv));
+}
+
+#[test]
+fn resolve_format_json_takes_priority_over_csv() {
+    // If both somehow true, json wins (clap prevents this, but function is defensive)
+    assert!(matches!(resolve_format(OutputFormat::Pretty, true, true), OutputFormat::Json));
 }
 
 #[test]
