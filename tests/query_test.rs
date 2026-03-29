@@ -120,7 +120,7 @@ fn query_activity_includes_ai_sessions() {
 
     let ts = "2025-01-15T10:00:00+00:00";
     insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), ts).unwrap();
-    insert_ai_session(&conn, "/repo/alpha", "sess-001", "2025-01-15T09:00:00+00:00").unwrap();
+    insert_ai_session(&conn, "claude-code", "/repo/alpha", "sess-001", "2025-01-15T09:00:00+00:00").unwrap();
     update_session_ended(&conn, "sess-001", "2025-01-15T10:30:00+00:00", Some(12)).unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
@@ -139,7 +139,7 @@ fn query_activity_includes_ai_sessions() {
 fn query_activity_ai_sessions_only_repo() {
     let (conn, _tmp) = setup_db();
 
-    insert_ai_session(&conn, "/repo/ai-only", "sess-100", "2025-01-15T08:00:00+00:00").unwrap();
+    insert_ai_session(&conn, "claude-code", "/repo/ai-only", "sess-100", "2025-01-15T08:00:00+00:00").unwrap();
     update_session_ended(&conn, "sess-100", "2025-01-15T09:00:00+00:00", Some(5)).unwrap();
 
     let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();

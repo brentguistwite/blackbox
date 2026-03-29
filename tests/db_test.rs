@@ -291,6 +291,7 @@ fn test_insert_ai_session() {
 
     let inserted = db::insert_ai_session(
         &conn,
+        "claude-code",
         "/tmp/repo",
         "session-abc-123",
         "2026-03-16T10:00:00Z",
@@ -311,15 +312,33 @@ fn test_insert_ai_session() {
 }
 
 #[test]
+fn test_insert_ai_session_custom_tool() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_ai_session(&conn, "codex", "/tmp/repo", "codex-sess-1", "2026-03-16T10:00:00Z").unwrap();
+
+    let tool: String = conn
+        .query_row(
+            "SELECT tool FROM ai_sessions WHERE session_id = 'codex-sess-1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tool, "codex");
+}
+
+#[test]
 fn test_insert_ai_session_dedup() {
     let tmp = TempDir::new().unwrap();
     let db_path = tmp.path().join("test.db");
     let conn = db::open_db(&db_path).unwrap();
 
-    let first = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    let first = db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
     assert!(first);
 
-    let second = db::insert_ai_session(&conn, "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
+    let second = db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "dup-session", "2026-03-16T10:00:00Z").unwrap();
     assert!(!second);
 
     let count: i64 = conn
@@ -334,7 +353,7 @@ fn test_update_session_ended() {
     let db_path = tmp.path().join("test.db");
     let conn = db::open_db(&db_path).unwrap();
 
-    db::insert_ai_session(&conn, "/tmp/repo", "end-session", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "end-session", "2026-03-16T10:00:00Z").unwrap();
 
     let updated = db::update_session_ended(&conn, "end-session", "2026-03-16T11:00:00Z", Some(42)).unwrap();
     assert!(updated);
@@ -360,9 +379,9 @@ fn test_get_active_sessions() {
     let db_path = tmp.path().join("test.db");
     let conn = db::open_db(&db_path).unwrap();
 
-    db::insert_ai_session(&conn, "/tmp/repo", "active-1", "2026-03-16T10:00:00Z").unwrap();
-    db::insert_ai_session(&conn, "/tmp/repo", "active-2", "2026-03-16T10:00:00Z").unwrap();
-    db::insert_ai_session(&conn, "/tmp/repo", "ended-1", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "active-1", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "active-2", "2026-03-16T10:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/tmp/repo", "ended-1", "2026-03-16T10:00:00Z").unwrap();
     db::update_session_ended(&conn, "ended-1", "2026-03-16T11:00:00Z", None).unwrap();
 
     let active = db::get_active_sessions(&conn).unwrap();
