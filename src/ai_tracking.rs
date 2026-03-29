@@ -201,11 +201,158 @@ impl AiToolDetector for CodexDetector {
     }
 }
 
+/// Copilot CLI session detector.
+/// Scans ~/.copilot/session-state/<uuid>/workspace.yaml files.
+pub struct CopilotDetector {
+    session_state_dir: Option<PathBuf>,
+}
+
+impl Default for CopilotDetector {
+    fn default() -> Self {
+        Self { session_state_dir: None }
+    }
+}
+
+impl CopilotDetector {
+    pub fn with_session_state_dir(dir: PathBuf) -> Self {
+        Self { session_state_dir: Some(dir) }
+    }
+
+    fn resolve_session_state_dir(&self) -> Option<PathBuf> {
+        if let Some(dir) = &self.session_state_dir {
+            return Some(dir.clone());
+        }
+        let home = etcetera::home_dir().ok()?;
+        Some(home.join(".copilot").join("session-state"))
+    }
+}
+
+#[derive(Deserialize)]
+struct CopilotWorkspace {
+    cwd: Option<String>,
+}
+
+/// Get file mtime as RFC3339 string. Returns None if metadata unavailable.
+fn mtime_rfc3339(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let dt: chrono::DateTime<Utc> = modified.into();
+    Some(dt.to_rfc3339())
+}
+
+/// Check if file was modified within the last `minutes` minutes.
+fn modified_within_minutes(path: &Path, minutes: i64) -> bool {
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let modified = match meta.modified() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let dt: chrono::DateTime<Utc> = modified.into();
+    Utc::now().signed_duration_since(dt) < chrono::Duration::minutes(minutes)
+}
+
+impl AiToolDetector for CopilotDetector {
+    fn tool_name(&self) -> &'static str {
+        "copilot-cli"
+    }
+
+    fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
+        let state_dir = match self.resolve_session_state_dir() {
+            Some(d) if d.exists() => d,
+            _ => {
+                log::debug!("copilot-cli data dir not found, skipping");
+                return;
+            }
+        };
+
+        let entries = match std::fs::read_dir(&state_dir) {
+            Ok(e) => e,
+            Err(_) => {
+                log::debug!("copilot-cli: failed to read session-state dir");
+                return;
+            }
+        };
+
+        let copilot_running = is_any_process_running("copilot");
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            let subdir = entry.path();
+            if !subdir.is_dir() {
+                continue;
+            }
+
+            let session_id = match subdir.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+
+            let workspace_path = subdir.join("workspace.yaml");
+            if !workspace_path.exists() {
+                continue;
+            }
+
+            // Parse workspace.yaml
+            let yaml_content = match std::fs::read_to_string(&workspace_path) {
+                Ok(c) => c,
+                Err(_) => {
+                    log::debug!("copilot-cli: failed to read {}", workspace_path.display());
+                    continue;
+                }
+            };
+            let workspace: CopilotWorkspace = match serde_yaml::from_str(&yaml_content) {
+                Ok(w) => w,
+                Err(_) => {
+                    log::debug!("copilot-cli: malformed workspace.yaml in {}", subdir.display());
+                    continue;
+                }
+            };
+            let cwd = match workspace.cwd {
+                Some(c) if !c.is_empty() => c,
+                _ => continue,
+            };
+
+            let repo_path = map_to_repo(&cwd, watched_repos);
+            let started_at = mtime_rfc3339(&workspace_path)
+                .unwrap_or_else(|| Utc::now().to_rfc3339());
+
+            match db::insert_ai_session(conn, "copilot-cli", &repo_path, &session_id, &started_at) {
+                Ok(true) => log::debug!("Recorded copilot-cli session: {}", session_id),
+                Ok(false) => {} // already exists
+                Err(e) => log::warn!("Failed to insert copilot-cli session {}: {}", session_id, e),
+            }
+
+            // Update turns from events.jsonl
+            let events_path = subdir.join("events.jsonl");
+            if let Some(turns) = count_lines(&events_path) {
+                let _ = conn.execute(
+                    "UPDATE ai_sessions SET turns = ?1 WHERE session_id = ?2",
+                    rusqlite::params![turns, session_id],
+                );
+            }
+
+            // Check if session should be marked ended:
+            // copilot process not running OR workspace.yaml mtime older than 5 minutes
+            let is_recent = modified_within_minutes(&workspace_path, 5);
+
+            if !copilot_running || !is_recent {
+                let ended_at = mtime_rfc3339(&workspace_path)
+                    .unwrap_or_else(|| Utc::now().to_rfc3339());
+                let turns = count_lines(&events_path);
+                let _ = db::update_session_ended(conn, &session_id, &ended_at, turns);
+            }
+        }
+    }
+}
+
 /// Poll all registered AI tool detectors.
 pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     let detectors: Vec<Box<dyn AiToolDetector>> = vec![
         Box::new(ClaudeDetector::default()),
         Box::new(CodexDetector::default()),
+        Box::new(CopilotDetector::default()),
     ];
     for detector in &detectors {
         detector.poll(conn, watched_repos);
