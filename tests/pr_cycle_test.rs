@@ -748,3 +748,104 @@ fn render_pr_cycle_json_empty_stats() {
     assert_eq!(v["merged_prs"], 0);
     assert!(v["prs"].as_array().unwrap().is_empty());
 }
+
+// --- US-014: closed-without-merge edge case ---
+
+#[test]
+fn closed_without_merge_stored_with_null_merged_at() {
+    let (conn, _tmp) = setup_db();
+    let pr = make_pr(1, "CLOSED", vec![], None);
+    upsert_pr_snapshot(&conn, "/repo/test", &pr).unwrap();
+
+    let (state, merged_at): (String, Option<String>) = conn
+        .query_row(
+            "SELECT state, merged_at FROM pr_snapshots WHERE repo_path = '/repo/test' AND pr_number = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(state, "CLOSED");
+    assert!(merged_at.is_none(), "closed-without-merge should have NULL merged_at");
+}
+
+#[test]
+fn closed_without_merge_cycle_time_none_and_counts() {
+    let (conn, _tmp) = setup_db();
+
+    // 1 merged PR: created 10:00, merged 20:00 = 10h cycle
+    insert_pr_snapshot(
+        &conn, "/repo/test", 1, "Merged PR", "MERGED",
+        "2025-01-15T10:00:00Z", Some("2025-01-15T20:00:00Z"), None,
+        Some("2025-01-15T12:00:00Z"),
+        Some(80), Some(20), Some(5), Some(1),
+    );
+
+    // 1 closed-without-merge PR: no merged_at, has closed_at
+    insert_pr_snapshot(
+        &conn, "/repo/test", 2, "Closed PR", "CLOSED",
+        "2025-01-15T10:00:00Z", None, Some("2025-01-15T18:00:00Z"),
+        None,
+        Some(30), Some(10), Some(2), Some(0),
+    );
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 12, 31, 23, 59, 59).unwrap();
+    let stats = query_pr_cycle_stats(&conn, None, from, to).unwrap();
+
+    assert_eq!(stats.total_prs, 2);
+    assert_eq!(stats.merged_prs, 1, "closed PR should not count as merged");
+
+    let closed_pr = stats.prs.iter().find(|p| p.state == "CLOSED").unwrap();
+    assert!(closed_pr.cycle_time_hours.is_none(), "closed-without-merge should have no cycle time");
+
+    let merged_pr = stats.prs.iter().find(|p| p.state == "MERGED").unwrap();
+    assert!(merged_pr.cycle_time_hours.is_some());
+
+    // Median cycle time should only reflect the merged PR (10h)
+    assert!((stats.median_cycle_time_hours.unwrap() - 10.0).abs() < 0.01);
+}
+
+#[test]
+fn closed_without_merge_render_shows_closed_state() {
+    let stats = PrCycleStats {
+        prs: vec![
+            PrMetrics {
+                pr_number: 1,
+                title: "Merged PR".to_string(),
+                url: "https://url/1".to_string(),
+                state: "MERGED".to_string(),
+                cycle_time_hours: Some(10.0),
+                time_to_first_review_hours: Some(2.0),
+                size_lines: Some(100),
+                iteration_count: Some(1),
+                created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+                merged_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 20, 0, 0).unwrap()),
+            },
+            PrMetrics {
+                pr_number: 2,
+                title: "Closed PR".to_string(),
+                url: "https://url/2".to_string(),
+                state: "CLOSED".to_string(),
+                cycle_time_hours: None,
+                time_to_first_review_hours: None,
+                size_lines: Some(40),
+                iteration_count: Some(0),
+                created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+                merged_at: None,
+            },
+        ],
+        median_cycle_time_hours: Some(10.0),
+        median_time_to_first_review_hours: Some(2.0),
+        median_pr_size_lines: Some(70.0),
+        median_iteration_count: Some(0.5),
+        total_prs: 2,
+        merged_prs: 1,
+    };
+    let output = render_pr_cycle_stats(&stats);
+
+    assert!(output.contains("2 PRs opened"));
+    assert!(output.contains("1 merged"));
+    assert!(output.contains("CLOSED"), "should show CLOSED state");
+    assert!(!output.contains("abandoned"), "should not say abandoned");
+    assert!(!output.contains("rejected"), "should not say rejected");
+}
