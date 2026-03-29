@@ -59,6 +59,7 @@ blackbox today
 | `prs` | PR cycle time metrics (`--days N`, `--repo <path>`, `--format pretty\|json`) |
 | `churn` | Code churn rate analysis (`--window N`, `--repo <path>`, `--format pretty\|json\|csv`) |
 | `insights` | LLM-powered behavioral analysis of activity patterns (`--window week\|month`, `--format pretty\|json`) |
+| `perf-review` | LLM-powered performance review self-assessment (`--from YYYY-MM-DD`, `--to YYYY-MM-DD`; defaults to current quarter) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -263,6 +264,17 @@ Configure defaults in `~/.config/blackbox/config.toml`:
 |-------|---------|-------------|
 | `insights_max_tokens` | `1024` | Max tokens for LLM response |
 | `insights_window` | `"week"` | Default time window (`week` or `month`) |
+
+## Performance Review Self-Assessment
+
+`blackbox perf-review` generates an LLM-powered self-assessment by aggregating a quarter (or custom date range) of git activity, PR contributions, code review history, and AI tool usage. Commit messages are analyzed for recurring themes, and the structured context is fed to an LLM which produces a markdown-formatted self-assessment suitable for performance review season.
+
+```
+blackbox perf-review                                    # current quarter
+blackbox perf-review --from 2025-01-01 --to 2025-03-31 # custom range
+```
+
+Output includes sections for Summary, Key Contributions, Technical Themes, Collaboration & Code Review, and Time Investment. Requires `llm_api_key` in config (Anthropic or OpenAI). Gracefully handles missing PR data (when `gh` CLI is unavailable) and sparse activity windows.
 
 ## License
 
