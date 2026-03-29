@@ -24,6 +24,7 @@ cargo run -- setup             # Full interactive onboarding
 cargo run -- start             # Start polling daemon
 cargo run -- today             # Show today's activity
 cargo run -- rhythm            # Work rhythm analysis (--days N, --format pretty|json)
+cargo run -- churn             # Code churn rate (--window N, --repo <path>, --format pretty|json|csv)
 ```
 
 ## Architecture
@@ -34,6 +35,7 @@ Entry: `src/main.rs` → command dispatch via Clap derive.
 src/
 ├── main.rs           # Entry point, command dispatch
 ├── lib.rs            # Module declarations
+├── churn.rs          # Code churn detection (diff stats, churn algorithm, ChurnReport)
 ├── cli.rs            # Clap CLI definition (Commands enum)
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
@@ -57,6 +59,7 @@ src/
 └── watcher.rs        # Event-driven repo watching (notify crate)
 
 tests/                # Integration tests (one file per module)
+  churn_test.rs       # Churn detection e2e tests
 ```
 
 XDG config: `~/.config/blackbox/config.toml`
