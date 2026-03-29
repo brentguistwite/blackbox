@@ -1,6 +1,7 @@
 use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
+use crate::enrichment::GhPrDetail;
 
 pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -219,4 +220,54 @@ pub fn insert_activity(
         rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
     )?;
     Ok(rows > 0)
+}
+
+/// Upsert a PR snapshot row. Computes first_review_at and iteration_count from reviews vec.
+/// Uses INSERT OR REPLACE — the unique index on (repo_path, pr_number) triggers replacement.
+pub fn upsert_pr_snapshot(
+    conn: &Connection,
+    repo_path: &str,
+    pr: &GhPrDetail,
+) -> anyhow::Result<()> {
+    // Earliest non-PENDING review
+    let first_review_at: Option<String> = pr
+        .reviews
+        .iter()
+        .filter(|r| r.state != "PENDING")
+        .map(|r| r.submitted_at.clone())
+        .min();
+
+    // Number of CHANGES_REQUESTED reviews
+    let iteration_count: i64 = pr
+        .reviews
+        .iter()
+        .filter(|r| r.state == "CHANGES_REQUESTED")
+        .count() as i64;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO pr_snapshots
+         (repo_path, pr_number, title, url, state, head_ref, base_ref,
+          author_login, created_at_gh, merged_at, closed_at, first_review_at,
+          additions, deletions, commits, iteration_count)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        rusqlite::params![
+            repo_path,
+            pr.number as i64,
+            &pr.title,
+            &pr.url,
+            &pr.state,
+            &pr.head_ref_name,
+            &pr.base_ref_name,
+            pr.author.as_ref().map(|a| &a.login),
+            &pr.created_at,
+            &pr.merged_at,
+            &pr.closed_at,
+            first_review_at,
+            pr.additions,
+            pr.deletions,
+            pr.commits.len() as i64,
+            iteration_count,
+        ],
+    )?;
+    Ok(())
 }
