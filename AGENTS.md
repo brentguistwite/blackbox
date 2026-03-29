@@ -26,6 +26,7 @@ cargo run -- today             # Show today's activity
 cargo run -- rhythm            # Work rhythm analysis (--days N, --format pretty|json)
 cargo run -- prs               # PR cycle time metrics (--days N, --repo, --format pretty|json)
 cargo run -- churn             # Code churn rate (--window N, --repo <path>, --format pretty|json|csv)
+cargo run -- status            # Daemon status with health indicator (--format pretty|json)
 ```
 
 ## Architecture
@@ -40,8 +41,8 @@ src/
 ├── cli.rs            # Clap CLI definition (Commands enum)
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
-├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management)
-├── db.rs             # SQLite with WAL, migrations, insert/query functions, pr_snapshots upsert
+├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management, DaemonStatus/HealthIndicator, get_daemon_status)
+├── db.rs             # SQLite with WAL, migrations, insert/query functions, pr_snapshots upsert, daemon_state kv store, count_events_today
 ├── doctor.rs         # Health checks and diagnostics
 ├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation, PR snapshot collection)
 ├── error.rs          # Custom error types (thiserror)
@@ -62,6 +63,8 @@ src/
 
 tests/                # Integration tests (one file per module)
   churn_test.rs       # Churn detection e2e tests
+  daemon_test.rs      # DaemonStatus, get_daemon_status, health indicator tests
+  db_test.rs          # daemon_state kv store, count_events_today tests
 ```
 
 XDG config: `~/.config/blackbox/config.toml`
