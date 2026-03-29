@@ -598,6 +598,7 @@ fn global_estimated_time_no_double_count_overlapping_presence() {
         reviews: vec![],
         ai_sessions: vec![],
         presence_intervals: vec![iv(10, 0, 11, 0)],
+        branch_switches: 0,
     };
     let repo_b = RepoSummary {
         repo_path: "/repo/beta".into(),
@@ -610,6 +611,7 @@ fn global_estimated_time_no_double_count_overlapping_presence() {
         reviews: vec![],
         ai_sessions: vec![],
         presence_intervals: vec![iv(10, 0, 11, 0)],
+        branch_switches: 0,
     };
     let total = global_estimated_time(&[repo_a, repo_b], 120, 30);
     assert_eq!(total, Duration::minutes(60), "overlapping presence across repos should not double-count");
@@ -771,4 +773,69 @@ fn filter_noise_mixed_scenario() {
     assert_eq!(filtered[1].to_branch, Some("feat-a".to_string()));
     assert_eq!(filtered[2].to_branch, Some("release".to_string()));
     assert_eq!(filtered[3].to_branch, Some("feat-a".to_string()));
+}
+
+// ===== US-CS-04: per-repo and cross-repo branch_switches aggregation =====
+
+#[test]
+fn query_activity_populates_branch_switches_per_repo() {
+    let (conn, _tmp) = setup_db();
+
+    // Repo alpha: 2 real switches (main->feat, feat->main with 5min dwell > 120s threshold)
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("feat"), Some("main"), None, None, None, "2025-01-15T10:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("main"), Some("feat"), None, None, None, "2025-01-15T10:35:00Z").unwrap();
+
+    // Repo beta: 1 real switch
+    insert_activity(&conn, "/repo/beta", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("init"), "2025-01-15T11:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/beta", "branch_switch", Some("dev"), Some("main"), None, None, None, "2025-01-15T11:30:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    assert_eq!(alpha.branch_switches, 2, "alpha should have 2 filtered switches");
+
+    let beta = repos.iter().find(|r| r.repo_path == "/repo/beta").unwrap();
+    assert_eq!(beta.branch_switches, 1, "beta should have 1 filtered switch");
+}
+
+#[test]
+fn query_activity_total_branch_switches_sums_repos() {
+    let (conn, _tmp) = setup_db();
+
+    // Repo alpha: 2 switches
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("feat"), Some("main"), None, None, None, "2025-01-15T10:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("main"), Some("feat"), None, None, None, "2025-01-15T10:35:00Z").unwrap();
+
+    // Repo beta: 1 switch
+    insert_activity(&conn, "/repo/beta", "commit", Some("main"), None, Some("bbb"), Some("dev"), Some("init"), "2025-01-15T11:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/beta", "branch_switch", Some("dev"), Some("main"), None, None, None, "2025-01-15T11:30:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let total: usize = repos.iter().map(|r| r.branch_switches).sum();
+    assert_eq!(total, 3, "total_branch_switches should be sum of per-repo counts");
+}
+
+#[test]
+fn query_activity_branch_switches_filters_noise() {
+    let (conn, _tmp) = setup_db();
+
+    // Fast round-trip: main->feat at 10:30, feat->main at 10:31 (60s < 120s threshold)
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("feat"), Some("main"), None, None, None, "2025-01-15T10:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("main"), Some("feat"), None, None, None, "2025-01-15T10:31:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    assert_eq!(alpha.branch_switches, 0, "fast round-trip should be filtered as noise");
 }
