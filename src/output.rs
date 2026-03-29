@@ -939,8 +939,63 @@ pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
     lines.join("\n")
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonPrMetrics {
+    pub pr_number: i64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cycle_time_hours: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_first_review_hours: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_lines: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub iteration_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonPrCycleStats {
+    pub total_prs: usize,
+    pub merged_prs: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_cycle_time_hours: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_time_to_first_review_hours: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_pr_size_lines: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub median_iteration_count: Option<f64>,
+    pub prs: Vec<JsonPrMetrics>,
+}
+
 pub fn render_pr_cycle_json(stats: &crate::query::PrCycleStats) -> String {
-    serde_json::to_string_pretty(stats).unwrap_or_else(|_| "{}".to_string())
+    let json_stats = JsonPrCycleStats {
+        total_prs: stats.total_prs,
+        merged_prs: stats.merged_prs,
+        median_cycle_time_hours: stats.median_cycle_time_hours,
+        median_time_to_first_review_hours: stats.median_time_to_first_review_hours,
+        median_pr_size_lines: stats.median_pr_size_lines,
+        median_iteration_count: stats.median_iteration_count,
+        prs: stats.prs.iter().map(|pr| JsonPrMetrics {
+            pr_number: pr.pr_number,
+            title: pr.title.clone(),
+            url: pr.url.clone(),
+            state: pr.state.clone(),
+            cycle_time_hours: pr.cycle_time_hours,
+            time_to_first_review_hours: pr.time_to_first_review_hours,
+            size_lines: pr.size_lines,
+            iteration_count: pr.iteration_count,
+            created_at: pr.created_at.map(|dt| dt.to_rfc3339()),
+            merged_at: pr.merged_at.map(|dt| dt.to_rfc3339()),
+        }).collect(),
+    };
+    serde_json::to_string_pretty(&json_stats).unwrap_or_else(|_| "{}".to_string())
 }
 
 // --- Rhythm report ---

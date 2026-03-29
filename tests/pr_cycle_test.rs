@@ -1,6 +1,6 @@
 use blackbox::db::{open_db, upsert_pr_snapshot};
 use blackbox::enrichment::{collect_pr_snapshots, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
-use blackbox::output::render_pr_cycle_stats;
+use blackbox::output::{render_pr_cycle_stats, render_pr_cycle_json};
 use blackbox::query::{query_pr_cycle_stats, PrCycleStats, PrMetrics};
 use chrono::{TimeZone, Utc};
 use std::path::PathBuf;
@@ -639,4 +639,112 @@ fn render_pr_cycle_stats_truncates_long_title() {
     assert!(!output.contains(&long_title));
     // Should contain truncated version (40 chars + ...)
     assert!(output.contains(&"A".repeat(40)));
+}
+
+// --- US-009: JSON output tests ---
+
+#[test]
+fn render_pr_cycle_json_valid_json_with_merged_pr() {
+    let stats = PrCycleStats {
+        prs: vec![PrMetrics {
+            pr_number: 1,
+            title: "Add feature".to_string(),
+            url: "https://github.com/test/repo/pull/1".to_string(),
+            state: "MERGED".to_string(),
+            cycle_time_hours: Some(10.0),
+            time_to_first_review_hours: Some(2.0),
+            size_lines: Some(120),
+            iteration_count: Some(1),
+            created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+            merged_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 20, 0, 0).unwrap()),
+        }],
+        median_cycle_time_hours: Some(10.0),
+        median_time_to_first_review_hours: Some(2.0),
+        median_pr_size_lines: Some(120.0),
+        median_iteration_count: Some(1.0),
+        total_prs: 1,
+        merged_prs: 1,
+    };
+    let json_str = render_pr_cycle_json(&stats);
+    let v: serde_json::Value = serde_json::from_str(&json_str).expect("must be valid JSON");
+
+    assert_eq!(v["total_prs"], 1);
+    assert_eq!(v["merged_prs"], 1);
+    assert_eq!(v["median_cycle_time_hours"], 10.0);
+    assert_eq!(v["median_time_to_first_review_hours"], 2.0);
+    assert_eq!(v["median_pr_size_lines"], 120.0);
+    assert_eq!(v["median_iteration_count"], 1.0);
+
+    let pr = &v["prs"][0];
+    assert_eq!(pr["pr_number"], 1);
+    assert_eq!(pr["title"], "Add feature");
+    assert_eq!(pr["state"], "MERGED");
+    assert_eq!(pr["cycle_time_hours"], 10.0);
+    assert_eq!(pr["size_lines"], 120);
+    assert_eq!(pr["iteration_count"], 1);
+
+    // DateTime fields as RFC3339 strings
+    let created = pr["created_at"].as_str().unwrap();
+    assert!(created.contains("2025-01-15"), "created_at should be RFC3339: {created}");
+    let merged = pr["merged_at"].as_str().unwrap();
+    assert!(merged.contains("2025-01-15"), "merged_at should be RFC3339: {merged}");
+}
+
+#[test]
+fn render_pr_cycle_json_skips_none_fields() {
+    let stats = PrCycleStats {
+        prs: vec![PrMetrics {
+            pr_number: 2,
+            title: "Open PR".to_string(),
+            url: "https://github.com/test/repo/pull/2".to_string(),
+            state: "OPEN".to_string(),
+            cycle_time_hours: None,
+            time_to_first_review_hours: None,
+            size_lines: Some(40),
+            iteration_count: Some(0),
+            created_at: Some(Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap()),
+            merged_at: None,
+        }],
+        median_cycle_time_hours: None,
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: Some(40.0),
+        median_iteration_count: Some(0.0),
+        total_prs: 1,
+        merged_prs: 0,
+    };
+    let json_str = render_pr_cycle_json(&stats);
+    let v: serde_json::Value = serde_json::from_str(&json_str).expect("must be valid JSON");
+
+    // Top-level None medians should be absent
+    assert!(v.get("median_cycle_time_hours").is_none(), "None median should be skipped");
+    assert!(v.get("median_time_to_first_review_hours").is_none(), "None median should be skipped");
+
+    // PR-level None fields should be absent
+    let pr = &v["prs"][0];
+    assert!(pr.get("cycle_time_hours").is_none(), "None cycle_time should be skipped");
+    assert!(pr.get("time_to_first_review_hours").is_none(), "None review time should be skipped");
+    assert!(pr.get("merged_at").is_none(), "None merged_at should be skipped");
+
+    // Present fields should exist
+    assert_eq!(pr["size_lines"], 40);
+    assert_eq!(pr["state"], "OPEN");
+}
+
+#[test]
+fn render_pr_cycle_json_empty_stats() {
+    let stats = PrCycleStats {
+        prs: vec![],
+        median_cycle_time_hours: None,
+        median_time_to_first_review_hours: None,
+        median_pr_size_lines: None,
+        median_iteration_count: None,
+        total_prs: 0,
+        merged_prs: 0,
+    };
+    let json_str = render_pr_cycle_json(&stats);
+    let v: serde_json::Value = serde_json::from_str(&json_str).expect("must be valid JSON");
+
+    assert_eq!(v["total_prs"], 0);
+    assert_eq!(v["merged_prs"], 0);
+    assert!(v["prs"].as_array().unwrap().is_empty());
 }
