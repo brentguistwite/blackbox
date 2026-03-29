@@ -260,6 +260,7 @@ pub struct ActivitySummary {
     pub total_repos: usize,
     pub total_estimated_time: Duration,
     pub total_ai_session_time: Duration,
+    pub streak_days: u32,
     pub repos: Vec<RepoSummary>,
 }
 
