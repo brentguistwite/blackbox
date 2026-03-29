@@ -1,3 +1,8 @@
+const VAGUE_PATTERNS: &[&str] = &[
+    "wip", "fix", "fixes", "fixed", "update", "updates", "updated", "misc", "stuff", "changes",
+    "cleanup", "clean up", "refactor", "test", "tests", "temp", "tmp", "asdf", "...", ".", "!!",
+];
+
 const CONVENTIONAL_TYPES: &[&str] = &[
     "feat", "fix", "chore", "docs", "refactor", "test", "style", "perf", "ci", "build", "revert",
 ];
@@ -73,6 +78,47 @@ fn is_conventional_commit(subject: &str) -> bool {
             return true;
         }
     }
+    false
+}
+
+/// Detect vague/low-effort commit messages by pattern matching.
+pub fn is_vague(msg: &str) -> bool {
+    let trimmed = msg.trim();
+
+    // Empty → vague
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    // Merge commits never vague
+    if trimmed.starts_with("Merge ") {
+        return false;
+    }
+
+    // Score >= 50 → not vague
+    if score_message(msg) >= 50 {
+        return false;
+    }
+
+    // Non-ASCII majority → not vague (likely non-English)
+    let non_ascii = trimmed.chars().filter(|c| !c.is_ascii()).count();
+    if non_ascii * 2 > trimmed.len() {
+        return false;
+    }
+
+    let lower = trimmed.to_lowercase();
+
+    // Exact whole-message match (case-insensitive)
+    if VAGUE_PATTERNS.contains(&lower.as_str()) {
+        return true;
+    }
+
+    // ≤ 3 words where every word is a vague token
+    let words: Vec<&str> = lower.split_whitespace().collect();
+    if !words.is_empty() && words.len() <= 3 && words.iter().all(|w| VAGUE_PATTERNS.contains(w)) {
+        return true;
+    }
+
     false
 }
 
