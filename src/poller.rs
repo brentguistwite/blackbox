@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -82,7 +82,7 @@ fn full_scan(
     repos
 }
 
-pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
+pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     // Register SIGHUP handler — sets atomic flag, checked each loop iteration
     let reload_requested = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&reload_requested))?;
@@ -91,13 +91,11 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
     let conn = db::open_db(&db_path)?;
     let mut repo_states: HashMap<PathBuf, RepoState> = HashMap::new();
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
-    let wt_dir_name = config.worktree_dir_name.as_deref();
-
     // Initial full scan
-    let mut repos = full_scan(config, &mut repo_states, &conn);
+    let mut repos = full_scan(&config, &mut repo_states, &conn);
 
     // Try to set up filesystem watcher
-    let mut watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
+    let mut watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
     if watcher_opt.is_some() {
         log::info!("Watching {} repos for changes", repos.len());
     } else {
@@ -107,6 +105,23 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
     let mut last_full_scan = Instant::now();
 
     loop {
+        // Check for SIGHUP reload request between poll cycles
+        if reload_requested.swap(false, Ordering::Relaxed) {
+            log::info!("SIGHUP received, reloading config");
+            match config::reload_config() {
+                Ok(new_cfg) => {
+                    config = new_cfg;
+                    log::info!("Config reloaded successfully");
+                    // Re-discover repos and recreate watcher with new config
+                    repos = full_scan(&config, &mut repo_states, &conn);
+                    watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
+                    last_full_scan = Instant::now();
+                    debounce_map.clear();
+                }
+                Err(e) => log::warn!("Config reload failed: {e}, keeping previous config"),
+            }
+        }
+
         if let Some(ref mut watcher) = watcher_opt {
             // Hybrid mode: block until event or 1s timeout
             let events = watcher.recv_events(&mut debounce_map, Duration::from_secs(1));
@@ -138,10 +153,10 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
 
             // Periodic full scan for missed events + new repos
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
-                repos = full_scan(config, &mut repo_states, &conn);
+                repos = full_scan(&config, &mut repo_states, &conn);
 
                 // Recreate watcher with updated repo list
-                watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
+                watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
                 if let Some(ref _w) = watcher_opt {
                     log::info!("Watching {} repos for changes", repos.len());
                 }
@@ -151,10 +166,10 @@ pub fn run_poll_loop(config: &Config) -> anyhow::Result<()> {
         } else {
             // Pure polling fallback (original behavior)
             std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
-            repos = full_scan(config, &mut repo_states, &conn);
+            repos = full_scan(&config, &mut repo_states, &conn);
 
             // Retry watcher setup on each full scan
-            watcher_opt = RepoWatcher::new(&repos, wt_dir_name).ok();
+            watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
             if watcher_opt.is_some() {
                 log::info!(
                     "File watcher now available, watching {} repos",
