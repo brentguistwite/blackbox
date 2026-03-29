@@ -27,6 +27,7 @@ cargo run -- rhythm            # Work rhythm analysis (--days N, --format pretty
 cargo run -- prs               # PR cycle time metrics (--days N, --repo, --format pretty|json)
 cargo run -- churn             # Code churn rate (--window N, --repo <path>, --format pretty|json|csv)
 cargo run -- status            # Daemon status with health indicator (--format pretty|json)
+cargo run -- insights          # LLM behavioral insights (--window week|month, --format pretty|json)
 ```
 
 ## Architecture
@@ -49,11 +50,12 @@ src/
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
 ├── heatmap.rs        # GitHub-style contribution heatmap rendering
-├── llm.rs            # LLM integration for --summarize flag
+├── insights.rs       # LLM insights orchestration (run_insights: data aggregation → prompt → stream)
+├── llm.rs            # LLM integration for --summarize flag and behavioral insights (INSIGHTS_SYSTEM_PROMPT, generate_insights, build_insights_prompt)
 ├── notifications.rs  # OS desktop notifications (notify-rust, OnceLock availability probe)
 ├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv, PR cycle time output
 ├── poller.rs         # run_poll_loop() — main daemon loop
-├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges, PrCycleStats
+├── query.rs          # ActivitySummary, RepoSummary, InsightsData, time estimation, date ranges, PrCycleStats
 ├── repo_deep_dive.rs # Single-repo deep dive (language breakdown, top files, time, branches, PRs)
 ├── repo_scanner.rs   # discover_repos() — recursive git repo finder
 ├── rhythm.rs         # Work rhythm analysis orchestrator (run_rhythm)
@@ -71,6 +73,7 @@ tests/                # Integration tests (one file per module)
   daemon_test.rs      # DaemonStatus, get_daemon_status, health indicator tests
   config_test.rs      # Notification config round-trip tests
   db_test.rs          # daemon_state kv store, count_events_today, notification_log tests
+  insights_test.rs    # InsightsData aggregation, prompt construction, system prompt, CLI integration tests
   query_test.rs       # daily_summary_for_notification tests
 ```
 
