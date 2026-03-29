@@ -43,6 +43,7 @@ src/
 ├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation)
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
+├── heatmap.rs        # GitHub-style contribution heatmap rendering
 ├── llm.rs            # LLM integration for --summarize flag
 ├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv
 ├── poller.rs         # run_poll_loop() — main daemon loop

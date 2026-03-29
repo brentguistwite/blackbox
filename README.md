@@ -42,6 +42,7 @@ blackbox today
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
 | `rhythm` | Work rhythm analysis (`--days N`, `--format pretty\|json`) |
 | `reload` | Send SIGHUP to running daemon to reload config without restart |
+| `focus` | Context-switch focus report (`--week` for weekly) |
 | `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
@@ -106,6 +107,14 @@ blackbox reload
 ```
 
 The daemon picks up the new config (watch dirs, poll interval, etc.) without restarting. If the config file is missing or invalid, the daemon logs a warning and keeps the previous config.
+
+## Context-Switch Tracking
+
+Blackbox tracks branch switches and estimates their focus cost using Gloria Mark's research (23 min per context switch). Noise is filtered — detached HEAD states, same-branch re-checkouts, and rapid round-trips (A→B→A within 2 min) are suppressed.
+
+- **Pretty/JSON/CSV output** includes per-repo branch switch counts and total focus cost
+- **`blackbox focus`** shows a dedicated focus report with per-repo switch breakdown
+- **`blackbox standup`** flags high switch counts (≥5) with estimated focus cost
 
 ## How It Works
 
