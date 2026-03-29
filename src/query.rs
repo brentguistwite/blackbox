@@ -1,5 +1,5 @@
 use crate::enrichment::PrInfo;
-use chrono::{Datelike, DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{Datelike, DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc, Weekday};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -332,6 +332,44 @@ pub fn week_range() -> (DateTime<Utc>, DateTime<Utc>) {
         .unwrap()
         .with_timezone(&Utc);
     (start_utc, now)
+}
+
+/// Returns (week_start_midnight_local_as_utc, week_end_utc) for digest.
+/// `offset`: 0=current week, -1=last week, etc.
+/// `week_start`: which weekday begins the week (Mon or Sun).
+/// For current week (offset=0), end is capped at `now`.
+/// For past weeks, end is start + 7 days (full week boundary).
+pub fn digest_week_range(offset: i32, week_start: Weekday) -> (DateTime<Utc>, DateTime<Utc>) {
+    let now = Utc::now();
+    let local_today = Local::now().date_naive();
+
+    // Days since configured week start
+    let days_since_start = match week_start {
+        Weekday::Sun => local_today.weekday().num_days_from_sunday(),
+        _ => local_today.weekday().num_days_from_monday(),
+    };
+
+    // Start of current week
+    let current_week_start = local_today - Duration::days(days_since_start as i64);
+    // Apply offset (negative = past weeks)
+    let target_week_start = current_week_start + Duration::weeks(offset as i64);
+
+    let start_local = target_week_start.and_hms_opt(0, 0, 0).unwrap();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+
+    let end_utc = if offset >= 0 {
+        // Current or future week: cap at now
+        let full_end = start_utc + Duration::weeks(1);
+        full_end.min(now)
+    } else {
+        // Past week: full 7-day boundary
+        start_utc + Duration::weeks(1)
+    };
+
+    (start_utc, end_utc)
 }
 
 /// Returns (1st_of_month_midnight_local_as_utc, now_utc)
