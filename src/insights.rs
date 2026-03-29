@@ -1,16 +1,21 @@
 use crate::output::OutputFormat;
 
-pub fn run_insights(window: &str, format: OutputFormat) -> anyhow::Result<()> {
+pub fn run_insights(window: Option<&str>, format: OutputFormat) -> anyhow::Result<()> {
     let config = crate::config::load_config()?;
     let data_dir = crate::config::data_dir()?;
     let db_path = data_dir.join("blackbox.db");
     let conn = crate::db::open_db(&db_path)?;
 
-    let (from, to) = match window {
+    // CLI arg > config > "week"
+    let effective_window = window
+        .or(config.insights_window.as_deref())
+        .unwrap_or("week");
+
+    let (from, to) = match effective_window {
         "month" => crate::query::month_range(),
         _ => crate::query::week_range(),
     };
-    let window_label = match window {
+    let window_label = match effective_window {
         "month" => "This Month",
         _ => "This Week",
     };
@@ -44,7 +49,8 @@ pub fn run_insights(window: &str, format: OutputFormat) -> anyhow::Result<()> {
             );
             let llm_config = crate::llm::build_llm_config(&config)?;
             let prompt = crate::llm::build_insights_prompt(&data);
-            crate::llm::generate_insights(&llm_config, &prompt)?;
+            let max_tokens = config.insights_max_tokens.unwrap_or(1024);
+            crate::llm::generate_insights(&llm_config, &prompt, max_tokens)?;
         }
         OutputFormat::Csv => anyhow::bail!("--format csv not supported for insights"),
     }

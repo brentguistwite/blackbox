@@ -178,9 +178,9 @@ pub enum Commands {
     },
     /// LLM-powered behavioral analysis of activity patterns
     Insights {
-        /// Time window to analyze: week or month (default: week)
-        #[arg(long, default_value = "week", value_parser = ["week", "month"])]
-        window: String,
+        /// Time window to analyze: week or month (default: week, configurable via insights_window)
+        #[arg(long, value_parser = ["week", "month"])]
+        window: Option<String>,
         /// Output format: pretty (LLM stream) or json (raw data, no LLM call)
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,

@@ -58,6 +58,10 @@ pub struct Config {
     pub notifications_enabled: bool,
     #[serde(default = "default_notification_time")]
     pub notification_time: String,
+    #[serde(default)]
+    pub insights_max_tokens: Option<u32>,
+    #[serde(default)]
+    pub insights_window: Option<String>,
 }
 
 impl Default for Config {
@@ -77,6 +81,8 @@ impl Default for Config {
             churn_window_days: default_churn_window_days(),
             notifications_enabled: false,
             notification_time: default_notification_time(),
+            insights_max_tokens: None,
+            insights_window: None,
         }
     }
 }

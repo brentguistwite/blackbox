@@ -238,7 +238,7 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Commands::Insights { window, format } => {
-            blackbox::insights::run_insights(&window, format)?;
+            blackbox::insights::run_insights(window.as_deref(), format)?;
         }
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
