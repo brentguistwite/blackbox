@@ -162,3 +162,112 @@ fn not_vague_score_above_50() {
 fn vague_clean_up_two_words() {
     assert!(is_vague("clean up"));
 }
+
+// --- DB storage tests (US-016-03) ---
+
+#[test]
+fn insert_commit_quality_stores_and_deduplicates() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    // First insert succeeds
+    let inserted = blackbox::db::insert_commit_quality(&conn, "/repo", "abc123", 75, false).unwrap();
+    assert!(inserted);
+
+    // Duplicate returns false
+    let dup = blackbox::db::insert_commit_quality(&conn, "/repo", "abc123", 80, true).unwrap();
+    assert!(!dup);
+
+    // Original values preserved (not overwritten by dup)
+    let score: i64 = conn
+        .query_row(
+            "SELECT score FROM commit_quality WHERE repo_path = ?1 AND commit_hash = ?2",
+            rusqlite::params!["/repo", "abc123"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(score, 75);
+}
+
+#[test]
+fn insert_commit_quality_vague_flag() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    blackbox::db::insert_commit_quality(&conn, "/repo", "hash1", 25, true).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "hash2", 80, false).unwrap();
+
+    let vague: i64 = conn
+        .query_row(
+            "SELECT is_vague FROM commit_quality WHERE commit_hash = 'hash1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(vague, 1);
+
+    let not_vague: i64 = conn
+        .query_row(
+            "SELECT is_vague FROM commit_quality WHERE commit_hash = 'hash2'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(not_vague, 0);
+}
+
+#[test]
+fn commit_quality_row_created_after_activity_insert() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    // Simulate what git_ops does: insert activity then score
+    let msg = "feat: add new endpoint";
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("deadbeef"), Some("dev"), Some(msg),
+        "2026-03-29T12:00:00+00:00",
+    )
+    .unwrap();
+
+    let score = score_message(msg);
+    let vague = is_vague(msg);
+    blackbox::db::insert_commit_quality(&conn, "/repo", "deadbeef", score, vague).unwrap();
+
+    // Verify quality row exists with correct score
+    let stored_score: i64 = conn
+        .query_row(
+            "SELECT score FROM commit_quality WHERE repo_path = '/repo' AND commit_hash = 'deadbeef'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_score, score as i64);
+}
+
+#[test]
+fn migration_is_additive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+
+    // Open DB, insert activity in pre-existing table
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("test msg"),
+        "2026-03-29T10:00:00+00:00",
+    )
+    .unwrap();
+    drop(conn);
+
+    // Reopen — migration should not destroy existing data
+    let conn2 = blackbox::db::open_db(&db_path).unwrap();
+    let count: i64 = conn2
+        .query_row("SELECT COUNT(*) FROM git_activity", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    // commit_quality table should exist and be usable
+    blackbox::db::insert_commit_quality(&conn2, "/repo", "aaa", 60, false).unwrap();
+}
