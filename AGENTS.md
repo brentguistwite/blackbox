@@ -28,6 +28,7 @@ cargo run -- prs               # PR cycle time metrics (--days N, --repo, --form
 cargo run -- churn             # Code churn rate (--window N, --repo <path>, --format pretty|json|csv)
 cargo run -- status            # Daemon status with health indicator (--format pretty|json)
 cargo run -- insights          # LLM behavioral insights (--window week|month, --format pretty|json)
+cargo run -- perf-review       # LLM perf review self-assessment (--from YYYY-MM-DD, --to YYYY-MM-DD)
 ```
 
 ## Architecture
@@ -54,6 +55,7 @@ src/
 ├── llm.rs            # LLM integration for --summarize flag and behavioral insights (INSIGHTS_SYSTEM_PROMPT, generate_insights, build_insights_prompt)
 ├── notifications.rs  # OS desktop notifications (notify-rust, OnceLock availability probe)
 ├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv, PR cycle time output
+├── perf_review.rs    # Performance review self-assessment (context builder, theme extraction, PR summary, LLM prompt, streaming)
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, InsightsData, time estimation, date ranges, PrCycleStats
 ├── repo_deep_dive.rs # Single-repo deep dive (language breakdown, top files, time, branches, PRs)
@@ -74,6 +76,7 @@ tests/                # Integration tests (one file per module)
   config_test.rs      # Notification config round-trip tests
   db_test.rs          # daemon_state kv store, count_events_today, notification_log tests
   insights_test.rs    # InsightsData aggregation, prompt construction, system prompt, CLI integration tests
+  perf_review_test.rs # perf-review CLI integration tests (assert_cmd: API key error, empty range, invalid date)
   query_test.rs       # daily_summary_for_notification tests
 ```
 

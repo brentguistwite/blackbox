@@ -185,6 +185,16 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Generate LLM-powered performance review self-assessment
+    #[command(name = "perf-review")]
+    PerfReview {
+        /// Start date (YYYY-MM-DD). Defaults to current quarter start.
+        #[arg(long)]
+        from: Option<String>,
+        /// End date (YYYY-MM-DD). Defaults to now.
+        #[arg(long)]
+        to: Option<String>,
+    },
     /// Show code churn rate for tracked repos
     Churn {
         /// Time window in days to detect churn (default: from config)

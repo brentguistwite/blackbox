@@ -237,6 +237,29 @@ fn main() -> anyhow::Result<()> {
                 OutputFormat::Csv => anyhow::bail!("--format csv not supported for prs command"),
             }
         }
+        Commands::PerfReview { from, to } => {
+            let config = blackbox::config::load_config()?;
+            // Fail fast if no API key configured (US-10: perf-review-specific error)
+            let llm_config = blackbox::llm::build_llm_config(&config)
+                .context("blackbox perf-review requires an LLM API key")?;
+            let (from_utc, to_utc) = blackbox::query::resolve_perf_review_range(
+                from.as_deref(),
+                to.as_deref(),
+            )?;
+            let period_label = blackbox::perf_review::perf_review_period_label(
+                from.as_deref(),
+                to.as_deref(),
+            );
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)
+                .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+            let summary = blackbox::perf_review::aggregate_perf_review(
+                &conn, &config, from_utc, to_utc, period_label,
+            )?;
+            let context = blackbox::perf_review::build_perf_review_context(&summary);
+            blackbox::perf_review::generate_perf_review(&llm_config, &context)?;
+        }
         Commands::Insights { window, format } => {
             blackbox::insights::run_insights(window.as_deref(), format)?;
         }
