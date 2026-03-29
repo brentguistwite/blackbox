@@ -18,7 +18,7 @@ fn run_query(
         .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
 
     let (from, to) = range_fn();
-    let mut repos = blackbox::query::query_activity(
+    let repos = blackbox::query::query_activity(
         &conn,
         from,
         to,
@@ -26,7 +26,8 @@ fn run_query(
         config.first_commit_minutes,
     )?;
 
-    blackbox::enrichment::enrich_with_prs(&mut repos);
+    // PR data now sourced from pr_snapshots table via `blackbox prs` command.
+    // No live gh subprocess calls during today/week/month queries.
 
     let streak_days = blackbox::query::query_streak(&conn, config.streak_exclude_weekends)
         .unwrap_or_else(|e| {
@@ -214,10 +215,10 @@ fn main() -> anyhow::Result<()> {
             let conn = blackbox::db::open_db(&db_path)
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
             let (from, to) = range_fn();
-            let mut repos = blackbox::query::query_activity(
+            let repos = blackbox::query::query_activity(
                 &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
             )?;
-            blackbox::enrichment::enrich_with_prs(&mut repos);
+            // PR data now sourced from pr_snapshots table via `blackbox prs` command.
             let total_commits: usize = repos.iter().map(|r| r.commits).sum();
             let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
