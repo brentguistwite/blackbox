@@ -1372,6 +1372,122 @@ pub fn query_pr_cycle_stats(
     })
 }
 
+// --- Insights data aggregation (US-001) ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepoInsights {
+    pub repo_name: String,
+    pub commits: usize,
+    pub estimated_minutes: i64,
+    pub branches_touched: usize,
+    pub has_prs: bool,
+    pub avg_commit_msg_len: f64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InsightsData {
+    pub period_label: String,
+    pub total_commits: usize,
+    pub total_repos: usize,
+    pub commits_by_dow: [u32; 7],
+    pub commits_by_hour: [u32; 24],
+    pub avg_msg_len_by_dow: [f64; 7],
+    pub bugfix_commits: u32,
+    pub total_commits_with_msg: u32,
+    pub pr_merge_times_hours: Vec<f64>,
+    pub per_repo: Vec<RepoInsights>,
+}
+
+fn is_bugfix_commit(msg: &str) -> bool {
+    let lower = msg.to_lowercase();
+    ["fix", "bug", "hotfix", "patch", "revert"]
+        .iter()
+        .any(|kw| lower.contains(kw))
+}
+
+pub fn aggregate_insights_data(repos: &[RepoSummary], period_label: &str) -> InsightsData {
+    let mut commits_by_dow = [0u32; 7];
+    let mut commits_by_hour = [0u32; 24];
+    let mut msg_len_sum_by_dow = [0u64; 7];
+    let mut msg_count_by_dow = [0u32; 7];
+    let mut bugfix_commits = 0u32;
+    let mut total_commits_with_msg = 0u32;
+    let mut total_commits = 0usize;
+
+    let mut per_repo = Vec::with_capacity(repos.len());
+
+    for repo in repos {
+        let mut repo_msg_len_total = 0u64;
+        let mut repo_msg_count = 0u32;
+
+        for event in &repo.events {
+            if event.event_type != "commit" {
+                continue;
+            }
+            total_commits += 1;
+
+            let local = event.timestamp.with_timezone(&Local);
+            let dow = match local.weekday() {
+                chrono::Weekday::Mon => 0,
+                chrono::Weekday::Tue => 1,
+                chrono::Weekday::Wed => 2,
+                chrono::Weekday::Thu => 3,
+                chrono::Weekday::Fri => 4,
+                chrono::Weekday::Sat => 5,
+                chrono::Weekday::Sun => 6,
+            };
+            commits_by_dow[dow] += 1;
+            commits_by_hour[local.hour() as usize] += 1;
+
+            if let Some(msg) = &event.message {
+                let len = msg.len();
+                total_commits_with_msg += 1;
+                msg_len_sum_by_dow[dow] += len as u64;
+                msg_count_by_dow[dow] += 1;
+                repo_msg_len_total += len as u64;
+                repo_msg_count += 1;
+
+                if is_bugfix_commit(msg) {
+                    bugfix_commits += 1;
+                }
+            }
+        }
+
+        per_repo.push(RepoInsights {
+            repo_name: repo.repo_name.clone(),
+            commits: repo.commits,
+            estimated_minutes: repo.estimated_time.num_minutes(),
+            branches_touched: repo.branches.len(),
+            has_prs: repo.pr_info.as_ref().is_some_and(|prs| !prs.is_empty()),
+            avg_commit_msg_len: if repo_msg_count > 0 {
+                repo_msg_len_total as f64 / repo_msg_count as f64
+            } else {
+                0.0
+            },
+        });
+    }
+
+    let mut avg_msg_len_by_dow = [0.0f64; 7];
+    for i in 0..7 {
+        if msg_count_by_dow[i] > 0 {
+            avg_msg_len_by_dow[i] = msg_len_sum_by_dow[i] as f64 / msg_count_by_dow[i] as f64;
+        }
+    }
+
+    InsightsData {
+        period_label: period_label.to_string(),
+        total_commits,
+        total_repos: repos.len(),
+        commits_by_dow,
+        commits_by_hour,
+        avg_msg_len_by_dow,
+        bugfix_commits,
+        total_commits_with_msg,
+        pr_merge_times_hours: vec![],
+        per_repo,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
