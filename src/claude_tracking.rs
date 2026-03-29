@@ -125,7 +125,7 @@ pub fn poll_claude_sessions_with_paths(
         let repo_path = map_to_repo(&session.cwd, watched_repos);
         let started_at = millis_to_rfc3339(session.started_at);
 
-        match db::insert_ai_session(conn, &repo_path, &session.session_id, &started_at) {
+        match db::insert_ai_session(conn, "claude-code", &repo_path, &session.session_id, &started_at) {
             Ok(true) => log::debug!("Recorded new AI session: {} in {}", session.session_id, repo_path),
             Ok(false) => {} // already exists
             Err(e) => log::warn!("Failed to insert AI session {}: {}", session.session_id, e),

@@ -140,11 +140,11 @@ fn query_repo_all_time_returns_ai_sessions() {
     let tmp = TempDir::new().unwrap();
     let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
     let repo = "/home/user/myrepo";
-    db::insert_ai_session(&conn, repo, "sess-1", "2024-03-01T00:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", repo, "sess-1", "2024-03-01T00:00:00Z").unwrap();
     db::update_session_ended(&conn, "sess-1", "2024-03-01T01:00:00Z", Some(5)).unwrap();
-    db::insert_ai_session(&conn, repo, "sess-2", "2024-03-02T00:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", repo, "sess-2", "2024-03-02T00:00:00Z").unwrap();
     // different repo
-    db::insert_ai_session(&conn, "/other/repo", "sess-3", "2024-03-01T00:00:00Z").unwrap();
+    db::insert_ai_session(&conn, "claude-code", "/other/repo", "sess-3", "2024-03-01T00:00:00Z").unwrap();
 
     let data = query_repo_all_time(&conn, repo).unwrap();
     assert_eq!(data.ai_sessions.len(), 2);

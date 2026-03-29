@@ -178,14 +178,15 @@ pub fn insert_review(
 /// Insert a new AI session. Returns Ok(false) if duplicate (session_id already exists).
 pub fn insert_ai_session(
     conn: &Connection,
+    tool: &str,
     repo_path: &str,
     session_id: &str,
     started_at: &str,
 ) -> anyhow::Result<bool> {
     match conn.execute(
-        "INSERT OR IGNORE INTO ai_sessions (repo_path, session_id, started_at)
-         VALUES (?1, ?2, ?3)",
-        rusqlite::params![repo_path, session_id, started_at],
+        "INSERT OR IGNORE INTO ai_sessions (tool, repo_path, session_id, started_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![tool, repo_path, session_id, started_at],
     ) {
         Ok(0) => Ok(false),
         Ok(_) => Ok(true),
