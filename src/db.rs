@@ -71,6 +71,20 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
         ),
+        // US-001: per-commit per-file line stats for churn detection
+        M::up(
+            "CREATE TABLE IF NOT EXISTS commit_line_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                lines_added INTEGER NOT NULL,
+                lines_deleted INTEGER NOT NULL,
+                committed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_line_stats_dedup ON commit_line_stats(repo_path, commit_hash, file_path);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
