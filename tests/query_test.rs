@@ -1,8 +1,8 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
-    estimate_time_v2, global_estimated_time, median_commit_gap, merge_intervals,
-    query_activity, query_branch_switches, query_presence, today_range, week_range, month_range,
-    ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
+    estimate_time_v2, filter_noise_switches, global_estimated_time, median_commit_gap,
+    merge_intervals, query_activity, query_branch_switches, query_presence, today_range,
+    week_range, month_range, ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Duration, TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -688,4 +688,87 @@ fn query_branch_switches_empty_range() {
 
     let switches = query_branch_switches(&conn, from, to).unwrap();
     assert!(switches.is_empty());
+}
+
+// ===== US-CS-03: filter_noise_switches =====
+
+fn make_switch(from: Option<&str>, to: Option<&str>, hour: u32, min: u32) -> BranchSwitchEvent {
+    BranchSwitchEvent {
+        repo_path: "/repo/alpha".to_string(),
+        from_branch: from.map(|s| s.to_string()),
+        to_branch: to.map(|s| s.to_string()),
+        timestamp: ts(hour, min),
+    }
+}
+
+#[test]
+fn filter_noise_excludes_detached_head() {
+    let events = vec![
+        make_switch(Some("main"), None, 10, 0),        // detached HEAD
+        make_switch(Some("main"), Some("feat"), 10, 5), // real switch
+    ];
+    let filtered = filter_noise_switches(&events, 120);
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].to_branch, Some("feat".to_string()));
+}
+
+#[test]
+fn filter_noise_excludes_same_branch_recheckout() {
+    let events = vec![
+        make_switch(Some("main"), Some("main"), 10, 0),   // same-branch
+        make_switch(Some("main"), Some("feat"), 10, 5),    // real
+    ];
+    let filtered = filter_noise_switches(&events, 120);
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].to_branch, Some("feat".to_string()));
+}
+
+#[test]
+fn filter_noise_collapses_round_trip_under_threshold() {
+    // A->B at 10:00, B->A at 10:01 — round-trip in 60s < 120s threshold
+    let events = vec![
+        make_switch(Some("main"), Some("feat"), 10, 0),
+        make_switch(Some("feat"), Some("main"), 10, 1),
+    ];
+    let filtered = filter_noise_switches(&events, 120);
+    assert!(filtered.is_empty(), "round-trip under threshold should be collapsed");
+}
+
+#[test]
+fn filter_noise_keeps_round_trip_over_threshold() {
+    // A->B at 10:00, B->A at 10:05 — round-trip in 300s > 120s threshold
+    let events = vec![
+        make_switch(Some("main"), Some("feat"), 10, 0),
+        make_switch(Some("feat"), Some("main"), 10, 5),
+    ];
+    let filtered = filter_noise_switches(&events, 120);
+    assert_eq!(filtered.len(), 2, "round-trip over threshold should be kept");
+}
+
+#[test]
+fn filter_noise_empty_input() {
+    let filtered = filter_noise_switches(&[], 120);
+    assert!(filtered.is_empty());
+}
+
+#[test]
+fn filter_noise_mixed_scenario() {
+    // Real switch, detached HEAD, same-branch, fast round-trip, slow round-trip
+    let events = vec![
+        make_switch(Some("main"), Some("feat-a"), 10, 0),       // real — kept
+        make_switch(Some("feat-a"), None, 10, 2),                // detached HEAD — excluded
+        make_switch(None, Some("feat-a"), 10, 3),                // back from detached — from is None, but kept after detached filter
+        make_switch(Some("feat-a"), Some("feat-a"), 10, 10),     // same-branch — excluded
+        make_switch(Some("feat-a"), Some("main"), 10, 15),       // fast trip start
+        make_switch(Some("main"), Some("feat-a"), 10, 16),       // fast trip end (<120s) — both collapsed
+        make_switch(Some("feat-a"), Some("release"), 11, 0),     // real — kept
+        make_switch(Some("release"), Some("feat-a"), 11, 30),    // slow round-trip (>120s) — kept
+    ];
+    let filtered = filter_noise_switches(&events, 120);
+    // Expected: feat-a(10:00), feat-a(10:03), release(11:00), feat-a(11:30)
+    assert_eq!(filtered.len(), 4);
+    assert_eq!(filtered[0].to_branch, Some("feat-a".to_string()));
+    assert_eq!(filtered[1].to_branch, Some("feat-a".to_string()));
+    assert_eq!(filtered[2].to_branch, Some("release".to_string()));
+    assert_eq!(filtered[3].to_branch, Some("feat-a".to_string()));
 }

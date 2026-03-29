@@ -462,6 +462,64 @@ pub fn query_branch_switches(
     Ok(events)
 }
 
+/// Filter out noise from branch switch events.
+///
+/// Removes: detached HEAD (to_branch is None), same-branch re-checkouts,
+/// and round-trip pairs (A→B→A) where elapsed time < min_dwell_secs.
+pub fn filter_noise_switches(
+    events: &[BranchSwitchEvent],
+    min_dwell_secs: u64,
+) -> Vec<BranchSwitchEvent> {
+    // Step 1: exclude detached HEAD and same-branch re-checkouts
+    let clean: Vec<&BranchSwitchEvent> = events
+        .iter()
+        .filter(|e| e.to_branch.is_some())
+        .filter(|e| {
+            match (&e.from_branch, &e.to_branch) {
+                (Some(f), Some(t)) => f != t,
+                _ => true, // keep if from_branch is None (first poll, etc.)
+            }
+        })
+        .collect();
+
+    // Step 2: collapse round-trip pairs A→B→A where elapsed < threshold
+    let threshold = chrono::Duration::seconds(min_dwell_secs as i64);
+    let mut remove = vec![false; clean.len()];
+
+    // Sliding window: if clean[i].to_branch == clean[i-2].to_branch
+    // and clean[i].from_branch == clean[i-1].to_branch (consecutive pair)
+    // and elapsed < threshold, remove both i-1 and i.
+    let mut i = clean.len();
+    while i >= 2 {
+        i -= 1;
+        if remove[i] || remove[i - 1] {
+            continue;
+        }
+        let prev = clean[i - 1];
+        let curr = clean[i];
+        // Check: prev switches to X, curr switches back from X
+        // i.e. prev.to == curr.from AND curr.to == prev.from (round-trip)
+        let is_round_trip = match (&prev.to_branch, &curr.from_branch, &curr.to_branch, &prev.from_branch) {
+            (Some(pt), Some(cf), Some(ct), Some(pf)) => pt == cf && ct == pf,
+            _ => false,
+        };
+        if is_round_trip {
+            let elapsed = curr.timestamp - prev.timestamp;
+            if elapsed < threshold {
+                remove[i - 1] = true;
+                remove[i] = true;
+            }
+        }
+    }
+
+    clean
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| !remove[*idx])
+        .map(|(_, e)| e.clone())
+        .collect()
+}
+
 /// Query activity from DB, grouped by repo, with time estimates per repo.
 pub fn query_activity(
     conn: &Connection,
