@@ -1,5 +1,6 @@
 use blackbox::db::{open_db, upsert_pr_snapshot};
-use blackbox::enrichment::{GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
+use blackbox::enrichment::{collect_pr_snapshots, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
+use std::path::PathBuf;
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, NamedTempFile) {
@@ -239,4 +240,30 @@ fn pr_snapshots_nullable_fields_accept_null() {
         .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 1);
+}
+
+// --- US-004: collect_pr_snapshots tests ---
+
+#[test]
+fn collect_pr_snapshots_handles_empty_repo_list() {
+    let (conn, _tmp) = setup_db();
+    collect_pr_snapshots(&[], &conn);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn collect_pr_snapshots_handles_nonexistent_repo_path() {
+    let (conn, _tmp) = setup_db();
+    let paths = vec![PathBuf::from("/nonexistent/repo/path")];
+    // Should silently skip — no panic, no error
+    collect_pr_snapshots(&paths, &conn);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
 }

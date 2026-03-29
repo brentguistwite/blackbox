@@ -151,6 +151,47 @@ pub fn fetch_pr_details(repo_path: &str) -> Option<Vec<GhPrDetail>> {
     }
 }
 
+/// Collect PR snapshots for all given repo paths, dedup worktrees, upsert into DB.
+/// Silently returns if gh not available.
+pub fn collect_pr_snapshots(repo_paths: &[std::path::PathBuf], conn: &Connection) {
+    use crate::repo_scanner;
+    use std::collections::HashSet;
+
+    if !gh_available() {
+        log::debug!("gh CLI not available, skipping PR snapshot collection");
+        return;
+    }
+
+    let mut seen_main_repos: HashSet<std::path::PathBuf> = HashSet::new();
+    for repo_path in repo_paths {
+        let main_repo = if repo_scanner::is_worktree(repo_path).is_some() {
+            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.clone())
+        } else {
+            repo_path.clone()
+        };
+
+        if !seen_main_repos.insert(main_repo.clone()) {
+            continue;
+        }
+
+        let main_str = main_repo.to_string_lossy();
+        let prs = match fetch_pr_details(&repo_path.to_string_lossy()) {
+            Some(prs) => prs,
+            None => {
+                log::debug!("Failed to fetch PR details for {}", main_str);
+                continue;
+            }
+        };
+
+        for pr in &prs {
+            match db::upsert_pr_snapshot(conn, &main_str, pr) {
+                Ok(()) => log::debug!("Upserted PR #{} for {}", pr.number, main_str),
+                Err(e) => log::warn!("Failed to upsert PR #{} for {}: {}", pr.number, main_str, e),
+            }
+        }
+    }
+}
+
 // --- Review activity tracking ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
