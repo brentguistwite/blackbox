@@ -1,3 +1,4 @@
+pub mod ai_tracking;
 pub mod churn;
 pub mod claude_tracking;
 pub mod cli;

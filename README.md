@@ -6,6 +6,18 @@ Flight recorder for your dev day.
 
 Blackbox passively tracks your git activity across all your repos -- commits, branch switches, merges -- and estimates time spent per repo using a session-gap algorithm. Shows your current commit streak as ambient data in `today` output -- positive framing only, no nagging. Zero config after `blackbox init`.
 
+### Multi-AI Tool Tracking
+
+Blackbox detects and tracks sessions from multiple AI coding tools alongside git activity:
+
+- **Claude Code** — session files in `~/.claude/sessions/`, turn counts from project JSONL
+- **Codex CLI** — JSONL session files in `~/.codex/sessions/`, auto-detected via process + file timestamps
+- **Copilot CLI** — `workspace.yaml` in `~/.copilot/session-state/`, event counts from `events.jsonl`
+- **Cursor** — workspace storage parsing (`workspace.json`), process-based liveness detection
+- **Windsurf** — workspace storage if available, falls back to process detection with synthetic sessions per active repo
+
+Each tool's sessions appear in `today`, `week`, `month`, and `standup` output with a `tool` field identifying the source. Detection is passive — no configuration needed. Tools that aren't installed are silently skipped.
+
 ## Install
 
 ```
