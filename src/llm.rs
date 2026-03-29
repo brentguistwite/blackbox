@@ -3,6 +3,7 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use crate::config::Config;
+use crate::query::{InsightsData, RepoInsights};
 
 #[derive(Debug)]
 pub struct LlmConfig {
@@ -143,6 +144,135 @@ fn stream_openai(
             .as_str()
             .map(|s| s.to_string())
     })
+}
+
+// --- US-002: Insights prompt construction ---
+
+fn truncate_repos_for_prompt(repos: &[RepoInsights], max: usize) -> (&[RepoInsights], bool) {
+    if repos.len() <= max {
+        (repos, false)
+    } else {
+        (&repos[..max], true)
+    }
+}
+
+/// Build a compact text prompt from InsightsData for the LLM.
+pub fn build_insights_prompt(data: &InsightsData) -> String {
+    let mut out = String::with_capacity(2048);
+
+    out.push_str(
+        "Analyze these developer activity patterns and provide specific, data-driven behavioral insights:\n\n",
+    );
+
+    // Period + totals
+    out.push_str(&format!(
+        "Period: {}\nTotal commits: {} across {} repos\n\n",
+        data.period_label, data.total_commits, data.total_repos
+    ));
+
+    // Commits by DOW with percentages
+    let dow_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let total_dow: u32 = data.commits_by_dow.iter().sum();
+    if total_dow > 0 {
+        out.push_str("Commits by day: ");
+        let parts: Vec<String> = dow_names
+            .iter()
+            .zip(data.commits_by_dow.iter())
+            .filter(|(_, count)| **count > 0)
+            .map(|(name, &count)| {
+                let pct = (count as f64 / total_dow as f64 * 100.0).round() as u32;
+                format!("{}: {}% ({})", name, pct, count)
+            })
+            .collect();
+        out.push_str(&parts.join(", "));
+        out.push('\n');
+    }
+
+    // Peak commit hour + top 3
+    let total_hour: u32 = data.commits_by_hour.iter().sum();
+    if total_hour > 0 {
+        let mut hour_indexed: Vec<(usize, u32)> = data
+            .commits_by_hour
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 0)
+            .map(|(i, &c)| (i, c))
+            .collect();
+        hour_indexed.sort_by(|a, b| b.1.cmp(&a.1));
+        if let Some(&(peak_h, peak_c)) = hour_indexed.first() {
+            let top3: Vec<String> = hour_indexed.iter().take(3).map(|(h, _)| format!("{}", h)).collect();
+            out.push_str(&format!(
+                "Peak commit hour: {}:00 ({} commits); top hours: {}\n",
+                peak_h, peak_c, top3.join(", ")
+            ));
+        }
+    }
+
+    // Bug-fix ratio
+    if data.total_commits > 0 {
+        let pct = (data.bugfix_commits as f64 / data.total_commits as f64 * 100.0).round() as u32;
+        out.push_str(&format!(
+            "Bug-fix commits: {}/{} ({}%)\n",
+            data.bugfix_commits, data.total_commits, pct
+        ));
+    }
+
+    // Avg commit msg length by DOW
+    let days_with_msgs: Vec<(usize, f64)> = data
+        .avg_msg_len_by_dow
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| **v > 0.0)
+        .map(|(i, &v)| (i, v))
+        .collect();
+    if days_with_msgs.len() >= 2 {
+        out.push_str("Avg commit msg length by day: ");
+        let parts: Vec<String> = days_with_msgs
+            .iter()
+            .map(|(i, v)| format!("{}: {}ch", dow_names[*i], v.round() as i64))
+            .collect();
+        out.push_str(&parts.join(", "));
+        out.push('\n');
+    }
+
+    // PR merge times (only if non-empty)
+    if !data.pr_merge_times_hours.is_empty() {
+        let mut sorted = data.pr_merge_times_hours.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let median = sorted[sorted.len() / 2];
+        let min = sorted.first().unwrap();
+        let max = sorted.last().unwrap();
+        out.push_str(&format!(
+            "PR merge times: median {:.1}h, range {:.1}\u{2013}{:.1}h ({} PRs)\n",
+            median, min, max, sorted.len()
+        ));
+    }
+
+    out.push('\n');
+
+    // Per-repo breakdown (sorted by commits desc, capped at 10)
+    let mut sorted_repos = data.per_repo.clone();
+    sorted_repos.sort_by(|a, b| b.commits.cmp(&a.commits));
+    let (visible, truncated) = truncate_repos_for_prompt(&sorted_repos, 10);
+
+    out.push_str("Top repos:\n");
+    for r in visible {
+        let hours = r.estimated_minutes / 60;
+        let mins = r.estimated_minutes % 60;
+        let pr_marker = if r.has_prs { " [has PRs]" } else { "" };
+        out.push_str(&format!(
+            "- {}: {} commits, ~{}h {}m, {} branches{}\n",
+            r.repo_name, r.commits, hours, mins, r.branches_touched, pr_marker
+        ));
+    }
+    if truncated {
+        out.push_str(&format!(
+            "(showing top 10 of {} repos)\n",
+            data.total_repos
+        ));
+    }
+
+    out
 }
 
 /// Parse SSE stream, calling extractor on each data event to get text chunks.

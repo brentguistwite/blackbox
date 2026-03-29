@@ -1,4 +1,5 @@
-use blackbox::query::{aggregate_insights_data, ActivityEvent, RepoSummary};
+use blackbox::llm::build_insights_prompt;
+use blackbox::query::{aggregate_insights_data, ActivityEvent, InsightsData, RepoInsights, RepoSummary};
 use chrono::{Duration, Utc};
 
 /// Helper: build a RepoSummary with commit events at given timestamps+messages.
@@ -164,4 +165,158 @@ fn period_label_passthrough() {
     let repos: Vec<RepoSummary> = vec![];
     let data = aggregate_insights_data(&repos, "This Month");
     assert_eq!(data.period_label, "This Month");
+}
+
+// --- US-002: build_insights_prompt tests ---
+
+fn make_insights_data(num_repos: usize) -> InsightsData {
+    let mut commits_by_dow = [0u32; 7];
+    commits_by_dow[0] = 8;  // Mon
+    commits_by_dow[1] = 12; // Tue
+    commits_by_dow[2] = 8;  // Wed
+    commits_by_dow[3] = 10; // Thu
+    commits_by_dow[4] = 9;  // Fri
+
+    let mut commits_by_hour = [0u32; 24];
+    commits_by_hour[10] = 9;
+    commits_by_hour[14] = 7;
+    commits_by_hour[15] = 6;
+    commits_by_hour[9] = 3;
+
+    let mut avg_msg_len_by_dow = [0.0f64; 7];
+    avg_msg_len_by_dow[0] = 42.0;
+    avg_msg_len_by_dow[1] = 38.0;
+    avg_msg_len_by_dow[2] = 35.0;
+    avg_msg_len_by_dow[3] = 31.0;
+    avg_msg_len_by_dow[4] = 28.0;
+
+    let per_repo: Vec<RepoInsights> = (0..num_repos)
+        .map(|i| RepoInsights {
+            repo_name: format!("repo-{}", i),
+            commits: 20 - i, // descending
+            estimated_minutes: 120 - (i as i64 * 5),
+            branches_touched: 2,
+            has_prs: i % 3 == 0,
+            avg_commit_msg_len: 35.0,
+        })
+        .collect();
+
+    let total_commits: usize = per_repo.iter().map(|r| r.commits).sum();
+
+    InsightsData {
+        period_label: "This Week".to_string(),
+        total_commits,
+        total_repos: num_repos,
+        commits_by_dow,
+        commits_by_hour,
+        avg_msg_len_by_dow,
+        bugfix_commits: 6,
+        total_commits_with_msg: 45,
+        pr_merge_times_hours: vec![2.5, 4.0, 8.0],
+        per_repo,
+    }
+}
+
+#[test]
+fn prompt_contains_framing_line() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("Analyze these developer activity patterns"));
+}
+
+#[test]
+fn prompt_contains_period_and_totals() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("This Week"));
+    assert!(prompt.contains("across 3 repos"));
+}
+
+#[test]
+fn prompt_contains_dow_distribution() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    // Should have day labels with percentages
+    assert!(prompt.contains("Mon:"));
+    assert!(prompt.contains("Tue:"));
+    assert!(prompt.contains("%"));
+}
+
+#[test]
+fn prompt_contains_peak_hour() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("10:00"));
+}
+
+#[test]
+fn prompt_contains_bugfix_ratio() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("Bug-fix"));
+    assert!(prompt.contains("6/"));
+}
+
+#[test]
+fn prompt_contains_repo_breakdown() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("repo-0"));
+    assert!(prompt.contains("repo-1"));
+    assert!(prompt.contains("repo-2"));
+}
+
+#[test]
+fn prompt_contains_pr_merge_times() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("PR merge times"));
+    assert!(prompt.contains("3 PRs"));
+}
+
+#[test]
+fn prompt_omits_pr_section_when_empty() {
+    let mut data = make_insights_data(3);
+    data.pr_merge_times_hours = vec![];
+    let prompt = build_insights_prompt(&data);
+    assert!(!prompt.contains("PR merge times"));
+}
+
+#[test]
+fn prompt_no_commit_hashes() {
+    let data = make_insights_data(5);
+    let prompt = build_insights_prompt(&data);
+    assert!(!prompt.contains("abc123"));
+}
+
+#[test]
+fn prompt_truncates_repos_over_10() {
+    let data = make_insights_data(15);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("showing top 10 of 15 repos"));
+    // Should not contain repo-10 through repo-14
+    assert!(!prompt.contains("repo-14"));
+}
+
+#[test]
+fn prompt_is_plain_text_not_json() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    // Should not be parseable as JSON
+    assert!(serde_json::from_str::<serde_json::Value>(&prompt).is_err());
+}
+
+#[test]
+fn prompt_under_8000_chars_for_large_dataset() {
+    let data = make_insights_data(15);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.len() < 8000, "prompt len {} >= 8000", prompt.len());
+}
+
+#[test]
+fn prompt_has_prs_marker_on_repos() {
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    // repo-0 has has_prs=true (i%3==0)
+    assert!(prompt.contains("[has PRs]"));
 }
