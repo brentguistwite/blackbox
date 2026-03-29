@@ -27,6 +27,32 @@ pub fn generate_suggestions(ctx: &SuggestionContext) -> Vec<String> {
     if ctx.command == SuggestionCommand::Standup {
         return vec![];
     }
-    // Ruleset added in US-002
-    vec![]
+
+    let cmd_name = match ctx.command {
+        SuggestionCommand::Today => "today",
+        SuggestionCommand::Week => "week",
+        SuggestionCommand::Month => "month",
+        SuggestionCommand::Standup => unreachable!(),
+    };
+
+    let mut hints: Vec<String> = Vec::new();
+
+    if !ctx.daemon_running {
+        hints.push("blackbox start".to_string());
+    }
+
+    if ctx.daemon_running && !ctx.has_activity {
+        hints.push("blackbox doctor".to_string());
+    }
+
+    if ctx.has_activity && ctx.llm_configured {
+        hints.push(format!("blackbox {} --summarize", cmd_name));
+    }
+
+    if ctx.has_activity {
+        hints.push("blackbox live".to_string());
+    }
+
+    hints.truncate(3);
+    hints
 }
