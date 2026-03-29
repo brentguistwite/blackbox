@@ -1,5 +1,6 @@
 use assert_cmd::Command;
 use blackbox::llm::build_insights_prompt;
+use blackbox::enrichment::PrInfo;
 use blackbox::query::{aggregate_insights_data, ActivityEvent, InsightsData, RepoInsights, RepoSummary};
 use chrono::{Datelike, Duration, Utc};
 use std::fs;
@@ -618,4 +619,74 @@ fn cli_insights_empty_db_exits_zero_with_no_activity_msg() {
         !stdout.contains("llm_api_key") && !stderr.contains("llm_api_key"),
         "should not hit API key error path"
     );
+}
+
+// --- US-011: PR merge time enrichment ---
+
+#[test]
+fn pr_merge_times_computed_from_merged_prs() {
+    let mut r = repo("alpha", vec![
+        ("2025-01-13T10:00:00Z", Some("commit")),
+    ]);
+    // Attach PR info with one MERGED PR (created->merged = 24h)
+    r.pr_info = Some(vec![
+        PrInfo {
+            number: 1,
+            title: "feat: something".to_string(),
+            state: "MERGED".to_string(),
+            head_ref_name: "main".to_string(),
+            created_at: Some("2025-01-13T10:00:00Z".to_string()),
+            merged_at: Some("2025-01-14T10:00:00Z".to_string()),
+        },
+        // OPEN PR — should be excluded
+        PrInfo {
+            number: 2,
+            title: "wip".to_string(),
+            state: "OPEN".to_string(),
+            head_ref_name: "main".to_string(),
+            created_at: Some("2025-01-13T10:00:00Z".to_string()),
+            merged_at: None,
+        },
+        // MERGED but missing created_at — should be excluded
+        PrInfo {
+            number: 3,
+            title: "old".to_string(),
+            state: "MERGED".to_string(),
+            head_ref_name: "main".to_string(),
+            created_at: None,
+            merged_at: Some("2025-01-14T10:00:00Z".to_string()),
+        },
+    ]);
+
+    let data = aggregate_insights_data(&[r], "This Week");
+    assert_eq!(data.pr_merge_times_hours.len(), 1);
+    assert!((data.pr_merge_times_hours[0] - 24.0).abs() < 0.01);
+}
+
+#[test]
+fn pr_merge_times_empty_when_no_pr_info() {
+    let r = repo("alpha", vec![
+        ("2025-01-13T10:00:00Z", Some("commit")),
+    ]);
+    let data = aggregate_insights_data(&[r], "This Week");
+    assert!(data.pr_merge_times_hours.is_empty());
+}
+
+#[test]
+fn pr_merge_times_empty_when_no_merged_prs() {
+    let mut r = repo("alpha", vec![
+        ("2025-01-13T10:00:00Z", Some("commit")),
+    ]);
+    r.pr_info = Some(vec![
+        PrInfo {
+            number: 1,
+            title: "open pr".to_string(),
+            state: "OPEN".to_string(),
+            head_ref_name: "main".to_string(),
+            created_at: Some("2025-01-13T10:00:00Z".to_string()),
+            merged_at: None,
+        },
+    ]);
+    let data = aggregate_insights_data(&[r], "This Week");
+    assert!(data.pr_merge_times_hours.is_empty());
 }
