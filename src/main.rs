@@ -239,6 +239,8 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::PerfReview { from, to } => {
             let config = blackbox::config::load_config()?;
+            // Fail fast if no API key configured
+            let llm_config = blackbox::llm::build_llm_config(&config)?;
             let (from_utc, to_utc) = blackbox::query::resolve_perf_review_range(
                 from.as_deref(),
                 to.as_deref(),
@@ -254,8 +256,8 @@ fn main() -> anyhow::Result<()> {
             let summary = blackbox::perf_review::aggregate_perf_review(
                 &conn, &config, from_utc, to_utc, period_label,
             )?;
-            // Full LLM integration in US-08; for now print JSON summary
-            println!("{}", blackbox::output::render_json(&summary));
+            let context = blackbox::perf_review::build_perf_review_context(&summary);
+            blackbox::perf_review::generate_perf_review(&llm_config, &context)?;
         }
         Commands::Insights { window, format } => {
             blackbox::insights::run_insights(window.as_deref(), format)?;

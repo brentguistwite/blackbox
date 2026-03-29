@@ -3,7 +3,6 @@ use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use crate::config::Config;
-use crate::perf_review::PerfReviewContext;
 use crate::query::{InsightsData, RepoInsights};
 
 #[derive(Debug)]
@@ -74,96 +73,8 @@ pub fn generate_insights(config: &LlmConfig, prompt: &str, max_tokens: u32) -> a
     call_llm_streaming(config, INSIGHTS_SYSTEM_PROMPT, prompt, max_tokens, 60)
 }
 
-pub const PERF_REVIEW_SYSTEM_PROMPT: &str = "\
-You are helping a software developer write a performance review self-assessment \
-based on their recorded git activity data. Write in first person, professional tone. \
-Produce approximately 400-600 words in markdown format with these sections:\n\n\
-## Summary\n\
-A brief overview of the review period, total output, and key areas of focus.\n\n\
-## Key Contributions\n\
-The most impactful work items, referencing specific repositories, features, and PRs \
-where available. Do NOT invent accomplishments not evidenced in the data.\n\n\
-## Technical Themes\n\
-Recurring technical areas and domains based on commit message analysis and repository patterns.\n\n\
-## Collaboration & Code Review\n\
-Cross-team collaboration evidenced by PR reviews, authored PRs, and multi-repo work. \
-If PR data is unavailable, note this and skip detailed PR references.\n\n\
-## Time Investment\n\
-Total estimated hours, distribution across repositories, and AI-assisted development time \
-where applicable.\n\n\
-Ground every claim in the provided data. Do not fabricate accomplishments or metrics \
-not present in the input. If the data is sparse, acknowledge the limited window rather \
-than speculating.";
-
-/// Stream an LLM-generated performance review self-assessment to stdout.
-///
-/// Serializes `PerfReviewContext` to JSON, applies token budget guards
-/// (truncating commit messages if serialized context > 40,000 chars),
-/// and streams the result via the configured LLM provider.
-pub fn generate_perf_review(config: &LlmConfig, context: &PerfReviewContext) -> anyhow::Result<()> {
-    // Zero activity guard — bail before any LLM call
-    if context.total_commits == 0 && context.total_reviews == 0 {
-        bail!("No activity found for this period. Is the daemon running?");
-    }
-
-    let mut truncated = false;
-    let context_json = {
-        let json = serde_json::to_string_pretty(context)?;
-        if json.len() > 40_000 {
-            let mut ctx = context.clone();
-            let total_msgs: usize = ctx
-                .repos
-                .iter()
-                .map(|r| r.recent_commit_messages.len())
-                .sum();
-            if total_msgs > 200 {
-                for repo in &mut ctx.repos {
-                    let keep = (200 * repo.recent_commit_messages.len()) / total_msgs.max(1);
-                    let keep = keep.max(1);
-                    let start = repo.recent_commit_messages.len().saturating_sub(keep);
-                    repo.recent_commit_messages = repo.recent_commit_messages[start..].to_vec();
-                }
-            }
-            truncated = true;
-            serde_json::to_string_pretty(&ctx)?
-        } else {
-            json
-        }
-    };
-
-    let mut user_message = String::new();
-
-    // Sparse data warning (US-09)
-    if context.total_commits < 10 {
-        user_message.push_str(&format!(
-            "Note: limited data — only {} commits recorded. \
-             User may have started tracking recently.\n\n",
-            context.total_commits
-        ));
-    }
-
-    if truncated {
-        user_message.push_str(
-            "Note: commit message list was truncated to fit token budget. \
-             Not all commits are shown.\n\n",
-        );
-    }
-
-    user_message
-        .push_str("Generate a performance review self-assessment for this developer's activity:\n\n");
-    user_message.push_str(&context_json);
-
-    call_llm_streaming(
-        config,
-        PERF_REVIEW_SYSTEM_PROMPT,
-        &user_message,
-        2048,
-        120,
-    )
-}
-
 /// Core streaming helper — routes to Anthropic/OpenAI, handles 429/errors, streams to stdout.
-fn call_llm_streaming(
+pub fn call_llm_streaming(
     config: &LlmConfig,
     system_prompt: &str,
     user_content: &str,
