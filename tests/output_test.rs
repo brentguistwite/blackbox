@@ -595,6 +595,71 @@ fn standup_includes_ai_sessions() {
     assert!(output.contains("Claude Code session"), "should show AI sessions");
 }
 
+// --- Streak display tests (US-003) ---
+
+fn make_today_summary_with_streak(streak_days: u32) -> ActivitySummary {
+    ActivitySummary {
+        period_label: "Today".to_string(),
+        total_commits: 3,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(45),
+        total_ai_session_time: Duration::zero(),
+        streak_days,
+        repos: vec![RepoSummary {
+            repo_path: "/code/proj".to_string(),
+            repo_name: "proj".to_string(),
+            commits: 3,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(45),
+            events: vec![ActivityEvent {
+                event_type: "commit".to_string(),
+                branch: Some("main".to_string()),
+                commit_hash: Some("abc1234".to_string()),
+                message: Some("fix bug".to_string()),
+                timestamp: Utc::now(),
+            }],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+        }],
+    }
+}
+
+#[test]
+fn streak_shown_in_today_pretty_output() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(5);
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("5-day streak"), "today with streak=5 should show '5-day streak'");
+}
+
+#[test]
+fn streak_zero_not_shown_in_pretty_output() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(0);
+    let output = render_summary_to_string(&summary);
+    assert!(!output.contains("streak"), "streak=0 should show no streak text");
+}
+
+#[test]
+fn streak_not_shown_for_week_period() {
+    colored::control::set_override(false);
+    let mut summary = make_today_summary_with_streak(5);
+    summary.period_label = "This Week".to_string();
+    let output = render_summary_to_string(&summary);
+    assert!(!output.contains("streak"), "week period should not show streak text");
+}
+
+#[test]
+fn streak_one_day_singular_format() {
+    colored::control::set_override(false);
+    let summary = make_today_summary_with_streak(1);
+    let output = render_summary_to_string(&summary);
+    assert!(output.contains("1-day streak"), "streak=1 should show '1-day streak'");
+}
+
 #[test]
 fn standup_week_header() {
     let summary = ActivitySummary {
