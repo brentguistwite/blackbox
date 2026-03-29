@@ -347,6 +347,38 @@ fn prompt_under_8000_chars_for_large_dataset() {
 }
 
 #[test]
+fn prompt_trims_repos_further_when_over_8000_chars() {
+    // Create 10 repos with very long names to push prompt past 8000 chars
+    let per_repo: Vec<RepoInsights> = (0..10)
+        .map(|i| RepoInsights {
+            repo_name: format!("repo-{}-{}", i, "x".repeat(750)),
+            commits: 50 - i,
+            estimated_minutes: 600,
+            branches_touched: 5,
+            has_prs: true,
+            avg_commit_msg_len: 45.0,
+        })
+        .collect();
+    let total_commits: usize = per_repo.iter().map(|r| r.commits).sum();
+    let data = InsightsData {
+        period_label: "This Week".to_string(),
+        total_commits,
+        total_repos: 10,
+        commits_by_dow: [10, 12, 8, 10, 9, 0, 0],
+        commits_by_hour: [0, 0, 0, 0, 0, 0, 0, 0, 0, 5, 9, 3, 2, 1, 7, 6, 0, 0, 0, 0, 0, 0, 0, 0],
+        avg_msg_len_by_dow: [42.0, 38.0, 35.0, 31.0, 28.0, 0.0, 0.0],
+        bugfix_commits: 4,
+        total_commits_with_msg: 40,
+        pr_merge_times_hours: vec![2.0, 5.0],
+        per_repo,
+    };
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.len() < 8000, "prompt len {} >= 8000 after trimming", prompt.len());
+    // Should have fewer than 10 repos shown due to trimming
+    assert!(prompt.contains("showing top"), "should have truncation note");
+}
+
+#[test]
 fn prompt_has_prs_marker_on_repos() {
     let data = make_insights_data(3);
     let prompt = build_insights_prompt(&data);

@@ -273,26 +273,36 @@ pub fn build_insights_prompt(data: &InsightsData) -> String {
 
     out.push('\n');
 
-    // Per-repo breakdown (sorted by commits desc, capped at 10)
+    // Per-repo breakdown (sorted by commits desc, capped at 10, then trimmed to fit 8000 chars)
     let mut sorted_repos = data.per_repo.clone();
     sorted_repos.sort_by(|a, b| b.commits.cmp(&a.commits));
-    let (visible, truncated) = truncate_repos_for_prompt(&sorted_repos, 10);
 
-    out.push_str("Top repos:\n");
-    for r in visible {
-        let hours = r.estimated_minutes / 60;
-        let mins = r.estimated_minutes % 60;
-        let pr_marker = if r.has_prs { " [has PRs]" } else { "" };
-        out.push_str(&format!(
-            "- {}: {} commits, ~{}h {}m, {} branches{}\n",
-            r.repo_name, r.commits, hours, mins, r.branches_touched, pr_marker
-        ));
-    }
-    if truncated {
-        out.push_str(&format!(
-            "(showing top 10 of {} repos)\n",
-            data.total_repos
-        ));
+    let mut max_repos = 10;
+    loop {
+        let (visible, truncated) = truncate_repos_for_prompt(&sorted_repos, max_repos);
+        let mut repo_section = String::from("Top repos:\n");
+        for r in visible {
+            let hours = r.estimated_minutes / 60;
+            let mins = r.estimated_minutes % 60;
+            let pr_marker = if r.has_prs { " [has PRs]" } else { "" };
+            repo_section.push_str(&format!(
+                "- {}: {} commits, ~{}h {}m, {} branches{}\n",
+                r.repo_name, r.commits, hours, mins, r.branches_touched, pr_marker
+            ));
+        }
+        if truncated || max_repos < sorted_repos.len() {
+            repo_section.push_str(&format!(
+                "(showing top {} of {} repos)\n",
+                visible.len(),
+                data.total_repos
+            ));
+        }
+
+        if out.len() + repo_section.len() <= 8000 || max_repos <= 1 {
+            out.push_str(&repo_section);
+            break;
+        }
+        max_repos -= 1;
     }
 
     out
