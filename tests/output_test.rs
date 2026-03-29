@@ -1,5 +1,5 @@
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, is_tty, OutputFormat};
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
@@ -585,6 +585,15 @@ fn standup_includes_ai_sessions() {
     let summary = make_summary_with_ai_sessions();
     let output = render_standup(&summary);
     assert!(output.contains("Claude Code session"), "should show AI sessions");
+}
+
+#[test]
+fn is_tty_returns_bool() {
+    // Cannot assert specific TTY state in CI/test (stdout is a pipe),
+    // but function must compile, be callable, and return a bool.
+    let result: bool = is_tty();
+    // In test harness, stdout is piped → expect false
+    assert!(!result, "stdout should not be a TTY when running under cargo test");
 }
 
 #[test]

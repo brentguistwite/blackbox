@@ -4,6 +4,7 @@ use chrono::{Datelike, Duration, Local};
 use colored::*;
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::io::IsTerminal;
 
 #[derive(Clone, Debug, Default, clap::ValueEnum)]
 pub enum OutputFormat {
@@ -11,6 +12,12 @@ pub enum OutputFormat {
     Pretty,
     Json,
     Csv,
+}
+
+/// Returns true when stdout is an interactive terminal.
+/// Returns false when stdout is a pipe, file redirect, or non-terminal.
+pub fn is_tty() -> bool {
+    std::io::stdout().is_terminal()
 }
 
 // --- JSON serialization structs ---
