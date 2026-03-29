@@ -600,3 +600,86 @@ fn test_summarize_flag_accepted_standup() {
         stderr
     );
 }
+
+// --- US-018: CLI integration test: blackbox rhythm ---
+
+/// Helper: init config + open DB + insert sample commits, returns (config_dir, data_dir)
+fn setup_rhythm_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Init config
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    // Create DB with sample data
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+    let now = chrono::Utc::now();
+    for i in 0..5 {
+        let ts = now - chrono::Duration::hours(i);
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES (?1, 'commit', 'main', ?2, 'tester', 'test commit', ?3)",
+            rusqlite::params!["/tmp/repos/foo", format!("abc{i}"), ts.to_rfc3339()],
+        )
+        .unwrap();
+    }
+
+    (tmp, config_dir, data_dir)
+}
+
+#[test]
+fn test_rhythm_exits_zero_with_populated_db() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("rhythm")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Work Rhythm"));
+}
+
+#[test]
+fn test_rhythm_json_format_valid() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["rhythm", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "rhythm --format json should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("stdout should be valid JSON");
+    assert!(parsed.get("hour_histogram").is_some(), "JSON should contain hour_histogram");
+    assert!(parsed.get("dow_histogram").is_some(), "JSON should contain dow_histogram");
+}
+
+#[test]
+fn test_rhythm_days_zero_errors() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["rhythm", "--days", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("days must be >= 1"));
+}
