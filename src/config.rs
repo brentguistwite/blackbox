@@ -155,13 +155,27 @@ pub fn config_exists() -> bool {
         .unwrap_or(false)
 }
 
-pub fn load_config() -> anyhow::Result<Config> {
-    let path = config_dir()?.join("config.toml");
-    let content = std::fs::read_to_string(&path)
+fn load_config_from_path(path: &Path) -> anyhow::Result<Config> {
+    let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read config at {}", path.display()))?;
     let mut config: Config = toml::from_str(&content)
         .with_context(|| format!("Invalid config at {}", path.display()))?;
     config.expand_paths();
     config.validate()?;
     Ok(config)
+}
+
+pub fn load_config() -> anyhow::Result<Config> {
+    let path = config_dir()?.join("config.toml");
+    load_config_from_path(&path)
+}
+
+/// Re-reads config from XDG path. Returns Err on parse/validation failure.
+pub fn reload_config() -> anyhow::Result<Config> {
+    load_config()
+}
+
+/// Reload config from a specific path (for testing).
+pub fn reload_config_from(path: &Path) -> anyhow::Result<Config> {
+    load_config_from_path(path)
 }
