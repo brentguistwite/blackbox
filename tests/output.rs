@@ -22,6 +22,7 @@ fn base_summary(repos: Vec<RepoSummary>) -> ActivitySummary {
         total_repos: repos.len(),
         total_estimated_time: Duration::minutes(120),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         total_branch_switches: total_switches,
         repos,
     }

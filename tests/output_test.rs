@@ -638,6 +638,7 @@ fn make_today_summary_with_streak(streak_days: u32) -> ActivitySummary {
         total_estimated_time: Duration::minutes(45),
         total_ai_session_time: Duration::zero(),
         streak_days,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/proj".to_string(),
             repo_name: "proj".to_string(),
@@ -655,6 +656,7 @@ fn make_today_summary_with_streak(streak_days: u32) -> ActivitySummary {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     }
 }
@@ -817,6 +819,7 @@ fn make_focus_summary(label: &str, switches: &[(&str, &str, usize)]) -> Activity
         total_repos: switches.len(),
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
+        streak_days: 0,
         total_branch_switches: total,
         repos: switches.iter().map(|(path, name, bs)| RepoSummary {
             repo_path: path.to_string(),

@@ -94,6 +94,7 @@ fn run_focus_query(week: bool) -> anyhow::Result<()> {
         total_repos: repos.len(),
         total_estimated_time: chrono::Duration::zero(),
         total_ai_session_time: chrono::Duration::zero(),
+        streak_days: 0,
         total_branch_switches: repos.iter().map(|r| r.branch_switches).sum(),
         repos,
     };
