@@ -657,6 +657,40 @@ pub fn render_burst_stats(stats: &crate::query::BurstStats) -> String {
     }
 }
 
+/// Render concise focus/context-switch report.
+pub fn render_focus_report(summary: &ActivitySummary) -> String {
+    if summary.total_branch_switches == 0 {
+        return "No branch switches recorded. Clean focus day.".to_string();
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("=== Focus Report: {} ===", summary.period_label));
+
+    let switch_word = if summary.total_branch_switches == 1 { "switch" } else { "switches" };
+    let repo_word = if summary.total_repos == 1 { "repo" } else { "repos" };
+    let cost = summary.total_branch_switches as i64 * FOCUS_COST_PER_SWITCH_MINS;
+    lines.push(format!(
+        "{} branch {} across {} {} (~{}m focus cost)",
+        summary.total_branch_switches, switch_word, summary.total_repos, repo_word, cost,
+    ));
+    lines.push(String::new());
+
+    let mut repo_switches: Vec<(&str, usize)> = summary
+        .repos
+        .iter()
+        .filter(|r| r.branch_switches > 0)
+        .map(|r| (r.repo_name.as_str(), r.branch_switches))
+        .collect();
+    repo_switches.sort_by(|a, b| b.1.cmp(&a.1));
+
+    for (name, count) in repo_switches {
+        let w = if count == 1 { "switch" } else { "switches" };
+        lines.push(format!("{}: {} {}", name, count, w));
+    }
+
+    lines.join("\n")
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
