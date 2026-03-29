@@ -58,14 +58,55 @@ pub fn extract_commit_themes(repos: &[query::RepoSummary]) -> Vec<String> {
         .collect()
 }
 
-// --- US-05: PR summary compilation (stub — full impl in US-05) ---
+// --- US-05: PR summary compilation ---
+
+fn review_action_priority(action: &str) -> u8 {
+    match action {
+        "APPROVED" => 3,
+        "CHANGES_REQUESTED" => 2,
+        "COMMENTED" => 1,
+        _ => 0,
+    }
+}
 
 /// Compile deduplicated PR summary from repo data.
-/// Full implementation in US-05; this stub returns empty PrSummary.
-pub fn compile_pr_summary(_repos: &[query::RepoSummary]) -> PrSummary {
+/// Authored PRs from `pr_info`, reviewed PRs from `reviews`.
+/// Deduplicates reviewed PRs by (repo, pr_number), keeping highest-priority action.
+pub fn compile_pr_summary(repos: &[query::RepoSummary]) -> PrSummary {
+    let mut authored_prs = Vec::new();
+    let mut reviewed_prs = Vec::new();
+
+    for repo in repos {
+        // Authored PRs from pr_info
+        if let Some(ref prs) = repo.pr_info {
+            for pr in prs {
+                authored_prs.push((repo.repo_name.clone(), pr.number, pr.title.clone()));
+            }
+        }
+
+        // Reviewed PRs — dedup by pr_number within this repo
+        let mut best: HashMap<i64, (String, String)> = HashMap::new();
+        for rv in &repo.reviews {
+            let entry = best.entry(rv.pr_number).or_insert_with(|| {
+                (rv.pr_title.clone(), rv.action.clone())
+            });
+            if review_action_priority(&rv.action) > review_action_priority(&entry.1) {
+                entry.1 = rv.action.clone();
+            }
+        }
+        let mut repo_reviews: Vec<(i64, String, String)> = best
+            .into_iter()
+            .map(|(num, (title, action))| (num, title, action))
+            .collect();
+        repo_reviews.sort_by_key(|(num, _, _)| *num);
+        for (num, title, action) in repo_reviews {
+            reviewed_prs.push((repo.repo_name.clone(), num as u64, title, action));
+        }
+    }
+
     PrSummary {
-        authored_prs: vec![],
-        reviewed_prs: vec![],
+        authored_prs,
+        reviewed_prs,
     }
 }
 
@@ -707,6 +748,221 @@ mod tests {
         };
         let themes = extract_commit_themes(&[repo]);
         assert!(themes.len() <= 20, "expected <=20 themes, got {}", themes.len());
+    }
+
+    // --- US-05: PR summary compilation tests ---
+
+    #[test]
+    fn pr_summary_empty_repos() {
+        let summary = compile_pr_summary(&[]);
+        assert!(summary.authored_prs.is_empty());
+        assert!(summary.reviewed_prs.is_empty());
+    }
+
+    #[test]
+    fn pr_summary_no_pr_info_no_reviews() {
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "r".to_string(),
+            commits: 5,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo]);
+        assert!(summary.authored_prs.is_empty());
+        assert!(summary.reviewed_prs.is_empty());
+    }
+
+    #[test]
+    fn pr_summary_collects_authored_prs() {
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "myrepo".to_string(),
+            commits: 5,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: Some(vec![
+                crate::enrichment::PrInfo {
+                    number: 10,
+                    title: "First PR".to_string(),
+                    state: "MERGED".to_string(),
+                    head_ref_name: "feat/a".to_string(),
+                    created_at: None,
+                    merged_at: None,
+                },
+                crate::enrichment::PrInfo {
+                    number: 20,
+                    title: "Second PR".to_string(),
+                    state: "OPEN".to_string(),
+                    head_ref_name: "feat/b".to_string(),
+                    created_at: None,
+                    merged_at: None,
+                },
+            ]),
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo]);
+        assert_eq!(summary.authored_prs.len(), 2);
+        assert_eq!(summary.authored_prs[0], ("myrepo".to_string(), 10, "First PR".to_string()));
+        assert_eq!(summary.authored_prs[1], ("myrepo".to_string(), 20, "Second PR".to_string()));
+    }
+
+    #[test]
+    fn pr_summary_collects_reviews() {
+        let now = Utc::now();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "myrepo".to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![ReviewInfo {
+                pr_number: 42,
+                pr_title: "Some PR".to_string(),
+                action: "APPROVED".to_string(),
+                reviewed_at: now,
+            }],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo]);
+        assert_eq!(summary.reviewed_prs.len(), 1);
+        assert_eq!(
+            summary.reviewed_prs[0],
+            ("myrepo".to_string(), 42, "Some PR".to_string(), "APPROVED".to_string())
+        );
+    }
+
+    #[test]
+    fn pr_summary_dedup_reviews_keeps_highest_priority() {
+        let now = Utc::now();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "myrepo".to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![
+                ReviewInfo {
+                    pr_number: 42,
+                    pr_title: "Some PR".to_string(),
+                    action: "COMMENTED".to_string(),
+                    reviewed_at: now,
+                },
+                ReviewInfo {
+                    pr_number: 42,
+                    pr_title: "Some PR".to_string(),
+                    action: "APPROVED".to_string(),
+                    reviewed_at: now,
+                },
+                ReviewInfo {
+                    pr_number: 42,
+                    pr_title: "Some PR".to_string(),
+                    action: "CHANGES_REQUESTED".to_string(),
+                    reviewed_at: now,
+                },
+            ],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo]);
+        // Should dedup to 1 entry with APPROVED (highest priority)
+        assert_eq!(summary.reviewed_prs.len(), 1);
+        assert_eq!(summary.reviewed_prs[0].3, "APPROVED");
+    }
+
+    #[test]
+    fn pr_summary_dedup_reviews_per_repo() {
+        let now = Utc::now();
+        // Same pr_number in different repos should NOT be deduped
+        let repo1 = RepoSummary {
+            repo_path: "/r1".to_string(),
+            repo_name: "repo1".to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![ReviewInfo {
+                pr_number: 42,
+                pr_title: "PR in repo1".to_string(),
+                action: "COMMENTED".to_string(),
+                reviewed_at: now,
+            }],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let repo2 = RepoSummary {
+            repo_path: "/r2".to_string(),
+            repo_name: "repo2".to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![ReviewInfo {
+                pr_number: 42,
+                pr_title: "PR in repo2".to_string(),
+                action: "APPROVED".to_string(),
+                reviewed_at: now,
+            }],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo1, repo2]);
+        assert_eq!(summary.reviewed_prs.len(), 2);
+    }
+
+    #[test]
+    fn pr_summary_dedup_changes_requested_over_commented() {
+        let now = Utc::now();
+        let repo = RepoSummary {
+            repo_path: "/r".to_string(),
+            repo_name: "myrepo".to_string(),
+            commits: 0,
+            branches: vec![],
+            estimated_time: Duration::zero(),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![
+                ReviewInfo {
+                    pr_number: 99,
+                    pr_title: "Bug fix".to_string(),
+                    action: "COMMENTED".to_string(),
+                    reviewed_at: now,
+                },
+                ReviewInfo {
+                    pr_number: 99,
+                    pr_title: "Bug fix".to_string(),
+                    action: "CHANGES_REQUESTED".to_string(),
+                    reviewed_at: now,
+                },
+            ],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        };
+        let summary = compile_pr_summary(&[repo]);
+        assert_eq!(summary.reviewed_prs.len(), 1);
+        assert_eq!(summary.reviewed_prs[0].3, "CHANGES_REQUESTED");
     }
 
     #[test]
