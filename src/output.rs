@@ -846,6 +846,69 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     lines.join("\n")
 }
 
+// --- Churn report ---
+
+/// Render churn reports as pretty terminal output.
+/// Color-codes churn rate: green < 10%, yellow 10-25%, red > 25%.
+pub fn render_churn_pretty(reports: &[crate::churn::ChurnReport]) -> String {
+    if reports.is_empty() {
+        return "No churn data yet.".dimmed().to_string();
+    }
+
+    let window = reports[0].window_days;
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(
+        format!("=== Code Churn (last {} days) ===", window)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
+    lines.push(String::new());
+
+    for report in reports {
+        let repo_name = report
+            .repo_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&report.repo_path);
+
+        let rate_str = format!("{:.1}%", report.churn_rate_pct);
+        let colored_rate = if report.churn_rate_pct < 10.0 {
+            rate_str.green()
+        } else if report.churn_rate_pct <= 25.0 {
+            rate_str.yellow()
+        } else {
+            rate_str.red()
+        };
+
+        lines.push(format!(
+            "  {} | {} written | {} churned | {}",
+            repo_name.bold(),
+            report.total_lines_written,
+            report.churned_lines,
+            colored_rate,
+        ));
+    }
+
+    // Global summary
+    let total_written: u64 = reports.iter().map(|r| r.total_lines_written).sum();
+    let total_churned: u64 = reports.iter().map(|r| r.churned_lines).sum();
+    let total_pct = if total_written == 0 {
+        0.0
+    } else {
+        total_churned as f64 / total_written as f64 * 100.0
+    };
+
+    lines.push(String::new());
+    lines.push(format!(
+        "Total: {} lines written, {} churned ({:.1}%)",
+        total_written, total_churned, total_pct,
+    ));
+
+    lines.join("\n")
+}
+
 // --- Rhythm report ---
 
 /// Aggregated rhythm analysis report for a time window.
