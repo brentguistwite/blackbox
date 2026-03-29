@@ -122,9 +122,8 @@ pub struct CsvRow {
     pub pr_title: String,
 }
 
-/// Render ActivitySummary as pretty-printed JSON string.
-pub fn render_json(summary: &ActivitySummary) -> String {
-    let json_summary = JsonSummary {
+fn summary_to_json(summary: &ActivitySummary) -> JsonSummary {
+    JsonSummary {
         period_label: summary.period_label.clone(),
         total_commits: summary.total_commits,
         total_reviews: summary.total_reviews,
@@ -179,8 +178,46 @@ pub fn render_json(summary: &ActivitySummary) -> String {
                     .collect(),
             })
             .collect(),
+    }
+}
+
+/// Render ActivitySummary as pretty-printed JSON string.
+pub fn render_json(summary: &ActivitySummary) -> String {
+    serde_json::to_string_pretty(&summary_to_json(summary)).expect("JSON serialization should not fail")
+}
+
+// --- Digest JSON/CSV ---
+
+#[derive(Serialize)]
+struct JsonDigest {
+    week_start: String,
+    week_end: String,
+    #[serde(flatten)]
+    current: JsonSummary,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_week: Option<JsonSummary>,
+}
+
+/// Render WeeklyDigest as JSON with week_start/week_end and optional previous_week.
+pub fn render_digest_json(digest: &WeeklyDigest) -> String {
+    let json = JsonDigest {
+        week_start: digest.week_start.to_rfc3339(),
+        week_end: digest.week_end.to_rfc3339(),
+        current: summary_to_json(&digest.current),
+        previous_week: digest.previous.as_ref().map(summary_to_json),
     };
-    serde_json::to_string_pretty(&json_summary).expect("JSON serialization should not fail")
+    serde_json::to_string_pretty(&json).expect("JSON serialization should not fail")
+}
+
+/// Render WeeklyDigest as CSV (same schema as render_csv, period = week date range).
+pub fn render_digest_csv(digest: &WeeklyDigest) -> String {
+    let start_local = digest.week_start.with_timezone(&Local);
+    let end_local = digest.week_end.with_timezone(&Local);
+    let period = format!("{} - {}", start_local.format("%b %-d"), end_local.format("%b %-d, %Y"));
+
+    let mut patched = digest.current.clone();
+    patched.period_label = period;
+    render_csv(&patched)
 }
 
 /// Render ActivitySummary as CSV string with header row.
