@@ -29,7 +29,7 @@ blackbox today
 | `setup` | Full interactive onboarding wizard |
 | `start` | Start background daemon |
 | `stop` | Stop running daemon |
-| `status` | Show daemon status (running/stopped) |
+| `status` | Show daemon status: health, PID, uptime, last poll, repos watched, DB size, events today (`--format pretty\|json`) |
 | `today` | Show today's git activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
 | `week` | Show this week's activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
 | `month` | Show this month's activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
@@ -186,6 +186,29 @@ Configure the default window in `~/.config/blackbox/config.toml`:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `churn_window_days` | `14` | Days to look back for churn detection |
+
+## Daemon Status
+
+`blackbox status` answers "is it working?" at a glance with a health indicator, process info, and activity summary:
+
+```
+✓ Running
+  PID:           12345
+  Uptime:        2h 15m
+  Last poll:     3 minutes ago
+  Repos watched: 8
+  DB size:       156.3 KB
+  Events today:  42
+```
+
+Health indicator: **Green** (✓) = daemon running, polled within 5 min; **Yellow** (⚠) = running but stale (5–30 min since last poll); **Red** (✗) = stopped or poll older than 30 min.
+
+Works without a running daemon — shows last-known state from the database. Works without a config file or database (fresh install shows `Stopped` with empty fields).
+
+```
+blackbox status                # pretty output (default)
+blackbox status --format json  # machine-readable JSON
+```
 
 ## License
 
