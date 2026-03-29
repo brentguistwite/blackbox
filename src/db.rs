@@ -129,6 +129,19 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
         M::up("CREATE TABLE IF NOT EXISTS daemon_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);"),
         // os-notifications US-004: notification rate-limiting log
         M::up("CREATE TABLE IF NOT EXISTS notification_log (date TEXT NOT NULL, notification_type TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (date, notification_type));"),
+        // US-016-03: commit message quality scores
+        M::up(
+            "CREATE TABLE IF NOT EXISTS commit_quality (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                commit_hash TEXT NOT NULL,
+                score INTEGER NOT NULL,
+                is_vague INTEGER NOT NULL DEFAULT 0,
+                scored_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_quality_repo_hash
+                ON commit_quality(repo_path, commit_hash);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -483,6 +496,25 @@ pub fn record_notification_sent(
         rusqlite::params![date, notification_type, sent_at],
     )?;
     Ok(())
+}
+
+/// Insert a commit quality score. Returns Ok(false) if duplicate (already scored).
+pub fn insert_commit_quality(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: &str,
+    score: u8,
+    is_vague: bool,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO commit_quality (repo_path, commit_hash, score, is_vague)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![repo_path, commit_hash, score as i64, is_vague as i64],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Count git_activity events from today (UTC midnight onwards).
