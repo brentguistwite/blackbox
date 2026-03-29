@@ -181,6 +181,22 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        Commands::Prs { days, repo, format } => {
+            if days == 0 {
+                anyhow::bail!("--days must be >= 1");
+            }
+            let data_dir = blackbox::config::data_dir()?;
+            let db_path = data_dir.join("blackbox.db");
+            let conn = blackbox::db::open_db(&db_path)?;
+            let to = chrono::Utc::now();
+            let from = to - chrono::Duration::days(days as i64);
+            let stats = blackbox::query::query_pr_cycle_stats(&conn, repo.as_deref(), from, to)?;
+            match format {
+                OutputFormat::Pretty => println!("{}", blackbox::output::render_pr_cycle_stats(&stats)),
+                OutputFormat::Json => println!("{}", blackbox::output::render_pr_cycle_json(&stats)),
+                OutputFormat::Csv => anyhow::bail!("--format csv not supported for prs command"),
+            }
+        }
         Commands::Standup { week, json, csv, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);

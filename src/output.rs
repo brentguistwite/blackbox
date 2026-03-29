@@ -939,6 +939,10 @@ pub fn render_pr_cycle_stats(stats: &crate::query::PrCycleStats) -> String {
     lines.join("\n")
 }
 
+pub fn render_pr_cycle_json(stats: &crate::query::PrCycleStats) -> String {
+    serde_json::to_string_pretty(stats).unwrap_or_else(|_| "{}".to_string())
+}
+
 // --- Rhythm report ---
 
 /// Aggregated rhythm analysis report for a time window.
