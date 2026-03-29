@@ -62,7 +62,7 @@
         "Migration is additive \u2014 existing DB opens without data loss",
         "Integration test: insert activity, open DB, verify quality row present"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-04",
