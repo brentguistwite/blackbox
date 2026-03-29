@@ -258,6 +258,7 @@ pub struct RepoSummary {
     pub reviews: Vec<ReviewInfo>,
     pub ai_sessions: Vec<AiSessionInfo>,
     pub presence_intervals: Vec<TimeInterval>,
+    pub branch_switches: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +270,7 @@ pub struct ActivitySummary {
     pub total_estimated_time: Duration,
     pub total_ai_session_time: Duration,
     pub streak_days: u32,
+    pub total_branch_switches: usize,
     pub repos: Vec<RepoSummary>,
 }
 
@@ -575,6 +577,14 @@ pub fn query_activity(
     // Query presence intervals once for all repos
     let presence_map = query_presence(conn, from, to, session_gap_minutes)?;
 
+    // Query branch switches, filter noise, count per repo
+    let all_switches = query_branch_switches(conn, from, to)?;
+    let filtered_switches = filter_noise_switches(&all_switches, 120);
+    let mut switch_counts: BTreeMap<String, usize> = BTreeMap::new();
+    for sw in &filtered_switches {
+        *switch_counts.entry(sw.repo_path.clone()).or_default() += 1;
+    }
+
     // Collect all repo paths. Filter out AI sessions from user's home dir.
     let home_dir = etcetera::home_dir().ok().map(|h| h.to_string_lossy().to_string());
     let not_home = |k: &&String| home_dir.as_ref().is_none_or(|h| k.as_str() != h);
@@ -624,6 +634,8 @@ pub fn query_activity(
             &events, &ai_intervals, &presence, session_gap_minutes, first_commit_minutes,
         );
 
+        let branch_switches = switch_counts.get(&repo_path).copied().unwrap_or(0);
+
         repos.push(RepoSummary {
             repo_path,
             repo_name,
@@ -635,6 +647,7 @@ pub fn query_activity(
             reviews,
             ai_sessions,
             presence_intervals: presence,
+            branch_switches,
         });
     }
 

@@ -39,6 +39,7 @@ fn render_summary_with_repos() {
         total_estimated_time: Duration::minutes(90),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -72,6 +73,7 @@ fn render_summary_with_repos() {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     };
 
@@ -99,6 +101,7 @@ fn render_empty_summary() {
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![],
     };
 
@@ -115,6 +118,7 @@ fn make_test_summary() -> ActivitySummary {
         total_estimated_time: Duration::minutes(45),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -141,6 +145,7 @@ fn make_test_summary() -> ActivitySummary {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     }
 }
@@ -154,6 +159,7 @@ fn make_empty_summary() -> ActivitySummary {
         total_estimated_time: Duration::zero(),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![],
     }
 }
@@ -270,6 +276,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -306,6 +313,7 @@ fn make_summary_with_reviews() -> ActivitySummary {
             ],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     }
 }
@@ -375,6 +383,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::minutes(62) + Duration::minutes(0), // ended session only
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/home/user/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -407,6 +416,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
                 },
             ],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     }
 }
@@ -502,6 +512,7 @@ fn standup_groups_commits_by_branch() {
         total_estimated_time: Duration::minutes(60),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/myproject".to_string(),
             repo_name: "myproject".to_string(),
@@ -517,6 +528,7 @@ fn standup_groups_commits_by_branch() {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     };
     let output = render_standup(&summary);
@@ -563,6 +575,7 @@ fn standup_includes_pr_info() {
         total_estimated_time: Duration::minutes(30),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/proj".to_string(),
             repo_name: "proj".to_string(),
@@ -574,6 +587,7 @@ fn standup_includes_pr_info() {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     };
     let output = render_standup(&summary);
@@ -772,6 +786,7 @@ fn standup_week_header() {
         total_estimated_time: Duration::minutes(10),
         total_ai_session_time: Duration::zero(),
         streak_days: 0,
+        total_branch_switches: 0,
         repos: vec![RepoSummary {
             repo_path: "/code/p".to_string(),
             repo_name: "p".to_string(),
@@ -783,6 +798,7 @@ fn standup_week_header() {
             reviews: vec![],
             ai_sessions: vec![],
             presence_intervals: vec![],
+            branch_switches: 0,
         }],
     };
     let output = render_standup(&summary);

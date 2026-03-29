@@ -51,6 +51,7 @@ fn run_query(
         total_estimated_time: total_time,
         total_ai_session_time,
         streak_days,
+        total_branch_switches: repos.iter().map(|r| r.branch_switches).sum(),
         repos,
     };
 
@@ -218,6 +219,7 @@ fn main() -> anyhow::Result<()> {
                 total_estimated_time: total_time,
                 total_ai_session_time,
                 streak_days: 0,
+                total_branch_switches: repos.iter().map(|r| r.branch_switches).sum(),
                 repos,
             };
             if summarize {
