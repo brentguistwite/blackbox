@@ -224,6 +224,29 @@ pub fn insert_activity(
     Ok(rows > 0)
 }
 
+/// Insert a churn event. Returns true if inserted, false if duplicate.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_churn_event(
+    conn: &Connection,
+    repo_path: &str,
+    original_commit_hash: &str,
+    churn_commit_hash: &str,
+    file_path: &str,
+    lines_churned: i64,
+    churn_window_days: i64,
+    detected_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO churn_events (repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
 /// Per-file line stats from a single commit.
 #[derive(Debug, Clone)]
 pub struct CommitLineStat {
