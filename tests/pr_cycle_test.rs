@@ -141,14 +141,15 @@ fn upsert_pr_snapshot_replaces_on_same_repo_pr() {
         .unwrap();
     assert_eq!(count, 1, "should be 1 row after replace");
 
-    let state: String = conn
+    let (state, merged_at): (String, Option<String>) = conn
         .query_row(
-            "SELECT state FROM pr_snapshots WHERE repo_path = '/repo/test' AND pr_number = 1",
+            "SELECT state, merged_at FROM pr_snapshots WHERE repo_path = '/repo/test' AND pr_number = 1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .unwrap();
     assert_eq!(state, "MERGED");
+    assert_eq!(merged_at.as_deref(), Some("2025-01-15T14:00:00Z"));
 }
 
 #[test]
