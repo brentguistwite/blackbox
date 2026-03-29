@@ -127,6 +127,8 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
         ),
         // richer-status US-001: daemon_state key-value table for heartbeat data
         M::up("CREATE TABLE IF NOT EXISTS daemon_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);"),
+        // os-notifications US-004: notification rate-limiting log
+        M::up("CREATE TABLE IF NOT EXISTS notification_log (date TEXT NOT NULL, notification_type TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (date, notification_type));"),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -430,6 +432,34 @@ pub fn get_daemon_state(conn: &Connection, key: &str) -> anyhow::Result<Option<S
         Some(row) => Ok(Some(row.get(0)?)),
         None => Ok(None),
     }
+}
+
+/// Check if a notification was already sent for a given date and type.
+pub fn notification_was_sent(
+    conn: &Connection,
+    date: &str,
+    notification_type: &str,
+) -> anyhow::Result<bool> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM notification_log WHERE date = ?1 AND notification_type = ?2)",
+        rusqlite::params![date, notification_type],
+        |row| row.get(0),
+    )?;
+    Ok(exists)
+}
+
+/// Record that a notification was sent. Idempotent via INSERT OR IGNORE.
+pub fn record_notification_sent(
+    conn: &Connection,
+    date: &str,
+    notification_type: &str,
+) -> anyhow::Result<()> {
+    let sent_at = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT OR IGNORE INTO notification_log (date, notification_type, sent_at) VALUES (?1, ?2, ?3)",
+        rusqlite::params![date, notification_type, sent_at],
+    )?;
+    Ok(())
 }
 
 /// Count git_activity events from today (UTC midnight onwards).

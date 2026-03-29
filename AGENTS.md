@@ -42,13 +42,14 @@ src/
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
 ├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management, DaemonStatus/HealthIndicator, get_daemon_status)
-├── db.rs             # SQLite with WAL, migrations, insert/query functions, pr_snapshots upsert, daemon_state kv store, count_events_today
+├── db.rs             # SQLite with WAL, migrations, insert/query functions, pr_snapshots upsert, daemon_state kv store, count_events_today, notification_log
 ├── doctor.rs         # Health checks and diagnostics
 ├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation, PR snapshot collection)
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
 ├── heatmap.rs        # GitHub-style contribution heatmap rendering
 ├── llm.rs            # LLM integration for --summarize flag
+├── notifications.rs  # OS desktop notifications (notify-rust, OnceLock availability probe)
 ├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv, PR cycle time output
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges, PrCycleStats
@@ -64,7 +65,9 @@ src/
 tests/                # Integration tests (one file per module)
   churn_test.rs       # Churn detection e2e tests
   daemon_test.rs      # DaemonStatus, get_daemon_status, health indicator tests
-  db_test.rs          # daemon_state kv store, count_events_today tests
+  config_test.rs      # Notification config round-trip tests
+  db_test.rs          # daemon_state kv store, count_events_today, notification_log tests
+  query_test.rs       # daily_summary_for_notification tests
 ```
 
 XDG config: `~/.config/blackbox/config.toml`
@@ -99,4 +102,4 @@ XDG data: `~/.local/share/blackbox/` (DB, logs)
 - When adding struct fields, update ALL test constructions (compiler catches this)
 
 ## Key Dependencies
-clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, reqwest 0.12 (blocking+json), serde+toml, daemonize+nix (daemon/signals), signal-hook 0.3 (SIGHUP config reload), etcetera (XDG), walkdir (fs traversal)
+clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, notify-rust 4 (OS desktop notifications), reqwest 0.12 (blocking+json), serde+toml, daemonize+nix (daemon/signals), signal-hook 0.3 (SIGHUP config reload), etcetera (XDG), walkdir (fs traversal)

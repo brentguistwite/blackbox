@@ -899,3 +899,45 @@ fn test_insert_churn_event_dedup() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn test_notification_log_record_and_check() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Not sent yet
+    let sent = db::notification_was_sent(&conn, "2026-03-29", "daily_summary").unwrap();
+    assert!(!sent);
+
+    // Record it
+    db::record_notification_sent(&conn, "2026-03-29", "daily_summary").unwrap();
+
+    // Now it's sent
+    let sent = db::notification_was_sent(&conn, "2026-03-29", "daily_summary").unwrap();
+    assert!(sent);
+
+    // Different date still not sent
+    let sent = db::notification_was_sent(&conn, "2026-03-30", "daily_summary").unwrap();
+    assert!(!sent);
+
+    // Different type still not sent
+    let sent = db::notification_was_sent(&conn, "2026-03-29", "weekly_summary").unwrap();
+    assert!(!sent);
+}
+
+#[test]
+fn test_notification_log_idempotent() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Record same date+type twice — no error
+    db::record_notification_sent(&conn, "2026-03-29", "daily_summary").unwrap();
+    db::record_notification_sent(&conn, "2026-03-29", "daily_summary").unwrap();
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM notification_log", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
