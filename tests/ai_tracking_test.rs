@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector};
+use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector};
 use blackbox::db;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -235,4 +235,132 @@ fn test_codex_detector_missing_sessions_dir_no_error() {
 fn test_codex_detector_tool_name() {
     let detector = CodexDetector::default();
     assert_eq!(detector.tool_name(), "codex");
+}
+
+// --- US-013: Copilot detector parsing tests ---
+
+/// Helper: create a copilot session dir with workspace.yaml and optional events.jsonl
+fn create_copilot_session(
+    base: &std::path::Path,
+    uuid: &str,
+    yaml_content: &str,
+    events_lines: Option<&[&str]>,
+) -> std::path::PathBuf {
+    let dir = base.join(uuid);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace.yaml"), yaml_content).unwrap();
+    if let Some(lines) = events_lines {
+        std::fs::write(dir.join("events.jsonl"), lines.join("\n")).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn test_copilot_detector_valid_session_inserts_row() {
+    let (_tmp, conn) = setup_db();
+    let state_tmp = TempDir::new().unwrap();
+    let state_dir = state_tmp.path().to_path_buf();
+
+    let uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    create_copilot_session(
+        &state_dir,
+        uuid,
+        "cwd: /tmp/test-repo\n",
+        Some(&[
+            r#"{"type":"input"}"#,
+            r#"{"type":"output"}"#,
+            r#"{"type":"input"}"#,
+            r#"{"type":"output"}"#,
+            r#"{"type":"input"}"#,
+        ]),
+    );
+
+    let detector = CopilotDetector::with_session_state_dir(state_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let (tool, repo, sid, turns): (String, String, String, i64) = conn
+        .query_row(
+            "SELECT tool, repo_path, session_id, turns FROM ai_sessions LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap();
+
+    assert_eq!(tool, "copilot-cli");
+    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(sid, uuid);
+    assert_eq!(turns, 5);
+}
+
+#[test]
+fn test_copilot_detector_missing_cwd_skipped() {
+    let (_tmp, conn) = setup_db();
+    let state_tmp = TempDir::new().unwrap();
+    let state_dir = state_tmp.path().to_path_buf();
+
+    // workspace.yaml without cwd field
+    create_copilot_session(
+        &state_dir,
+        "no-cwd-uuid",
+        "some_other_field: value\n",
+        Some(&[r#"{"type":"input"}"#]),
+    );
+
+    let detector = CopilotDetector::with_session_state_dir(state_dir);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "session without cwd should be skipped");
+}
+
+#[test]
+fn test_copilot_detector_no_events_jsonl_turns_none() {
+    let (_tmp, conn) = setup_db();
+    let state_tmp = TempDir::new().unwrap();
+    let state_dir = state_tmp.path().to_path_buf();
+
+    let uuid = "no-events-uuid-1234";
+    create_copilot_session(
+        &state_dir,
+        uuid,
+        "cwd: /tmp/test-repo\n",
+        None, // no events.jsonl
+    );
+
+    let detector = CopilotDetector::with_session_state_dir(state_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    // Row should exist but turns should be NULL
+    let (tool, turns_null): (String, bool) = conn
+        .query_row(
+            "SELECT tool, turns IS NULL FROM ai_sessions WHERE session_id = ?1",
+            [uuid],
+            |r| Ok((r.get(0)?, r.get::<_, bool>(1)?)),
+        )
+        .unwrap();
+
+    assert_eq!(tool, "copilot-cli");
+    assert!(turns_null, "turns should be NULL when no events.jsonl exists");
+}
+
+#[test]
+fn test_copilot_detector_missing_state_dir_no_error() {
+    let (_tmp, conn) = setup_db();
+    let nonexistent = PathBuf::from("/tmp/definitely-does-not-exist-copilot-state");
+
+    let detector = CopilotDetector::with_session_state_dir(nonexistent);
+    detector.poll(&conn, &[]); // should not panic
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_copilot_detector_tool_name() {
+    let detector = CopilotDetector::default();
+    assert_eq!(detector.tool_name(), "copilot-cli");
 }
