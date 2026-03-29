@@ -122,6 +122,12 @@ pub enum Commands {
         /// Show this week's activity instead of today
         #[arg(long)]
         week: bool,
+        /// Emit JSON output (shorthand for --format json)
+        #[arg(long, conflicts_with = "csv")]
+        json: bool,
+        /// Emit CSV output (shorthand for --format csv)
+        #[arg(long, conflicts_with = "json")]
+        csv: bool,
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,

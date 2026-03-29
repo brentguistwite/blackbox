@@ -461,7 +461,8 @@ fn test_standup_with_config_runs() {
 
     assert!(output.status.success(), "standup should succeed with config");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity") || stdout.contains("**Today"), "should show standup output, got: {}", stdout);
+    // In piped mode (test), TTY auto-detection selects JSON output
+    assert!(stdout.contains("No activity") || stdout.contains("**Today") || stdout.contains("period_label"), "should show standup output, got: {}", stdout);
 }
 
 #[test]
@@ -492,7 +493,8 @@ fn test_standup_week_flag() {
 
     assert!(output.status.success(), "standup --week should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("No activity") || stdout.contains("**This Week"), "should show week output, got: {}", stdout);
+    // In piped mode (test), TTY auto-detection selects JSON output
+    assert!(stdout.contains("No activity") || stdout.contains("**This Week") || stdout.contains("period_label"), "should show week output, got: {}", stdout);
 }
 
 // --- US-011: --summarize flag ---
@@ -838,6 +840,76 @@ fn test_rhythm_pretty_no_ansi_in_pipe() {
         "piped rhythm pretty output should contain no ANSI escape sequences, got: {}",
         stdout
     );
+}
+
+// --- US-005: Standup --json / --csv ---
+
+#[test]
+fn test_standup_json_flag_outputs_valid_json() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["standup", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "standup --json should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("standup --json stdout should be valid JSON");
+    assert!(parsed.get("period_label").is_some());
+}
+
+#[test]
+fn test_standup_csv_flag_outputs_csv_header() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["standup", "--csv"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "standup --csv should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("period,repo_name,event_type"), "should contain CSV header");
+}
+
+#[test]
+fn test_standup_json_and_csv_conflict() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["standup", "--json", "--csv"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_standup_week_json_flag() {
+    let (_tmp, config_dir, data_dir) = setup_empty_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["standup", "--week", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "standup --week --json should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("standup --week --json should be valid JSON");
+    assert_eq!(parsed["period_label"], "This Week");
 }
 
 #[test]

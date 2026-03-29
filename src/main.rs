@@ -170,7 +170,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Commands::Standup { week, summarize } => {
+        Commands::Standup { week, json, csv, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
             if week {
@@ -180,6 +180,7 @@ fn main() -> anyhow::Result<()> {
                 label = "Today";
                 range_fn = blackbox::query::today_range;
             }
+            let fmt = blackbox::output::resolve_format(OutputFormat::Pretty, json, csv, blackbox::output::is_tty());
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;
             let db_path = data_dir.join("blackbox.db");
@@ -212,7 +213,11 @@ fn main() -> anyhow::Result<()> {
                 let json = blackbox::output::render_json(&summary);
                 blackbox::llm::summarize_activity(&llm_config, &json)?;
             } else {
-                println!("{}", blackbox::output::render_standup(&summary));
+                match fmt {
+                    OutputFormat::Pretty => println!("{}", blackbox::output::render_standup(&summary)),
+                    OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
+                    OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
+                }
             }
         }
     }
