@@ -380,6 +380,26 @@ fn test_notification_config_roundtrip() {
     assert_eq!(deserialized.notification_time, "08:00");
 }
 
+// --- US-010: notifications disabled by default integration ---
+
+#[test]
+fn test_notification_defaults_roundtrip_from_absent_fields() {
+    // Start with TOML that has no notification fields
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+        poll_interval_secs = 60
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.notifications_enabled);
+    assert_eq!(cfg.notification_time, "17:00");
+
+    // Serialize and deserialize — defaults should survive round-trip
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let roundtripped: Config = toml::from_str(&serialized).unwrap();
+    assert!(!roundtripped.notifications_enabled);
+    assert_eq!(roundtripped.notification_time, "17:00");
+}
+
 // --- US-008: churn_window_days ---
 
 #[test]
