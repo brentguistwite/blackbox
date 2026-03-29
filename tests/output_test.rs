@@ -1,5 +1,6 @@
+use blackbox::churn::ChurnReport;
 use blackbox::query::{ActivityEvent, ActivitySummary, AiSessionInfo, RepoSummary, ReviewInfo};
-use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_focus_report, is_tty, resolve_format, OutputFormat};
+use blackbox::output::{format_duration, render_summary_to_string, render_json, render_csv, render_standup, render_focus_report, render_churn_pretty, render_churn_json, render_churn_csv, is_tty, resolve_format, OutputFormat};
 use blackbox::enrichment::PrInfo;
 use chrono::{Duration, Utc};
 
@@ -776,6 +777,136 @@ fn resolve_format_non_tty_csv_flag() {
 fn resolve_format_tty_csv_flag() {
     // TTY + --csv → Csv
     assert!(matches!(resolve_format(OutputFormat::Pretty, false, true, true), OutputFormat::Csv));
+}
+
+// --- Churn pretty output tests (US-010) ---
+
+fn make_churn_report(repo_path: &str, written: u64, churned: u64, window: u32) -> ChurnReport {
+    let rate = if written == 0 {
+        0.0
+    } else {
+        churned as f64 / written as f64 * 100.0
+    };
+    ChurnReport {
+        repo_path: repo_path.to_string(),
+        window_days: window,
+        total_lines_written: written,
+        churned_lines: churned,
+        churn_rate_pct: rate,
+        commit_count: 5,
+        churn_event_count: 2,
+    }
+}
+
+#[test]
+fn render_churn_pretty_empty_reports() {
+    colored::control::set_override(false);
+    let output = render_churn_pretty(&[]);
+    assert!(output.contains("No churn data yet."), "empty reports should show no data message");
+}
+
+#[test]
+fn render_churn_pretty_header_contains_window_days() {
+    colored::control::set_override(false);
+    let reports = vec![make_churn_report("/home/user/myproject", 100, 5, 14)];
+    let output = render_churn_pretty(&reports);
+    assert!(output.contains("=== Code Churn (last 14 days) ==="), "header should contain window days");
+}
+
+#[test]
+fn render_churn_pretty_shows_repo_name() {
+    colored::control::set_override(false);
+    let reports = vec![make_churn_report("/home/user/myproject", 100, 5, 14)];
+    let output = render_churn_pretty(&reports);
+    assert!(output.contains("myproject"), "should show repo name extracted from path");
+}
+
+#[test]
+fn render_churn_pretty_shows_correct_percentage() {
+    colored::control::set_override(false);
+    // 20 churned / 200 written = 10.0%
+    let reports = vec![make_churn_report("/repos/alpha", 200, 20, 7)];
+    let output = render_churn_pretty(&reports);
+    assert!(output.contains("10.0%"), "should show correct churn percentage");
+    assert!(output.contains("200"), "should show lines written");
+    assert!(output.contains("20"), "should show lines churned");
+}
+
+#[test]
+fn render_churn_pretty_global_summary() {
+    colored::control::set_override(false);
+    let reports = vec![
+        make_churn_report("/repos/alpha", 200, 20, 14),
+        make_churn_report("/repos/beta", 100, 30, 14),
+    ];
+    let output = render_churn_pretty(&reports);
+    // Total: 300 written, 50 churned → 16.7%
+    assert!(output.contains("Total:"), "should have total summary line");
+    assert!(output.contains("300 lines written"), "total written should be aggregated");
+    assert!(output.contains("50 churned"), "total churned should be aggregated");
+    assert!(output.contains("16.7%"), "total percentage should be correct");
+}
+
+#[test]
+fn render_churn_pretty_single_repo_no_churn() {
+    colored::control::set_override(false);
+    let reports = vec![make_churn_report("/repos/clean", 500, 0, 14)];
+    let output = render_churn_pretty(&reports);
+    assert!(output.contains("0.0%"), "zero churn should show 0.0%");
+}
+
+// --- Churn JSON output tests (US-011) ---
+
+#[test]
+fn render_churn_json_one_report_valid_json() {
+    let reports = vec![make_churn_report("/home/user/myproject", 200, 20, 14)];
+    let output = render_churn_json(&reports);
+    let parsed: serde_json::Value = serde_json::from_str(&output).expect("should be valid JSON");
+    let arr = parsed.as_array().expect("should be an array");
+    assert_eq!(arr.len(), 1);
+
+    let obj = &arr[0];
+    assert_eq!(obj["repo_path"], "/home/user/myproject");
+    assert_eq!(obj["repo_name"], "myproject");
+    assert_eq!(obj["window_days"], 14);
+    assert_eq!(obj["total_lines_written"], 200);
+    assert_eq!(obj["churned_lines"], 20);
+    assert!((obj["churn_rate_pct"].as_f64().unwrap() - 10.0).abs() < 0.01);
+    assert_eq!(obj["commit_count"], 5);
+    assert_eq!(obj["churn_event_count"], 2);
+}
+
+#[test]
+fn render_churn_json_empty_reports() {
+    let output = render_churn_json(&[]);
+    let parsed: serde_json::Value = serde_json::from_str(&output).expect("should be valid JSON");
+    let arr = parsed.as_array().expect("should be an array");
+    assert!(arr.is_empty());
+}
+
+// --- Churn CSV output tests (US-011) ---
+
+#[test]
+fn render_churn_csv_one_report_header_and_values() {
+    let reports = vec![make_churn_report("/repos/alpha", 200, 20, 7)];
+    let output = render_churn_csv(&reports);
+    let lines: Vec<&str> = output.lines().collect();
+    assert!(lines.len() >= 2, "should have header + data row");
+    assert_eq!(
+        lines[0],
+        "repo_path,repo_name,window_days,total_lines_written,churned_lines,churn_rate_pct,commit_count,churn_event_count"
+    );
+    // Data row
+    assert!(lines[1].starts_with("/repos/alpha,alpha,7,200,20,"));
+    assert!(lines[1].contains(",5,2"));
+}
+
+#[test]
+fn render_churn_csv_empty_reports_has_header() {
+    let output = render_churn_csv(&[]);
+    let lines: Vec<&str> = output.lines().collect();
+    assert_eq!(lines.len(), 1, "empty should have header only");
+    assert!(lines[0].contains("repo_path"), "header should be present");
 }
 
 #[test]

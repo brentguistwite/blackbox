@@ -172,6 +172,18 @@ pub enum Commands {
         #[arg(long, default_value = "pretty")]
         format: OutputFormat,
     },
+    /// Show code churn rate for tracked repos
+    Churn {
+        /// Time window in days to detect churn (default: from config)
+        #[arg(long)]
+        window: Option<u32>,
+        /// Filter to a specific repo path
+        #[arg(long)]
+        repo: Option<String>,
+        /// Output format: pretty, json, csv
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
 }
 
 impl Commands {

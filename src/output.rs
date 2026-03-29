@@ -1078,6 +1078,121 @@ pub fn render_pr_cycle_json(stats: &crate::query::PrCycleStats) -> String {
     serde_json::to_string_pretty(&json_stats).unwrap_or_else(|_| "{}".to_string())
 }
 
+// --- Churn report ---
+
+/// Render churn reports as pretty terminal output.
+/// Color-codes churn rate: green < 10%, yellow 10-25%, red > 25%.
+pub fn render_churn_pretty(reports: &[crate::churn::ChurnReport]) -> String {
+    if reports.is_empty() {
+        return "No churn data yet.".dimmed().to_string();
+    }
+
+    let window = reports[0].window_days;
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(
+        format!("=== Code Churn (last {} days) ===", window)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
+    lines.push(String::new());
+
+    for report in reports {
+        let repo_name = report
+            .repo_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&report.repo_path);
+
+        let rate_str = format!("{:.1}%", report.churn_rate_pct);
+        let colored_rate = if report.churn_rate_pct < 10.0 {
+            rate_str.green()
+        } else if report.churn_rate_pct <= 25.0 {
+            rate_str.yellow()
+        } else {
+            rate_str.red()
+        };
+
+        lines.push(format!(
+            "  {} | {} written | {} churned | {}",
+            repo_name.bold(),
+            report.total_lines_written,
+            report.churned_lines,
+            colored_rate,
+        ));
+    }
+
+    // Global summary
+    let total_written: u64 = reports.iter().map(|r| r.total_lines_written).sum();
+    let total_churned: u64 = reports.iter().map(|r| r.churned_lines).sum();
+    let total_pct = if total_written == 0 {
+        0.0
+    } else {
+        total_churned as f64 / total_written as f64 * 100.0
+    };
+
+    lines.push(String::new());
+    lines.push(format!(
+        "Total: {} lines written, {} churned ({:.1}%)",
+        total_written, total_churned, total_pct,
+    ));
+
+    lines.join("\n")
+}
+
+// --- Churn JSON/CSV ---
+
+#[derive(Serialize)]
+struct ChurnReportJson {
+    repo_path: String,
+    repo_name: String,
+    window_days: u32,
+    total_lines_written: u64,
+    churned_lines: u64,
+    churn_rate_pct: f64,
+    commit_count: usize,
+    churn_event_count: usize,
+}
+
+impl From<&crate::churn::ChurnReport> for ChurnReportJson {
+    fn from(r: &crate::churn::ChurnReport) -> Self {
+        let repo_name = r.repo_path.rsplit('/').next().unwrap_or(&r.repo_path).to_string();
+        Self {
+            repo_path: r.repo_path.clone(),
+            repo_name,
+            window_days: r.window_days,
+            total_lines_written: r.total_lines_written,
+            churned_lines: r.churned_lines,
+            churn_rate_pct: r.churn_rate_pct,
+            commit_count: r.commit_count,
+            churn_event_count: r.churn_event_count,
+        }
+    }
+}
+
+/// Render churn reports as pretty-printed JSON array.
+pub fn render_churn_json(reports: &[crate::churn::ChurnReport]) -> String {
+    let json_reports: Vec<ChurnReportJson> = reports.iter().map(ChurnReportJson::from).collect();
+    serde_json::to_string_pretty(&json_reports).expect("JSON serialization should not fail")
+}
+
+/// Render churn reports as CSV with header row.
+pub fn render_churn_csv(reports: &[crate::churn::ChurnReport]) -> String {
+    let mut wtr = csv::Writer::from_writer(vec![]);
+    if reports.is_empty() {
+        wtr.write_record(["repo_path", "repo_name", "window_days", "total_lines_written", "churned_lines", "churn_rate_pct", "commit_count", "churn_event_count"])
+            .expect("CSV header write should not fail");
+    } else {
+        for r in reports {
+            let json: ChurnReportJson = r.into();
+            wtr.serialize(json).expect("CSV serialization should not fail");
+        }
+    }
+    let data = String::from_utf8(wtr.into_inner().expect("flush")).expect("utf8");
+    data.trim_end().to_string()
+}
+
 // --- Rhythm report ---
 
 /// Aggregated rhythm analysis report for a time window.
