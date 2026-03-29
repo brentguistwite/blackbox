@@ -41,7 +41,7 @@
         "is_vague returns false for any message scoring \u2265 50",
         "Unit tests cover all pattern variants"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-03",
