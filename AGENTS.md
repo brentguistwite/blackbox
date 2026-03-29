@@ -39,6 +39,7 @@ src/
 ├── lib.rs            # Module declarations
 ├── churn.rs          # Code churn detection (diff stats, churn algorithm, ChurnReport)
 ├── cli.rs            # Clap CLI definition (Commands enum)
+├── ai_tracking.rs    # Multi-AI tool detection (trait, Codex/Copilot/Cursor/Windsurf detectors, process inspection)
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
 ├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management, DaemonStatus/HealthIndicator, get_daemon_status)
@@ -63,7 +64,10 @@ src/
 └── watcher.rs        # Event-driven repo watching (notify crate)
 
 tests/                # Integration tests (one file per module)
+  ai_tracking_test.rs # AiToolDetector trait, ClaudeDetector, Codex/Copilot/Cursor detector parsing, process detection
+  ai_tracking_integration_test.rs # Multi-tool JSON output integration test
   churn_test.rs       # Churn detection e2e tests
+  codex_detector_test.rs # Codex detector specific tests
   daemon_test.rs      # DaemonStatus, get_daemon_status, health indicator tests
   config_test.rs      # Notification config round-trip tests
   db_test.rs          # daemon_state kv store, count_events_today, notification_log tests
@@ -102,4 +106,4 @@ XDG data: `~/.local/share/blackbox/` (DB, logs)
 - When adding struct fields, update ALL test constructions (compiler catches this)
 
 ## Key Dependencies
-clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, notify-rust 4 (OS desktop notifications), reqwest 0.12 (blocking+json), serde+toml, daemonize+nix (daemon/signals), signal-hook 0.3 (SIGHUP config reload), etcetera (XDG), walkdir (fs traversal)
+clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, notify-rust 4 (OS desktop notifications), reqwest 0.12 (blocking+json), serde+serde_yaml 0.9+toml, daemonize+nix (daemon/signals), signal-hook 0.3 (SIGHUP config reload), etcetera (XDG), walkdir (fs traversal)
