@@ -2,7 +2,8 @@ use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, u
 use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
-    query_branch_switches, query_presence, today_range, week_range, month_range, quarter_range,
+    query_branch_switches, query_presence, resolve_perf_review_range,
+    today_range, week_range, month_range, quarter_range,
     ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Datelike, Duration, Timelike, TimeZone, Utc};
@@ -960,4 +961,69 @@ fn quarter_boundaries_are_correct_for_each_quarter() {
         _ => 10,
     };
     assert_eq!(start_month, expected, "month {current_month} should map to quarter starting {expected}");
+}
+
+// --- resolve_perf_review_range tests ---
+
+#[test]
+fn resolve_range_both_none_returns_quarter() {
+    let (from, to) = resolve_perf_review_range(None, None).unwrap();
+    let (q_from, q_to) = quarter_range();
+    // Allow 1s drift since quarter_range calls Utc::now()
+    assert!((from - q_from).num_seconds().abs() < 2);
+    assert!((to - q_to).num_seconds().abs() < 2);
+}
+
+#[test]
+fn resolve_range_valid_dates() {
+    let (from, to) = resolve_perf_review_range(Some("2025-01-01"), Some("2025-03-31")).unwrap();
+    assert!(from < to);
+    // from should be Jan 1 midnight local as UTC
+    let from_local = from.with_timezone(&chrono::Local);
+    assert_eq!(from_local.month(), 1);
+    assert_eq!(from_local.day(), 1);
+    assert_eq!(from_local.hour(), 0);
+    // to should be Mar 31 23:59:59 local as UTC
+    let to_local = to.with_timezone(&chrono::Local);
+    assert_eq!(to_local.month(), 3);
+    assert_eq!(to_local.day(), 31);
+    assert_eq!(to_local.hour(), 23);
+}
+
+#[test]
+fn resolve_range_invalid_from_date() {
+    let err = resolve_perf_review_range(Some("baddate"), Some("2025-03-31")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("Invalid date"), "got: {msg}");
+    assert!(msg.contains("YYYY-MM-DD"), "got: {msg}");
+}
+
+#[test]
+fn resolve_range_invalid_to_date() {
+    let err = resolve_perf_review_range(Some("2025-01-01"), Some("not-a-date")).unwrap_err();
+    assert!(err.to_string().contains("Invalid date"));
+}
+
+#[test]
+fn resolve_range_from_after_to() {
+    let err = resolve_perf_review_range(Some("2025-06-01"), Some("2025-01-01")).unwrap_err();
+    assert!(err.to_string().contains("--from must be before --to"));
+}
+
+#[test]
+fn resolve_range_from_equals_to() {
+    let err = resolve_perf_review_range(Some("2025-01-01"), Some("2025-01-01")).unwrap_err();
+    assert!(err.to_string().contains("--from must be before --to"));
+}
+
+#[test]
+fn resolve_range_only_from_errors() {
+    let err = resolve_perf_review_range(Some("2025-01-01"), None).unwrap_err();
+    assert!(err.to_string().contains("both be provided"));
+}
+
+#[test]
+fn resolve_range_only_to_errors() {
+    let err = resolve_perf_review_range(None, Some("2025-03-31")).unwrap_err();
+    assert!(err.to_string().contains("both be provided"));
 }
