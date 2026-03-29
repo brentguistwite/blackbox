@@ -602,6 +602,148 @@ fn format_duration_plain(d: Duration) -> String {
     }
 }
 
+/// Render RepoDeepDive as pretty terminal output.
+pub fn render_repo_pretty(dive: &crate::repo_deep_dive::RepoDeepDive) {
+    println!("{}", format!("=== {} ===", dive.repo_name).bold().cyan());
+    if !dive.tracked {
+        println!("{}", "(untracked \u{2014} no activity in DB)".dimmed());
+    }
+    println!();
+
+    let fmt_opt_date = |d: Option<chrono::DateTime<chrono::Utc>>| {
+        d.map(|t| t.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| "-".to_string())
+    };
+    println!("{:<20} {}", "Tracked commits:", dive.total_commits);
+    println!(
+        "{:<20} {}",
+        "Total time:",
+        format_duration(dive.total_estimated_time)
+    );
+    println!(
+        "{:<20} {}",
+        "First commit:",
+        fmt_opt_date(dive.first_commit_at)
+    );
+    println!(
+        "{:<20} {}",
+        "Last commit:",
+        fmt_opt_date(dive.last_commit_at)
+    );
+    println!();
+
+    if !dive.languages.is_empty() {
+        println!("{}", "Languages:".bold());
+        let colors = [
+            "cyan", "green", "yellow", "magenta", "blue", "red", "white", "bright_cyan",
+        ];
+        for (i, lang) in dive.languages.iter().take(8).enumerate() {
+            let filled = (lang.percent / 100.0 * 20.0).round() as usize;
+            let bar = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(20 - filled);
+            let bar_colored = match colors[i % colors.len()] {
+                "cyan" => bar.cyan().to_string(),
+                "green" => bar.green().to_string(),
+                "yellow" => bar.yellow().to_string(),
+                "magenta" => bar.magenta().to_string(),
+                "blue" => bar.blue().to_string(),
+                "red" => bar.red().to_string(),
+                "bright_cyan" => bar.bright_cyan().to_string(),
+                _ => bar.white().to_string(),
+            };
+            println!(
+                "  {:<16} {:>5.1}%  {}",
+                lang.language, lang.percent, bar_colored
+            );
+        }
+        println!();
+    }
+
+    if !dive.top_files.is_empty() {
+        println!("{}", "Top files changed:".bold());
+        for f in dive.top_files.iter().take(10) {
+            println!("  {:>4}x  {}", f.change_count, f.path);
+        }
+        println!();
+    }
+
+    if !dive.branches.is_empty() {
+        println!("{}", "Branches:".bold());
+        for b in &dive.branches {
+            println!(
+                "  {} \u{2014} {} commits, last active {}",
+                b.name,
+                b.commit_count,
+                b.last_active.format("%Y-%m-%d")
+            );
+        }
+        println!();
+    }
+
+    if !dive.prs.is_empty() {
+        println!("{}", "Pull requests:".bold());
+        for pr in dive.prs.iter().take(10) {
+            let state_str = match pr.state.as_str() {
+                "MERGED" => format!("[{}]", pr.state).magenta().to_string(),
+                "OPEN" => format!("[{}]", pr.state).green().to_string(),
+                "CLOSED" => format!("[{}]", pr.state).dimmed().to_string(),
+                _ => format!("[{}]", pr.state).cyan().to_string(),
+            };
+            println!("  #{} {} {}", pr.number, pr.title, state_str);
+        }
+        println!();
+    }
+}
+
+// --- JSON serialization for repo deep dive ---
+
+#[derive(Serialize)]
+pub struct JsonRepoDeepDive {
+    pub repo_path: String,
+    pub repo_name: String,
+    pub tracked: bool,
+    pub total_commits: usize,
+    pub total_estimated_minutes: i64,
+    pub first_commit_at: Option<String>,
+    pub last_commit_at: Option<String>,
+    pub languages: Vec<crate::repo_deep_dive::LanguageBreakdown>,
+    pub top_files: Vec<crate::repo_deep_dive::FileChurnEntry>,
+    pub branches: Vec<JsonBranchActivity>,
+    pub prs: Vec<crate::repo_deep_dive::RepoPrEntry>,
+}
+
+#[derive(Serialize)]
+pub struct JsonBranchActivity {
+    pub name: String,
+    pub commit_count: usize,
+    pub last_active: String,
+}
+
+/// Serialize RepoDeepDive to pretty-printed JSON.
+pub fn render_repo_json(dive: &crate::repo_deep_dive::RepoDeepDive) -> String {
+    let json = JsonRepoDeepDive {
+        repo_path: dive.repo_path.clone(),
+        repo_name: dive.repo_name.clone(),
+        tracked: dive.tracked,
+        total_commits: dive.total_commits,
+        total_estimated_minutes: dive.total_estimated_time.num_minutes(),
+        first_commit_at: dive.first_commit_at.map(|dt| dt.to_rfc3339()),
+        last_commit_at: dive.last_commit_at.map(|dt| dt.to_rfc3339()),
+        languages: dive.languages.clone(),
+        top_files: dive.top_files.clone(),
+        branches: dive
+            .branches
+            .iter()
+            .map(|b| JsonBranchActivity {
+                name: b.name.clone(),
+                commit_count: b.commit_count,
+                last_active: b.last_active.to_rfc3339(),
+            })
+            .collect(),
+        prs: dive.prs.clone(),
+    };
+    serde_json::to_string_pretty(&json).expect("JSON serialization should not fail")
+}
+
 /// Render activity in Slack/Teams-friendly plain text (no ANSI codes).
 pub fn render_standup(summary: &ActivitySummary) -> String {
     let mut lines: Vec<String> = Vec::new();

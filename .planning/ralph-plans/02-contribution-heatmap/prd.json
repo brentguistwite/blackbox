@@ -1,0 +1,197 @@
+{
+  "project": "contribution-heatmap",
+  "branchName": "feature/contribution-heatmap",
+  "description": "Cross-repo contribution heatmap CLI command showing GitHub-style green squares locally. Aggregates commit counts per calendar day across all tracked repos. Rendered in-terminal via ratatui with color intensity tiers.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "DB query: daily commit counts over arbitrary date range",
+      "description": "Add `query_daily_commit_counts(conn, from, to) -> BTreeMap<NaiveDate, u32>` in query.rs. Groups git_activity rows where event_type='commit' by local calendar date. Returns zero-padded map (every date in range has an entry).",
+      "acceptanceCriteria": [
+        "Function signature: `pub fn query_daily_commit_counts(conn: &Connection, from: DateTime<Utc>, to: DateTime<Utc>) -> anyhow::Result<BTreeMap<NaiveDate, u32>>`",
+        "SQL: SELECT date(timestamp, 'localtime') as day, COUNT(*) FROM git_activity WHERE event_type='commit' AND timestamp >= ?1 AND timestamp <= ?2 GROUP BY day",
+        "All dates in [from.date(), to.date()] present in result (zero-filled gaps)",
+        "Returns empty map (not error) when no commits exist in range",
+        "Unit test: insert 3 commits across 2 days, verify counts and zero-fill for gap day"
+      ],
+      "priority": "must",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "HeatmapData struct and intensity calculation",
+      "description": "Define `HeatmapData` in a new `src/heatmap.rs` module. Holds the daily counts and computes color intensity tier (0-4) matching GitHub's scale: 0=none, 1=low, 2=medium, 3=high, 4=max.",
+      "acceptanceCriteria": [
+        "New file `src/heatmap.rs` declared in `src/lib.rs`",
+        "`pub struct HeatmapData { pub days: BTreeMap<NaiveDate, u32>, pub max_count: u32 }`",
+        "`impl HeatmapData { pub fn from_counts(counts: BTreeMap<NaiveDate, u32>) -> Self }` \u2014 computes max_count",
+        "`pub fn intensity(&self, date: NaiveDate) -> u8` returns 0-4: 0=zero commits, 1=1..=max/4, 2..=3 proportional, 4=>=3*max/4 (or >= some floor like 4 commits)",
+        "Edge case: max_count==0 \u2192 all intensity 0",
+        "Unit tests: zero map \u2192 all 0; single commit \u2192 intensity >= 1; high count \u2192 intensity 4"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "Date range helper: last N weeks aligned to calendar weeks",
+      "description": "Add `heatmap_range(weeks: u32) -> (DateTime<Utc>, DateTime<Utc>)` in query.rs. Returns range from `weeks` Mondays ago (00:00 local) through end of today. Default 52 weeks (1 year).",
+      "acceptanceCriteria": [
+        "Function: `pub fn heatmap_range(weeks: u32) -> (DateTime<Utc>, DateTime<Utc>)`",
+        "Start = Monday of (current_week - weeks) at 00:00 local",
+        "End = today 23:59:59 local (or now)",
+        "weeks=1 \u2192 returns 7-14 days depending on current weekday",
+        "weeks=52 \u2192 returns ~364 days",
+        "Unit test: range is always <= weeks*7+6 days and starts on a Monday"
+      ],
+      "priority": "must",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "Terminal renderer: ratatui heatmap widget",
+      "description": "Add `render_heatmap(frame, area, data: &HeatmapData, weeks: u32)` in `src/heatmap.rs`. Renders GitHub-style grid: columns=weeks (left=oldest), rows=7 (Mon top). Each cell = 1 char block colored by intensity tier.",
+      "acceptanceCriteria": [
+        "Color map: 0=DarkGray, 1=Color::Rgb(0,68,0), 2=Color::Rgb(0,128,0), 3=Color::Rgb(0,185,0), 4=Color::Rgb(57,211,83) \u2014 5 distinct tiers",
+        "Cell char: full-block `\u2588\u2588` (two chars wide for square feel) or single `\u2588`",
+        "Month labels rendered above first column of each month",
+        "Day-of-week labels on left (M W F or Mon/Wed/Fri abbreviated)",
+        "Renders without panic on terminal width < grid width (truncate weeks to fit)",
+        "Test: `render_heatmap` with TestBackend(120,10) and empty HeatmapData does not panic"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "CLI command: `blackbox heatmap`",
+      "description": "Wire up `blackbox heatmap` command. Renders full-year (52-week) heatmap to terminal using ratatui in raw mode, then exits. Shows summary line: total commits, active days, longest streak.",
+      "acceptanceCriteria": [
+        "Add `Heatmap { #[arg(long, default_value_t = 52)] weeks: u32 }` variant to `Commands` enum in cli.rs",
+        "Match arm in main.rs calls `blackbox::heatmap::run_heatmap(weeks)`",
+        "Public `pub fn run_heatmap(weeks: u32) -> anyhow::Result<()>` in heatmap.rs",
+        "Loads config + DB same pattern as run_query in main.rs",
+        "Renders grid + summary line (total commits, active days, longest streak)",
+        "Exits cleanly (no interactive loop \u2014 static render then return)",
+        "`blackbox heatmap --help` shows description"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-003",
+        "US-004"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "Summary stats: active days and longest streak",
+      "description": "Add `HeatmapStats` struct computed from `HeatmapData`. Fields: `total_commits: u32`, `active_days: u32`, `longest_streak: u32`, `current_streak: u32`.",
+      "acceptanceCriteria": [
+        "`pub struct HeatmapStats { pub total_commits: u32, pub active_days: u32, pub longest_streak: u32, pub current_streak: u32 }`",
+        "`impl HeatmapData { pub fn stats(&self) -> HeatmapStats }`",
+        "longest_streak: max consecutive calendar days with commits >= 1",
+        "current_streak: streak ending on today (or yesterday if today==0)",
+        "Unit tests: 0-day streak on empty data; streak=3 for 3 consecutive days; streak resets on gap"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Static render mode (non-interactive, stdout-compatible)",
+      "description": "`run_heatmap` should render to stdout as ANSI-colored text (not full ratatui raw mode) so it works in pipes/scripts. Use colored crate for intensity tiers instead of ratatui. Ratatui render remains available as a separate function for future TUI integration.",
+      "acceptanceCriteria": [
+        "`pub fn render_heatmap_ansi(data: &HeatmapData, weeks: u32) -> String` in heatmap.rs using colored crate",
+        "`run_heatmap` calls `render_heatmap_ansi` and prints to stdout \u2014 no ratatui raw mode",
+        "Output includes grid + month labels + day labels + stats line",
+        "Works correctly when piped (colors may be absent but no crash)",
+        "ratatui-based `render_heatmap` widget fn still exists for future TUI embedding",
+        "Integration test: `blackbox heatmap` exits with code 0 via assert_cmd"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-005",
+        "US-006"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "title": "Custom week range flag",
+      "description": "Support `--weeks N` to show last N weeks (default 52). Validate 1 <= N <= 260 (5 years).",
+      "acceptanceCriteria": [
+        "`blackbox heatmap --weeks 12` renders 12-week grid",
+        "`blackbox heatmap --weeks 0` returns error: 'weeks must be between 1 and 260'",
+        "`blackbox heatmap --weeks 261` returns error same",
+        "Validation in `run_heatmap` before DB query",
+        "Unit test: heatmap_range(12) returns ~84 day span"
+      ],
+      "priority": "should",
+      "deps": [
+        "US-005"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "title": "Integration test: heatmap command end-to-end",
+      "description": "Add `tests/heatmap.rs`. Insert known commits into temp DB via direct SQL, run `blackbox heatmap`, assert exit 0 and output contains block chars.",
+      "acceptanceCriteria": [
+        "Test inserts 5 commits across 3 different dates in temp DB",
+        "`blackbox heatmap` exits with code 0",
+        "stdout contains at least one colored block char (\\u2588 or equivalent indicator)",
+        "Test uses assert_cmd + tempfile pattern (same as existing integration tests)",
+        "No daemon required for test"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "title": "Empty state handling",
+      "description": "Graceful output when no commits exist in range.",
+      "acceptanceCriteria": [
+        "Empty DB: prints grid of all dark-gray cells + message 'No commits recorded in this period'",
+        "Stats line shows 0/0/0",
+        "Does not panic or error",
+        "Test: run `blackbox heatmap` against empty DB, assert exit 0 and output contains 'No commits'"
+      ],
+      "priority": "must",
+      "deps": [
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "must",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-010"
+      ]
+    }
+  ]
+}

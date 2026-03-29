@@ -1,0 +1,337 @@
+{
+  "project": "multi-ai-tracking",
+  "branchName": "feature/multi-ai-tracking",
+  "description": "Detect and track sessions from Codex CLI, Copilot CLI, Cursor, and Windsurf alongside existing Claude Code tracking",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "AiToolDetector trait: shared abstraction for all AI tool detectors",
+      "description": "Define a `AiToolDetector` trait in a new `src/ai_tracking.rs` module. All per-tool detectors implement this trait. The trait drives poll_all_ai_sessions() in poller.rs, replacing the direct call to poll_claude_sessions(). The trait must be object-safe so detectors can be stored as `Vec<Box<dyn AiToolDetector>>`.",
+      "acceptanceCriteria": [
+        "Trait defined in src/ai_tracking.rs: `pub trait AiToolDetector { fn tool_name(&self) -> &'static str; fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]); }`",
+        "Module registered as `pub mod ai_tracking;` in src/lib.rs",
+        "Existing `ClaudeDetector` struct in ai_tracking.rs wraps the existing poll_claude_sessions_with_paths logic (delegates to it)",
+        "ClaudeDetector implements AiToolDetector",
+        "`pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf])` in ai_tracking.rs: builds Vec<Box<dyn AiToolDetector>> with all detectors, calls poll() on each",
+        "poller.rs full_scan() replaces `claude_tracking::poll_claude_sessions(conn, &repos)` with `ai_tracking::poll_all_ai_sessions(conn, &repos)`",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "DB: tool field populated on insert_ai_session",
+      "description": "Modify `db::insert_ai_session` to accept a `tool: &str` parameter and write it to the `tool` column (currently hardcoded to DEFAULT 'claude-code'). Update all callers. The schema already has the column \u2014 no migration needed.",
+      "acceptanceCriteria": [
+        "`insert_ai_session(conn, tool, repo_path, session_id, started_at)` \u2014 tool param added as second arg",
+        "SQL: `INSERT OR IGNORE INTO ai_sessions (tool, repo_path, session_id, started_at) VALUES (?1, ?2, ?3, ?4)`",
+        "ClaudeDetector calls insert_ai_session with tool='claude-code'",
+        "All other callers updated (compiler catches this)",
+        "Existing tests updated to pass tool='claude-code'",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "Process inspection: is_process_running by name/pattern",
+      "description": "Add `fn processes_matching(name_pattern: &str) -> Vec<u32>` in ai_tracking.rs. Uses `/proc` on Linux or `sysctl` (via `sysinfo` crate or raw `ps` subprocess) on macOS to enumerate running process names. Used by Cursor, Windsurf, and Copilot detectors that have no PID file. Falls back gracefully to empty vec if enumeration fails. Keep the existing `is_process_running(pid)` in claude_tracking.rs unchanged.",
+      "acceptanceCriteria": [
+        "`fn processes_matching(name_pattern: &str) -> Vec<u32>` in ai_tracking.rs \u2014 returns PIDs of running processes whose name contains name_pattern (case-insensitive)",
+        "macOS: uses `pgrep -i <name_pattern>` subprocess with 2s timeout; parses stdout lines as u32 PIDs",
+        "Linux: same approach (pgrep available on both platforms)",
+        "On pgrep failure or timeout: returns empty vec (never panics)",
+        "`fn is_any_process_running(name_pattern: &str) -> bool` \u2014 convenience wrapper: processes_matching(...).is_empty() == false",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "Codex CLI detector",
+      "description": "Implement `CodexDetector` in ai_tracking.rs. Scans `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`. Each file is JSONL where the first line is a `SessionMeta` object with `cwd`, `createdAt` (ISO string), `updatedAt`. Session ID derived from file path (date + filename stem). 'Still running' detection: process named `codex` is running AND file's updatedAt is within last 5 minutes.",
+      "acceptanceCriteria": [
+        "CodexDetector implements AiToolDetector; tool_name() returns 'codex'",
+        "Scans `~/.codex/sessions/` recursively for files matching `rollout-*.jsonl`; skips dirs that don't exist (graceful degradation)",
+        "Parses first JSONL line as `CodexSessionMeta { cwd: String, created_at: String, updated_at: String }` with #[serde(rename_all = 'camelCase')]",
+        "Session ID: `{YYYY-MM-DD}-{filename_stem}` e.g. `2024-03-15-rollout-abc123`",
+        "Calls insert_ai_session(conn, 'codex', repo_path, session_id, created_at) \u2014 INSERT OR IGNORE",
+        "Session ends: codex process not running OR updated_at older than 5 minutes \u2192 call update_session_ended with ended_at=updated_at (not now)",
+        "map_to_repo used to resolve cwd \u2192 watched repo path (same as Claude pattern)",
+        "Turns: count of non-empty lines in the JSONL file (same as Claude count_turns pattern)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002",
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "Copilot CLI detector",
+      "description": "Implement `CopilotDetector` in ai_tracking.rs. Scans `~/.copilot/session-state/*/workspace.yaml` files. Each directory is a session (UUID as session_id). workspace.yaml contains `cwd`. Session start time from directory mtime if not in YAML. events.jsonl in same dir provides activity count (turn equivalent).",
+      "acceptanceCriteria": [
+        "CopilotDetector implements AiToolDetector; tool_name() returns 'copilot-cli'",
+        "Scans `~/.copilot/session-state/` for subdirectories; skips if path doesn't exist",
+        "For each subdir: reads workspace.yaml with serde_yaml (add as dependency if not present); extracts `cwd: String` field",
+        "Session ID: the UUID directory name",
+        "Session start time: mtime of workspace.yaml via `std::fs::metadata().modified()` \u2192 RFC3339 string; fallback to current time if unavailable",
+        "Calls insert_ai_session(conn, 'copilot-cli', repo_path, session_id, started_at)",
+        "Turn count: count non-empty lines in events.jsonl (same directory) if file exists; None otherwise",
+        "'Still running': process named `copilot` is running AND workspace.yaml mtime within last 5 minutes",
+        "Session ends: mark with ended_at = mtime of workspace.yaml",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002",
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "Cursor detector",
+      "description": "Implement `CursorDetector` in ai_tracking.rs. Cursor stores state in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` (SQLite). cwd comes from `workspaceStorage/<hash>/workspace.json` files in the same Cursor User directory. Session = one open workspace. 'Still running': process named `Cursor` is running.",
+      "acceptanceCriteria": [
+        "CursorDetector implements AiToolDetector; tool_name() returns 'cursor'",
+        "macOS path: `~/Library/Application Support/Cursor/User/workspaceStorage/`; Linux path: `~/.config/Cursor/User/workspaceStorage/`; skips if path doesn't exist",
+        "For each `<hash>/workspace.json`: parse JSON to extract `folder` field (the workspace cwd). Skip if folder is absent or not a local path (skip `vscode-remote://` URIs)",
+        "Session ID: `cursor-{hash}` where hash is the directory name",
+        "Started_at: mtime of workspace.json \u2192 RFC3339",
+        "Calls insert_ai_session(conn, 'cursor', repo_path, session_id, started_at)",
+        "'Still running': `is_any_process_running('Cursor')` is true AND workspace.json mtime within last 30 minutes",
+        "Session ends: ended_at = now (Cursor doesn't record session end time)",
+        "turns: None (no conversation log available)",
+        "Platform-gated: path selection uses `#[cfg(target_os = 'macos')]` / else for Linux",
+        "`cargo build` passes"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002",
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Windsurf detector",
+      "description": "Implement `WindsurfDetector` in ai_tracking.rs. Windsurf's data directory is poorly documented; detection is primarily process-based. Strategy: detect that Windsurf is running, derive cwd from active git repo inference (check watched repos for recent git activity), create a synthetic session per watched repo that had activity while Windsurf was running.",
+      "acceptanceCriteria": [
+        "WindsurfDetector implements AiToolDetector; tool_name() returns 'windsurf'",
+        "macOS path attempted: `~/Library/Application Support/Windsurf/User/workspaceStorage/` \u2014 same structure as Cursor if it exists; parse workspace.json files identically",
+        "If Windsurf data dir not found: fall back to process-only detection",
+        "Process-only mode: if `is_any_process_running('Windsurf')` \u2192 create/update a synthetic session per watched_repo that had a git commit in the last 30 minutes (query git_activity table for repo_path WHERE timestamp > now-30min)",
+        "Synthetic session ID: `windsurf-{repo_slug}-{YYYY-MM-DD}` where repo_slug is last path component",
+        "starts_at: start of current day (midnight UTC) for synthetic sessions",
+        "Session ends: Windsurf process not running \u2192 mark all open Windsurf sessions as ended with ended_at=now",
+        "turns: None",
+        "`cargo build` passes"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002",
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "title": "DB: query active sessions filtered by tool",
+      "description": "Add `get_active_sessions_by_tool(conn, tool) -> anyhow::Result<Vec<String>>` in db.rs. Used by per-tool detectors to check only their own sessions when marking ended. Also add `get_active_sessions_all(conn) -> anyhow::Result<Vec<(String, String)>>` returning (session_id, tool) pairs \u2014 used by the generic cleanup path.",
+      "acceptanceCriteria": [
+        "`pub fn get_active_sessions_by_tool(conn: &Connection, tool: &str) -> anyhow::Result<Vec<String>>` \u2014 SELECT session_id WHERE ended_at IS NULL AND tool = ?1",
+        "`pub fn get_active_sessions_all(conn: &Connection) -> anyhow::Result<Vec<(String, String)>>` \u2014 SELECT session_id, tool WHERE ended_at IS NULL",
+        "Both return empty vec if no rows (not an error)",
+        "Existing get_active_sessions() unchanged (still used by ClaudeDetector)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "title": "Output: display tool name in ai_sessions section",
+      "description": "Update output.rs pretty and JSON rendering to show the tool name for each AI session. In pretty output, prefix the session line with the tool name. In JSON, the tool field is already present in ai_sessions \u2014 ensure it's included in JsonAiSession.",
+      "acceptanceCriteria": [
+        "JsonAiSession gains `pub tool: String` field",
+        "JSON output: ai_sessions array entries include `\"tool\": \"claude-code\"` (or relevant tool name)",
+        "Pretty output: session line shows tool name, e.g. `claude-code  session-id  12m  8 turns` (tool in first column)",
+        "Existing tests for output.rs updated to include tool field in JsonAiSession construction",
+        "`cargo build` passes"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "title": "DB: query to include tool in ai_sessions output",
+      "description": "Update query.rs AiSession struct and query to SELECT the tool column. Currently AiSession has session_id, started_at, ended_at, duration_minutes, turns \u2014 add tool field.",
+      "acceptanceCriteria": [
+        "AiSession struct gains `pub tool: String` field",
+        "SELECT query in query.rs includes `tool` column",
+        "All test constructions of AiSession updated (compiler catches)",
+        "query_activity returns RepoSummary.ai_sessions with tool populated",
+        "`cargo build` passes"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "title": "Unit tests: AiToolDetector trait and ClaudeDetector",
+      "description": "In tests/ai_tracking_test.rs: verify ClaudeDetector wraps poll_claude_sessions correctly. Test that poll_all_ai_sessions calls each detector. Use mock/stub pattern: a TestDetector that records whether poll() was called.",
+      "acceptanceCriteria": [
+        "TestDetector struct implements AiToolDetector, sets a flag when poll() is called",
+        "Test: poll_all_ai_sessions with TestDetector \u2192 flag is set",
+        "Test: ClaudeDetector with empty sessions dir \u2192 no panic, no DB rows inserted",
+        "Test: ClaudeDetector with one valid session JSON \u2192 DB row inserted with tool='claude-code'",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001",
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-012",
+      "title": "Unit tests: Codex detector parsing",
+      "description": "In tests/ai_tracking_test.rs: create a temp dir mimicking ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl. Verify parsing, session ID generation, insert behavior, and ended detection.",
+      "acceptanceCriteria": [
+        "Create temp sessions dir with one rollout-abc.jsonl containing valid SessionMeta JSON on line 1 + 3 more JSONL lines",
+        "After poll(): DB has one ai_sessions row with tool='codex', session_id contains date + 'rollout-abc', turns=4",
+        "Second poll() with same file: no duplicate (INSERT OR IGNORE)",
+        "File with invalid/missing first-line JSON: skipped without panic",
+        "Sessions dir doesn't exist: poll() returns without error",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-004"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-013",
+      "title": "Unit tests: Copilot detector parsing",
+      "description": "In tests/ai_tracking_test.rs: create temp dir mimicking ~/.copilot/session-state/<uuid>/workspace.yaml + events.jsonl. Verify parsing.",
+      "acceptanceCriteria": [
+        "Temp dir with one UUID subdir containing workspace.yaml (`cwd: /tmp/test-repo`) and events.jsonl with 5 lines",
+        "After poll(): DB has one row with tool='copilot-cli', session_id=UUID, turns=5",
+        "workspace.yaml without cwd field: session skipped",
+        "No events.jsonl: turns=None",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-005"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-014",
+      "title": "Unit tests: Cursor detector parsing",
+      "description": "In tests/ai_tracking_test.rs: create temp workspaceStorage dir with hash subdirs and workspace.json files. Verify local path parsing and vscode-remote URI skipping.",
+      "acceptanceCriteria": [
+        "Temp workspaceStorage dir with one hash subdir, workspace.json containing `{\"folder\": \"/tmp/test-repo\"}`",
+        "After poll(): DB has one row with tool='cursor', session_id='cursor-{hash}'",
+        "workspace.json with `{\"folder\": \"vscode-remote://ssh-remote+host/path\"}`: row NOT inserted",
+        "workspace.json missing folder key: row NOT inserted",
+        "All tests pass"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-006"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-015",
+      "title": "Unit tests: process detection helper",
+      "description": "In tests/ai_tracking_test.rs: verify processes_matching and is_any_process_running behave correctly. Cannot test live process detection hermetically, so test the error-handling paths and that the function returns a Vec (not panics).",
+      "acceptanceCriteria": [
+        "processes_matching('definitely-not-a-real-process-name-xyz') returns empty vec (not an error)",
+        "is_any_process_running('definitely-not-a-real-process-name-xyz') returns false",
+        "processes_matching('') returns vec (possibly non-empty, just must not panic)",
+        "All tests pass"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-016",
+      "title": "Integration test: blackbox today shows multi-tool sessions",
+      "description": "In tests/cli_test.rs or new tests/ai_tracking_integration_test.rs: insert ai_sessions rows with multiple tools directly into DB. Run `blackbox today --format json` and assert the output includes all tool names.",
+      "acceptanceCriteria": [
+        "Insert rows: tool='claude-code' session + tool='codex' session + tool='cursor' session for same repo",
+        "`blackbox today --format json` output: ai_sessions array contains entries with tool='claude-code', tool='codex', tool='cursor'",
+        "All three rows present in JSON output",
+        "All tests pass"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-009",
+        "US-010"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-017",
+      "title": "serde_yaml dependency for Copilot workspace.yaml parsing",
+      "description": "Add `serde_yaml` to Cargo.toml if not already present. Needed by CopilotDetector to parse workspace.yaml. Verify it does not conflict with existing dependencies.",
+      "acceptanceCriteria": [
+        "Cargo.toml: `serde_yaml = \"0.9\"` in [dependencies]",
+        "`use serde_yaml;` compiles in ai_tracking.rs",
+        "`cargo build` passes",
+        "`cargo test` passes (no dependency conflicts)"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-018",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P1",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-016",
+        "US-017"
+      ]
+    }
+  ]
+}

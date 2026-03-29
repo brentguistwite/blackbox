@@ -108,6 +108,14 @@ pub enum Commands {
         #[arg(long)]
         summarize: bool,
     },
+    /// Single-repo deep dive (language breakdown, top files, time invested, PR history)
+    Repo {
+        /// Path to the git repository
+        path: String,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
 }
 
 impl Commands {

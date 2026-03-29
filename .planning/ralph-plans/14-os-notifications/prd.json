@@ -1,0 +1,195 @@
+{
+  "project": "os-notifications",
+  "branchName": "feature/os-notifications",
+  "description": "Opt-in OS notifications with rate limiting for daily summaries",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add notify-rust dependency",
+      "description": "Add `notify-rust` to Cargo.toml. Feature-gate it for macOS and Linux only. notify-rust requires `mac_notification_sys` on macOS and `dbus` on Linux. Use `default-features = false` and explicitly enable `images` feature is NOT required. The crate itself handles platform dispatch internally \u2014 no cfg-gating needed in lib code beyond the availability check.",
+      "acceptanceCriteria": [
+        "Cargo.toml gains `notify-rust = { version = \"4\", default-features = false }` in [dependencies]",
+        "`cargo build` passes on macOS and Linux",
+        "No new modules yet \u2014 just the dep"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "Config: notifications opt-in fields",
+      "description": "Add notification config fields to the Config struct in config.rs. All fields have serde defaults so existing configs without these fields continue to work. Notifications are disabled by default (opt-in). The notification_time field specifies when the daily summary notification fires (local time, HH:MM format, 24h). Default is '17:00'.",
+      "acceptanceCriteria": [
+        "`Config` gains `pub notifications_enabled: bool` with `#[serde(default)]` (defaults to false)",
+        "`Config` gains `pub notification_time: String` with `#[serde(default = \"default_notification_time\")]`",
+        "`fn default_notification_time() -> String { \"17:00\".to_string() }` added near other default fns",
+        "`Config::default()` updated: `notifications_enabled: false`, `notification_time: default_notification_time()`",
+        "Config TOML round-trips correctly: serialize then deserialize yields same values",
+        "`cargo build` passes",
+        "No interactive prompts added to run_init() \u2014 users opt in by manually editing config"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "notifications.rs: wrapper module with send_notification()",
+      "description": "Create src/notifications.rs. Provides a single public function `send_notification(title: &str, body: &str) -> anyhow::Result<()>` that calls notify-rust. Handles the 'notification permission denied' and 'no notification server' error cases by returning Ok(()) with a warn log rather than propagating \u2014 callers must not crash if notifications are unavailable. Also exposes `is_available() -> bool` using a OnceLock probe pattern (same pattern as enrichment.rs).",
+      "acceptanceCriteria": [
+        "`src/notifications.rs` created",
+        "`pub fn send_notification(title: &str, body: &str) -> anyhow::Result<()>` \u2014 calls `notify_rust::Notification::new().summary(title).body(body).show()`, maps errors to anyhow, logs warn on error, returns Ok(())",
+        "`pub fn is_available() -> bool` \u2014 uses `OnceLock<bool>`, probes by sending a silent test (or just returns `true` on macOS since no permission denial at runtime, `false` on headless \u2014 detect via `std::env::var(\"DISPLAY\").is_ok() || cfg!(target_os = \"macos\")`)",
+        "Module declared in lib.rs: `pub mod notifications;`",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "DB: notification_log table for rate limiting",
+      "description": "Add a `notification_log` table to track sent notifications. Prevents re-firing the daily summary if the daemon restarts mid-day. The key is a date string (YYYY-MM-DD) + notification type. Uses INSERT OR IGNORE to make repeated sends idempotent.",
+      "acceptanceCriteria": [
+        "New migration in db.rs `open_db()` migrations array: `CREATE TABLE IF NOT EXISTS notification_log (date TEXT NOT NULL, notification_type TEXT NOT NULL, sent_at TEXT NOT NULL, PRIMARY KEY (date, notification_type));`",
+        "`pub fn notification_was_sent(conn: &Connection, date: &str, notification_type: &str) -> anyhow::Result<bool>` in db.rs \u2014 SELECT EXISTS query",
+        "`pub fn record_notification_sent(conn: &Connection, date: &str, notification_type: &str) -> anyhow::Result<()>` in db.rs \u2014 INSERT OR IGNORE with sent_at = Utc::now().to_rfc3339()",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "query.rs: daily_summary_for_notification()",
+      "description": "Add a query function that returns a compact notification body string for today's activity. Format: 'N commits across R repos \u2014 ~Xh Ym'. Uses existing query_activity() and global_estimated_time() functions. Returns None if no activity (no notification needed).",
+      "acceptanceCriteria": [
+        "`pub fn daily_summary_for_notification(conn: &Connection, session_gap_minutes: u64, first_commit_minutes: u64) -> anyhow::Result<Option<String>>` in query.rs",
+        "Uses `today_range()` to get (from, to), calls `query_activity(conn, from, to, ...)` to get repos",
+        "If repos is empty AND total_commits == 0, returns Ok(None)",
+        "Computes global_estimated_time from repos",
+        "Returns Ok(Some(body)) where body = format: '{commits} commit{s} across {repos} repo{s} \u2014 ~{hours}h {mins}m' (omit hours if 0, omit mins if 0, handle singular/plural)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "poller.rs: daily summary notification trigger",
+      "description": "In run_poll_loop(), after each full_scan() call, check if the daily summary notification should fire. Conditions: notifications_enabled=true, is_available()=true, current local time >= notification_time, notification not yet sent today (check DB). If all conditions met: query daily summary, send notification, record in DB.",
+      "acceptanceCriteria": [
+        "After each full_scan() call in run_poll_loop(), call a new `maybe_send_daily_notification(config, &conn)` function",
+        "`fn maybe_send_daily_notification(config: &Config, conn: &Connection)` in poller.rs (private): checks config.notifications_enabled, calls notifications::is_available(), parses config.notification_time as HH:MM, compares against Local::now().time()",
+        "Checks DB: `notification_was_sent(conn, &today_date, \"daily_summary\")` \u2014 if already sent, return early",
+        "If time >= notification_time and not sent: calls `daily_summary_for_notification(conn, ...)` \u2014 if Some(body), calls `notifications::send_notification(\"Blackbox Daily Summary\", &body)` and `record_notification_sent(conn, &today_date, \"daily_summary\")`",
+        "All errors logged at warn level, never propagated (function returns void)",
+        "notification_time parse failure \u2192 log warn + skip (don't panic)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Unit tests: notification_log DB helpers",
+      "description": "Tests for notification_was_sent() and record_notification_sent() in tests/db_test.rs (or new tests/notifications_test.rs).",
+      "acceptanceCriteria": [
+        "Test: notification_was_sent on empty table returns Ok(false)",
+        "Test: record_notification_sent then notification_was_sent returns Ok(true)",
+        "Test: record_notification_sent twice (same date+type) \u2014 second call is Ok(()) and doesn't error (INSERT OR IGNORE)",
+        "Test: different date \u2192 notification_was_sent returns Ok(false) for the un-sent date",
+        "Test: different notification_type same date \u2192 returns Ok(false) for un-sent type",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-004"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "title": "Unit tests: daily_summary_for_notification()",
+      "description": "Tests for the query function that builds the notification body string.",
+      "acceptanceCriteria": [
+        "Test: no activity in DB \u2192 returns Ok(None)",
+        "Test: insert 3 commit events in one repo today \u2192 returns Ok(Some(body)) where body contains '3 commit' and '1 repo'",
+        "Test: insert commits across 2 repos \u2192 body contains '2 repo'",
+        "Test: singular 'commit'/'repo' when count=1",
+        "Test: time estimate > 0 appears in body in h/m format",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-005"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "title": "Unit tests: maybe_send_daily_notification() logic",
+      "description": "Tests for the notification trigger logic. Because send_notification() calls a real OS API, use a test config with notifications_enabled=false or mock the time check. Focus on the conditional logic, not the actual OS notification.",
+      "acceptanceCriteria": [
+        "Test: notifications_enabled=false \u2192 maybe_send_daily_notification does nothing (no DB write)",
+        "Test: notifications_enabled=true, notification_time in future (23:59) \u2192 does not write to DB",
+        "Test: notifications_enabled=true, notification_time in past (00:01), no activity \u2192 does not write to DB (daily_summary returns None)",
+        "Test: notification already recorded in DB \u2192 does not attempt to send again (idempotency)",
+        "Tests use tempfile DB and Config::default() with fields overridden",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-006",
+        "US-007",
+        "US-008"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "title": "Integration test: notifications disabled by default",
+      "description": "CLI integration test confirming opt-in behavior \u2014 blackbox today and blackbox start don't error even with no notification config.",
+      "acceptanceCriteria": [
+        "Test: Config::default() has notifications_enabled=false",
+        "Test: Config round-trip through TOML (serialize/deserialize) preserves notifications_enabled=false and notification_time='17:00' when those fields are absent from TOML",
+        "Test: TOML with `notifications_enabled = true` and `notification_time = \"09:30\"` deserializes correctly",
+        "All tests pass"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P1",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-010"
+      ]
+    }
+  ]
+}
