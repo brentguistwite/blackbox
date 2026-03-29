@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector, CursorDetector};
+use blackbox::ai_tracking::{AiToolDetector, ClaudeDetector, CodexDetector, CopilotDetector, CursorDetector, WindsurfDetector};
 use blackbox::db;
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -492,4 +492,129 @@ fn test_cursor_detector_turns_are_none() {
 fn test_cursor_detector_tool_name() {
     let detector = CursorDetector::default();
     assert_eq!(detector.tool_name(), "cursor");
+}
+
+// --- US-007: Windsurf detector tests ---
+
+#[test]
+fn test_windsurf_detector_tool_name() {
+    let detector = WindsurfDetector::default();
+    assert_eq!(detector.tool_name(), "windsurf");
+}
+
+#[test]
+fn test_windsurf_detector_workspace_mode_inserts_row() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    // Same structure as Cursor: hash/workspace.json with folder field
+    create_cursor_workspace(&ws_dir, "ws-hash-1", r#"{"folder": "/tmp/test-repo"}"#);
+
+    let detector = WindsurfDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let (tool, repo, sid): (String, String, String) = conn
+        .query_row(
+            "SELECT tool, repo_path, session_id FROM ai_sessions LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(tool, "windsurf");
+    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(sid, "windsurf-ws-hash-1");
+}
+
+#[test]
+fn test_windsurf_detector_workspace_skips_remote_uri() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(
+        &ws_dir,
+        "remote-ws",
+        r#"{"folder": "vscode-remote://ssh-remote+host/path"}"#,
+    );
+
+    let detector = WindsurfDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "remote URIs should be skipped");
+}
+
+#[test]
+fn test_windsurf_detector_missing_workspace_dir_no_panic() {
+    let (_tmp, conn) = setup_db();
+    let nonexistent = PathBuf::from("/tmp/definitely-does-not-exist-windsurf-ws");
+
+    // Process-only fallback — no Windsurf process running, so no sessions created
+    let detector = WindsurfDetector::with_workspace_dir(nonexistent);
+    detector.poll(&conn, &[]);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[test]
+fn test_windsurf_detector_turns_are_none() {
+    let (_tmp, conn) = setup_db();
+    let ws_tmp = TempDir::new().unwrap();
+    let ws_dir = ws_tmp.path().to_path_buf();
+
+    create_cursor_workspace(&ws_dir, "turns-ws", r#"{"folder": "/tmp/test-repo"}"#);
+
+    let detector = WindsurfDetector::with_workspace_dir(ws_dir);
+    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+
+    let turns_null: bool = conn
+        .query_row(
+            "SELECT turns IS NULL FROM ai_sessions WHERE session_id = 'windsurf-turns-ws'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(turns_null, "Windsurf sessions should have NULL turns");
+}
+
+#[test]
+fn test_windsurf_detector_ends_sessions_when_process_not_running() {
+    let (_tmp, conn) = setup_db();
+
+    // Pre-insert an active windsurf session
+    db::insert_ai_session(&conn, "windsurf", "/tmp/repo", "windsurf-test-2026-03-29", "2026-03-29T00:00:00Z").unwrap();
+
+    // Verify it's active
+    let active = db::get_active_sessions_by_tool(&conn, "windsurf").unwrap();
+    assert_eq!(active.len(), 1);
+
+    // Poll with nonexistent workspace dir — falls to process-only mode.
+    // Windsurf process not running → should mark session ended.
+    let detector = WindsurfDetector::with_workspace_dir(PathBuf::from("/tmp/nonexistent"));
+    detector.poll(&conn, &[]);
+
+    let active_after = db::get_active_sessions_by_tool(&conn, "windsurf").unwrap();
+    assert_eq!(active_after.len(), 0, "session should be marked ended when Windsurf not running");
+}
+
+#[test]
+fn test_windsurf_detector_synthetic_session_id_format() {
+    // Verify the synthetic ID generation helper
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let repo_path = "/Users/foo/projects/my-app";
+    let slug = std::path::Path::new(repo_path)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let session_id = format!("windsurf-{slug}-{today}");
+    assert!(session_id.starts_with("windsurf-my-app-"));
+    assert!(session_id.contains(&today));
 }
