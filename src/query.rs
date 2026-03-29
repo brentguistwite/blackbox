@@ -222,6 +222,14 @@ pub struct ActivityEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct BranchSwitchEvent {
+    pub repo_path: String,
+    pub from_branch: Option<String>,
+    pub to_branch: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ReviewInfo {
     pub pr_number: i64,
     pub pr_title: String,
@@ -412,6 +420,46 @@ pub fn query_streak(conn: &Connection, exclude_weekends: bool) -> anyhow::Result
 
 fn is_weekend(date: NaiveDate) -> bool {
     matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+}
+
+/// Query branch_switch events in [from, to], ordered by timestamp ASC.
+pub fn query_branch_switches(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<Vec<BranchSwitchEvent>> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, source_branch, branch, timestamp
+         FROM git_activity
+         WHERE event_type = 'branch_switch' AND timestamp >= ?1 AND timestamp <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+
+    let mut events = Vec::new();
+    for row in rows {
+        let (repo_path, from_branch, to_branch, timestamp_str) = row?;
+        let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)?.with_timezone(&Utc);
+        events.push(BranchSwitchEvent {
+            repo_path,
+            from_branch,
+            to_branch,
+            timestamp,
+        });
+    }
+
+    Ok(events)
 }
 
 /// Query activity from DB, grouped by repo, with time estimates per repo.
