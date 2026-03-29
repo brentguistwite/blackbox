@@ -83,6 +83,74 @@ pub fn enrich_with_prs(repos: &mut [RepoSummary]) {
     }
 }
 
+// --- PR detail fetching (cycle time metrics) ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhCommit {
+    pub oid: String,
+    #[serde(rename = "committedDate")]
+    pub committed_date: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhPrDetail {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    #[serde(rename = "headRefName")]
+    pub head_ref_name: String,
+    #[serde(rename = "baseRefName")]
+    pub base_ref_name: String,
+    #[serde(default)]
+    pub author: Option<GhReviewAuthor>,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+    #[serde(rename = "mergedAt")]
+    pub merged_at: Option<String>,
+    #[serde(rename = "closedAt")]
+    pub closed_at: Option<String>,
+    #[serde(default)]
+    pub reviews: Vec<GhReview>,
+    #[serde(default)]
+    pub additions: Option<i64>,
+    #[serde(default)]
+    pub deletions: Option<i64>,
+    #[serde(default)]
+    pub commits: Vec<GhCommit>,
+}
+
+/// Fetch detailed PR data for cycle time metrics. Returns None on any failure.
+/// Limit 50 caps API requests; PRs older than the 50 most-recent open/closed may not be captured.
+pub fn fetch_pr_details(repo_path: &str) -> Option<Vec<GhPrDetail>> {
+    if !gh_available() {
+        return None;
+    }
+
+    let child = Command::new("gh")
+        .args([
+            "pr",
+            "list",
+            "--state",
+            "all",
+            "--limit",
+            "50",
+            "--json",
+            "number,title,url,state,headRefName,baseRefName,author,createdAt,mergedAt,closedAt,reviews,additions,deletions,commits",
+        ])
+        .current_dir(repo_path)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+
+    let handle = std::thread::spawn(move || child.wait_with_output());
+    match handle.join() {
+        Ok(Ok(output)) if output.status.success() => serde_json::from_slice(&output.stdout).ok(),
+        _ => None,
+    }
+}
+
 // --- Review activity tracking ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
