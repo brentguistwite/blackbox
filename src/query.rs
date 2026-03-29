@@ -394,14 +394,14 @@ pub fn query_streak(conn: &Connection, exclude_weekends: bool) -> anyhow::Result
     for _ in 0..1100 {
         if day_set.contains(&cursor) {
             count += 1;
-            cursor = cursor - Duration::days(1);
+            cursor -= Duration::days(1);
         } else if !grace_used && cursor == today {
             // Today has no commits yet — still alive, move to yesterday
             grace_used = true;
-            cursor = cursor - Duration::days(1);
+            cursor -= Duration::days(1);
         } else if exclude_weekends && is_weekend(cursor) {
             // Weekend day with no commit — skip (doesn't break streak)
-            cursor = cursor - Duration::days(1);
+            cursor -= Duration::days(1);
         } else {
             break;
         }
