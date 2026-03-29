@@ -445,6 +445,37 @@ fn test_regular_repo_main_repo_path_equals_key() {
     assert_eq!(recorded, path_str);
 }
 
+#[test]
+fn test_branch_switch_records_source_branch() {
+    let repo_tmp = TempDir::new().unwrap();
+    let db_tmp = TempDir::new().unwrap();
+    let repo = create_test_repo(&repo_tmp);
+    let conn = open_test_db(&db_tmp);
+
+    let mut state = RepoState::default();
+    let path_str = repo_tmp.path().to_string_lossy();
+    // First poll: seed on default branch (main/master)
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+    let original_branch = state.last_head_branch.clone().unwrap();
+
+    // Switch to new branch
+    create_branch_and_switch(&repo, "feature-y");
+
+    // Second poll: detect branch switch
+    poll_repo(repo_tmp.path(), &path_str, &mut state, &conn).unwrap();
+
+    assert_eq!(count_events(&conn, "branch_switch"), 1);
+
+    let source: String = conn
+        .query_row(
+            "SELECT source_branch FROM git_activity WHERE event_type = 'branch_switch'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(source, original_branch);
+}
+
 /// Create a repo whose initial commit has a specific epoch timestamp.
 fn create_test_repo_at(tmp: &TempDir, epoch: i64) -> Repository {
     let repo = Repository::init(tmp.path()).unwrap();

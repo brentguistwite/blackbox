@@ -84,7 +84,7 @@ pub fn poll_repo(
                 db_repo_path,
                 "branch_switch",
                 current_branch.as_deref(),
-                None,
+                state.last_head_branch.as_deref(),
                 None,
                 None,
                 None,
