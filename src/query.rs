@@ -361,6 +361,58 @@ pub fn heatmap_range(weeks: u32) -> (DateTime<Utc>, DateTime<Utc>) {
     (start_utc, end_utc)
 }
 
+/// Returns current commit streak in calendar days (local time).
+/// Streak = consecutive days ending today (or yesterday if no commits today yet)
+/// with >= 1 commit each day.
+/// exclude_weekends: if true, Sat/Sun gaps don't break the streak.
+pub fn query_streak(conn: &Connection, exclude_weekends: bool) -> anyhow::Result<u32> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT date(timestamp, 'localtime') as day
+         FROM git_activity
+         WHERE event_type = 'commit'
+         ORDER BY day DESC",
+    )?;
+
+    let days: Vec<NaiveDate> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .filter_map(|r| r.ok())
+        .filter_map(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .collect();
+
+    if days.is_empty() {
+        return Ok(0);
+    }
+
+    let day_set: std::collections::HashSet<NaiveDate> = days.iter().copied().collect();
+    let today = Local::now().date_naive();
+    let mut cursor = today;
+    let mut count: u32 = 0;
+    let mut grace_used = false; // allow today to have no commits
+
+    // Walk backward from today. Max ~3 years lookback to prevent infinite loop.
+    for _ in 0..1100 {
+        if day_set.contains(&cursor) {
+            count += 1;
+            cursor = cursor - Duration::days(1);
+        } else if !grace_used && cursor == today {
+            // Today has no commits yet — still alive, move to yesterday
+            grace_used = true;
+            cursor = cursor - Duration::days(1);
+        } else if exclude_weekends && is_weekend(cursor) {
+            // Weekend day with no commit — skip (doesn't break streak)
+            cursor = cursor - Duration::days(1);
+        } else {
+            break;
+        }
+    }
+
+    Ok(count)
+}
+
+fn is_weekend(date: NaiveDate) -> bool {
+    matches!(date.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun)
+}
+
 /// Query activity from DB, grouped by repo, with time estimates per repo.
 pub fn query_activity(
     conn: &Connection,
