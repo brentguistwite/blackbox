@@ -237,6 +237,14 @@ fn main() -> anyhow::Result<()> {
                 OutputFormat::Csv => anyhow::bail!("--format csv not supported for prs command"),
             }
         }
+        Commands::PerfReview { from, to } => {
+            let (_from_utc, _to_utc) = blackbox::query::resolve_perf_review_range(
+                from.as_deref(),
+                to.as_deref(),
+            )?;
+            // Full implementation in US-08
+            eprintln!("perf-review not yet fully implemented");
+        }
         Commands::Insights { window, format } => {
             blackbox::insights::run_insights(window.as_deref(), format)?;
         }
