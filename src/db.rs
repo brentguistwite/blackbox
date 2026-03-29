@@ -223,3 +223,77 @@ pub fn insert_activity(
     )?;
     Ok(rows > 0)
 }
+
+/// Per-file line stats from a single commit.
+#[derive(Debug, Clone)]
+pub struct CommitLineStat {
+    pub repo_path: String,
+    pub commit_hash: String,
+    pub file_path: String,
+    pub lines_added: i64,
+    pub lines_deleted: i64,
+    pub committed_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Insert per-file line stats for a commit. Returns true if inserted, false if duplicate.
+pub fn insert_commit_line_stats(
+    conn: &Connection,
+    repo_path: &str,
+    commit_hash: &str,
+    file_path: &str,
+    lines_added: i64,
+    lines_deleted: i64,
+    committed_at: &str,
+) -> anyhow::Result<bool> {
+    match conn.execute(
+        "INSERT OR IGNORE INTO commit_line_stats (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at],
+    ) {
+        Ok(0) => Ok(false),
+        Ok(_) => Ok(true),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Query commit_line_stats for a repo since a given time, ordered by committed_at ASC.
+pub fn query_commit_line_stats_for_repo(
+    conn: &Connection,
+    repo_path: &str,
+    since: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<Vec<CommitLineStat>> {
+    let since_str = since.to_rfc3339();
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at
+         FROM commit_line_stats
+         WHERE repo_path = ?1 AND committed_at >= ?2
+         ORDER BY committed_at ASC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![repo_path, since_str], |row| {
+        let committed_at_str: String = row.get(5)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            committed_at_str,
+        ))
+    })?;
+    let mut stats = Vec::new();
+    for r in rows {
+        let (repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at_str) = r?;
+        let committed_at = chrono::DateTime::parse_from_rfc3339(&committed_at_str)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .unwrap_or_else(|_| chrono::Utc::now());
+        stats.push(CommitLineStat {
+            repo_path,
+            commit_hash,
+            file_path,
+            lines_added,
+            lines_deleted,
+            committed_at,
+        });
+    }
+    Ok(stats)
+}

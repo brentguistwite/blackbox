@@ -1,4 +1,5 @@
 use blackbox::db;
+use chrono::Utc;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -760,4 +761,93 @@ fn test_churn_events_insert_or_ignore() {
             [], |r| r.get(0),
         ).unwrap();
     assert_eq!(churned, 5);
+}
+
+#[test]
+fn test_insert_commit_line_stats() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let inserted = db::insert_commit_line_stats(
+        &conn, "/repo", "abc123", "src/main.rs", 10, 5, "2026-03-20T10:00:00Z",
+    ).unwrap();
+    assert!(inserted);
+
+    let (rp, ch, fp, la, ld): (String, String, String, i64, i64) = conn
+        .query_row(
+            "SELECT repo_path, commit_hash, file_path, lines_added, lines_deleted FROM commit_line_stats WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+        ).unwrap();
+    assert_eq!(rp, "/repo");
+    assert_eq!(ch, "abc123");
+    assert_eq!(fp, "src/main.rs");
+    assert_eq!(la, 10);
+    assert_eq!(ld, 5);
+}
+
+#[test]
+fn test_insert_commit_line_stats_dedup() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let first = db::insert_commit_line_stats(
+        &conn, "/repo", "abc123", "src/main.rs", 10, 5, "2026-03-20T10:00:00Z",
+    ).unwrap();
+    assert!(first);
+
+    // Same commit+file → ignored, returns false
+    let second = db::insert_commit_line_stats(
+        &conn, "/repo", "abc123", "src/main.rs", 99, 99, "2026-03-20T10:00:00Z",
+    ).unwrap();
+    assert!(!second);
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM commit_line_stats", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn test_query_commit_line_stats_for_repo() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    // Insert 3 rows with different timestamps
+    db::insert_commit_line_stats(&conn, "/repo", "ccc", "f.rs", 3, 0, "2026-03-20T12:00:00Z").unwrap();
+    db::insert_commit_line_stats(&conn, "/repo", "aaa", "f.rs", 1, 0, "2026-03-20T10:00:00Z").unwrap();
+    db::insert_commit_line_stats(&conn, "/repo", "bbb", "f.rs", 2, 0, "2026-03-20T11:00:00Z").unwrap();
+    // Different repo — should not appear
+    db::insert_commit_line_stats(&conn, "/other", "ddd", "f.rs", 9, 9, "2026-03-20T10:00:00Z").unwrap();
+
+    let since = chrono::DateTime::parse_from_rfc3339("2026-03-20T00:00:00Z").unwrap().with_timezone(&Utc);
+    let stats = db::query_commit_line_stats_for_repo(&conn, "/repo", since).unwrap();
+
+    assert_eq!(stats.len(), 3);
+    // Must be ASC by committed_at
+    assert_eq!(stats[0].commit_hash, "aaa");
+    assert_eq!(stats[1].commit_hash, "bbb");
+    assert_eq!(stats[2].commit_hash, "ccc");
+    assert_eq!(stats[0].lines_added, 1);
+    assert_eq!(stats[1].lines_added, 2);
+    assert_eq!(stats[2].lines_added, 3);
+}
+
+#[test]
+fn test_query_commit_line_stats_since_filter() {
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    db::insert_commit_line_stats(&conn, "/repo", "old", "f.rs", 5, 0, "2026-03-01T10:00:00Z").unwrap();
+    db::insert_commit_line_stats(&conn, "/repo", "new", "f.rs", 7, 0, "2026-03-20T10:00:00Z").unwrap();
+
+    let since = chrono::DateTime::parse_from_rfc3339("2026-03-15T00:00:00Z").unwrap().with_timezone(&Utc);
+    let stats = db::query_commit_line_stats_for_repo(&conn, "/repo", since).unwrap();
+
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0].commit_hash, "new");
 }
