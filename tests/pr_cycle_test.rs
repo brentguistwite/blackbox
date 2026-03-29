@@ -1,5 +1,5 @@
 use blackbox::db::{open_db, upsert_pr_snapshot};
-use blackbox::enrichment::{collect_pr_snapshots, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
+use blackbox::enrichment::{collect_pr_snapshots, fetch_pr_details, GhCommit, GhPrDetail, GhReview, GhReviewAuthor};
 use blackbox::output::{render_pr_cycle_stats, render_pr_cycle_json};
 use blackbox::query::{query_pr_cycle_stats, PrCycleStats, PrMetrics};
 use chrono::{TimeZone, Utc};
@@ -286,6 +286,23 @@ fn collect_pr_snapshots_real_non_github_dir_skipped_silently() {
         .query_row("SELECT COUNT(*) FROM pr_snapshots", [], |row| row.get(0))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+// --- US-016: edge case: gh rate limit / --limit 50 ---
+
+#[test]
+fn fetch_pr_details_returns_none_on_non_github_dir() {
+    // Non-GitHub dir causes gh to exit non-zero → returns None, no panic
+    let tmpdir = tempfile::tempdir().unwrap();
+    let result = fetch_pr_details(&tmpdir.path().to_string_lossy());
+    assert!(result.is_none());
+}
+
+#[test]
+fn fetch_pr_details_returns_none_on_nonexistent_path() {
+    // Nonexistent path → spawn fails or gh exits non-zero → None
+    let result = fetch_pr_details("/nonexistent/repo/path/that/does/not/exist");
+    assert!(result.is_none());
 }
 
 #[test]
