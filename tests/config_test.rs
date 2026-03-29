@@ -216,3 +216,41 @@ fn test_default_config_worktree_dir_name() {
     let cfg = Config::default();
     assert_eq!(cfg.worktree_dir_name, Some(".worktrees".to_string()));
 }
+
+// --- US-005: streak_exclude_weekends ---
+
+#[test]
+fn test_default_config_streak_exclude_weekends_false() {
+    let cfg = Config::default();
+    assert!(!cfg.streak_exclude_weekends);
+}
+
+#[test]
+fn test_parse_missing_streak_exclude_weekends_defaults_false() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.streak_exclude_weekends);
+}
+
+#[test]
+fn test_parse_streak_exclude_weekends_true() {
+    let toml_str = r#"
+        watch_dirs = []
+        streak_exclude_weekends = true
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.streak_exclude_weekends);
+}
+
+#[test]
+fn test_streak_exclude_weekends_roundtrip() {
+    let cfg = Config {
+        streak_exclude_weekends: true,
+        ..Config::default()
+    };
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert!(deserialized.streak_exclude_weekends);
+}
