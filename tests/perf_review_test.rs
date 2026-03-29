@@ -1,3 +1,4 @@
+use assert_cmd::Command;
 use blackbox::db;
 use blackbox::llm::LlmConfig;
 use blackbox::perf_review::{
@@ -113,6 +114,152 @@ fn context_with_only_reviews_does_not_error() {
         );
     }
     // If it somehow succeeds (unlikely), that's also fine
+}
+
+// --- US-12: CLI integration tests ---
+
+/// Set up temp XDG dirs with a minimal config (no LLM key).
+fn setup_temp_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(config_dir.join("blackbox")).unwrap();
+    std::fs::write(
+        config_dir.join("blackbox").join("config.toml"),
+        "watch_dirs = []\npoll_interval_secs = 60\n",
+    )
+    .unwrap();
+    (tmp, data_dir, config_dir)
+}
+
+/// Set up temp XDG dirs with config that includes a fake LLM API key.
+fn setup_temp_env_with_llm_key() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let data_dir = tmp.path().join("data");
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::create_dir_all(config_dir.join("blackbox")).unwrap();
+    std::fs::write(
+        config_dir.join("blackbox").join("config.toml"),
+        "watch_dirs = []\npoll_interval_secs = 60\nllm_api_key = \"fake-key\"\nllm_provider = \"anthropic\"\n",
+    )
+    .unwrap();
+    (tmp, data_dir, config_dir)
+}
+
+fn open_test_db(data_dir: &std::path::Path) -> rusqlite::Connection {
+    let db_path = data_dir.join("blackbox").join("blackbox.db");
+    std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+    db::open_db(&db_path).unwrap()
+}
+
+/// Insert N commits into a repo at timestamps within 2020.
+fn seed_commits(conn: &rusqlite::Connection, repo_path: &str, count: usize) {
+    for i in 0..count {
+        let ts = format!("2020-02-{:02}T10:00:00+00:00", (i % 28) + 1);
+        db::insert_activity(
+            conn,
+            repo_path,
+            "commit",
+            Some("main"),
+            None,
+            Some(&format!("hash{i}")),
+            Some("dev"),
+            Some(&format!("feat: implement feature {i}")),
+            &ts,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn cli_perf_review_no_api_key_exits_1() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env();
+    let conn = open_test_db(&data_dir);
+
+    // Insert 15 commits across 2 repos + 3 reviews
+    seed_commits(&conn, "/repo/alpha", 8);
+    seed_commits(&conn, "/repo/beta", 7);
+    for i in 0..3 {
+        db::insert_review(
+            &conn,
+            "/repo/alpha",
+            i + 1,
+            &format!("PR {}", i + 1),
+            "https://github.com/test/pr",
+            "APPROVED",
+            &format!("2020-02-{:02}T12:00:00+00:00", i + 1),
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .arg("perf-review")
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected exit 1 with no API key"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("API key") || stderr.contains("api_key"),
+        "expected API key error, got: {stderr}"
+    );
+}
+
+#[test]
+fn cli_perf_review_empty_range_no_activity() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env_with_llm_key();
+    let _conn = open_test_db(&data_dir);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["perf-review", "--from", "2020-01-01", "--to", "2020-01-02"])
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for empty period"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No activity"),
+        "expected 'No activity' error, got: {stderr}"
+    );
+}
+
+#[test]
+fn cli_perf_review_invalid_date() {
+    let (_tmp, data_dir, config_dir) = setup_temp_env_with_llm_key();
+    let _conn = open_test_db(&data_dir);
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["perf-review", "--from", "baddate", "--to", "2020-12-31"])
+        .env("XDG_DATA_HOME", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .output()
+        .unwrap();
+
+    assert!(
+        !output.status.success(),
+        "expected exit 1 for invalid date"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Invalid date"),
+        "expected 'Invalid date' error, got: {stderr}"
+    );
 }
 
 #[test]
