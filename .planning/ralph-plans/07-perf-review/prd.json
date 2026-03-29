@@ -1,0 +1,221 @@
+{
+  "project": "perf-review",
+  "branchName": "feature/perf-review",
+  "description": "LLM-powered self-assessment generator for performance review season. Aggregates a quarter (or custom date range) of git activity, PR data, and review contributions; extracts themes from commit messages; computes time invested; feeds structured context to LLM; streams a markdown-formatted self-assessment to stdout.",
+  "userStories": [
+    {
+      "id": "US-01",
+      "title": "Quarter date-range helper",
+      "description": "As a developer, I want blackbox to automatically compute the current calendar quarter's date range so I don't have to pass --from/--to manually.",
+      "acceptanceCriteria": [
+        "Add `quarter_range() -> (DateTime<Utc>, DateTime<Utc>)` in `query.rs` alongside `today_range`, `week_range`, `month_range`.",
+        "Q1=Jan-Mar, Q2=Apr-Jun, Q3=Jul-Sep, Q4=Oct-Dec. Range is [quarter_start_midnight_local, now_utc].",
+        "Unit test for each quarter boundary."
+      ],
+      "priority": "P0",
+      "dependencies": [],
+      "passes": false
+    },
+    {
+      "id": "US-02",
+      "title": "Custom date-range flag",
+      "description": "As a developer, I want to run `blackbox perf-review --from 2025-01-01 --to 2025-03-31` so I can generate reviews for past quarters or non-standard periods.",
+      "acceptanceCriteria": [
+        "`PerfReview` command in `cli.rs` accepts `--from <YYYY-MM-DD>` and `--to <YYYY-MM-DD>` optional args.",
+        "When omitted, defaults to current calendar quarter via `quarter_range()`.",
+        "Invalid date strings produce a clear error via `anyhow::bail!`.",
+        "Dates are parsed in local timezone, converted to UTC for DB queries."
+      ],
+      "priority": "P0",
+      "dependencies": [
+        "US-01"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-03",
+      "title": "Quarterly activity aggregation",
+      "description": "As a developer, I want the command to aggregate all commits, branch names, and time estimates across the date range so the LLM has complete raw material.",
+      "acceptanceCriteria": [
+        "Reuses existing `query_activity(conn, from, to, ...)` \u2014 no new DB schema needed.",
+        "Calls `enrich_with_prs` for PR data (graceful degradation if gh unavailable).",
+        "Computes `global_estimated_time` for total hours invested.",
+        "Populates `ActivitySummary` with `period_label` set to e.g. \"Q1 2025\" or \"Jan 1 \u2013 Mar 31 2025\"."
+      ],
+      "priority": "P0",
+      "dependencies": [
+        "US-01",
+        "US-02"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-04",
+      "title": "Commit-message theme extraction",
+      "description": "As a developer, I want the system to identify recurring themes (feature areas, tech domains) from commit messages before sending to the LLM, so the prompt is richer and token usage stays bounded.",
+      "acceptanceCriteria": [
+        "Add `extract_commit_themes(repos: &[RepoSummary]) -> Vec<String>` in a new `perf_review.rs` module.",
+        "Extracts the top-N (default 20) most-frequent lowercase word stems from all commit messages, excluding stop-words (fix, the, a, an, add, update, chore, feat, refactor, test, wip, merge, bump, etc.).",
+        "Returns sorted list of `\"theme (N occurrences)\"` strings.",
+        "If total commits < 5, returns empty vec without error.",
+        "Unit tests: empty input, all stop-words, normal corpus."
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-03"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-05",
+      "title": "PR summary compilation",
+      "description": "As a developer, I want a structured PR summary (authored PRs and reviewed PRs) included in the LLM context so the review mentions cross-team collaboration.",
+      "acceptanceCriteria": [
+        "Add `compile_pr_summary(repos: &[RepoSummary]) -> PrSummary` in `perf_review.rs`.",
+        "`PrSummary` struct contains: `authored_prs: Vec<(repo_name, pr_number, pr_title)>` (from `pr_info`), `reviewed_prs: Vec<(repo_name, pr_number, pr_title, action)>` (from `reviews`).",
+        "Deduplicates reviewed PRs by pr_number per repo (keep highest-priority action: APPROVED > CHANGES_REQUESTED > COMMENTED).",
+        "If gh unavailable, both vecs are empty \u2014 no error.",
+        "Unit tests for dedup logic."
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-03"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-06",
+      "title": "Perf-review LLM prompt",
+      "description": "As a developer, I want a purpose-built system prompt and structured user message that instructs the LLM to write a performance review self-assessment, not just a daily summary.",
+      "acceptanceCriteria": [
+        "Add `PERF_REVIEW_SYSTEM_PROMPT: &str` in `llm.rs` (or `perf_review.rs`). Prompt instructs: write in first-person professional tone, ~400\u2013600 words, markdown with sections: Summary, Key Contributions, Technical Themes, Collaboration, Time Investment.",
+        "Add `generate_perf_review(config: &LlmConfig, context: &PerfReviewContext) -> anyhow::Result<()>` that serializes context to JSON and streams via existing `stream_anthropic`/`stream_openai` infrastructure.",
+        "`max_tokens` set to 2048 (reviews are longer than daily summaries).",
+        "If total_commits == 0 and total_reviews == 0, return `Err` with message: \"No activity found for this period. Is the daemon running?\"",
+        "Token budget guard: if serialized context > 40,000 chars, truncate commit message list to most-recent 200 commits with a note appended to the prompt."
+      ],
+      "priority": "P0",
+      "dependencies": [
+        "US-04",
+        "US-05"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-07",
+      "title": "PerfReviewContext struct",
+      "description": "As an implementer, I need a typed context struct that bundles all data for the LLM so serialization is deterministic and testable.",
+      "acceptanceCriteria": [
+        "Add `PerfReviewContext` in `perf_review.rs` with fields: `period_label: String`, `total_commits: usize`, `total_reviews: usize`, `total_repos: usize`, `total_estimated_hours: f64`, `total_ai_session_hours: f64`, `repos: Vec<PerfReviewRepo>`, `themes: Vec<String>`, `pr_summary: PrSummary`.",
+        "`PerfReviewRepo` contains: `repo_name`, `commits`, `branches`, `estimated_hours`, `recent_commit_messages: Vec<String>` (max 50 per repo), `authored_prs`, `reviewed_prs`.",
+        "Derives `serde::Serialize`.",
+        "Add `build_perf_review_context(summary: &ActivitySummary) -> PerfReviewContext` that assembles all the above.",
+        "Unit test: round-trips through serde_json."
+      ],
+      "priority": "P0",
+      "dependencies": [
+        "US-04",
+        "US-05"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-08",
+      "title": "CLI command: `blackbox perf-review`",
+      "description": "As a developer, I want to run `blackbox perf-review` and get a streamed markdown self-assessment.",
+      "acceptanceCriteria": [
+        "Add `PerfReview { from: Option<String>, to: Option<String> }` variant to `Commands` enum in `cli.rs`.",
+        "Add match arm in `main.rs` that: loads config, opens DB, resolves date range, calls `query_activity`, calls `enrich_with_prs`, builds `PerfReviewContext`, calls `generate_perf_review`.",
+        "If `llm_api_key` not configured, print helpful error (same pattern as `build_llm_config`).",
+        "Command is NOT added to `is_exempt_from_config_check`.",
+        "`cargo build` succeeds. `blackbox perf-review --help` shows meaningful description."
+      ],
+      "priority": "P0",
+      "dependencies": [
+        "US-02",
+        "US-06",
+        "US-07"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-09",
+      "title": "Sparse activity graceful handling",
+      "description": "As a developer with < 1 month of blackbox data, I want the command to still work and note the limited data window rather than crash or produce nonsense.",
+      "acceptanceCriteria": [
+        "If total_commits < 10, prepend a warning line to the LLM prompt: \"Note: limited data \u2014 only {n} commits recorded. User may have started tracking recently.\"",
+        "If zero commits AND zero reviews: return error \"No activity found for this period.\" before making any LLM call.",
+        "Integration test (with fake DB): verifies error returned for empty period."
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-06",
+        "US-07"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-10",
+      "title": "No-API-key error UX",
+      "description": "As a developer who hasn't configured an LLM key, I want a clear actionable error message explaining exactly what to add to config.toml.",
+      "acceptanceCriteria": [
+        "Error message references `perf-review` specifically: \"blackbox perf-review requires an LLM API key...\"",
+        "Shows exact TOML snippet to add.",
+        "Reuses `build_llm_config` error path \u2014 no extra code needed beyond ensuring the command calls it before doing any DB work that could be slow."
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-08"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-11",
+      "title": "New module `perf_review.rs`",
+      "description": "As an implementer, I want all perf-review logic isolated in its own module so it doesn't pollute query.rs or llm.rs.",
+      "acceptanceCriteria": [
+        "Create `src/perf_review.rs` with `PerfReviewContext`, `PerfReviewRepo`, `PrSummary`, `build_perf_review_context`, `extract_commit_themes`, `compile_pr_summary`, `generate_perf_review`, `PERF_REVIEW_SYSTEM_PROMPT`.",
+        "Declare `pub mod perf_review;` in `lib.rs`.",
+        "`cargo clippy -- -D warnings` passes on the new module."
+      ],
+      "priority": "P0",
+      "dependencies": [],
+      "passes": false
+    },
+    {
+      "id": "US-12",
+      "title": "Integration test: perf-review CLI with mock DB",
+      "description": "As a maintainer, I want an integration test that exercises the full perf-review path (minus actual LLM call) so regressions are caught.",
+      "acceptanceCriteria": [
+        "Add `tests/perf_review.rs`.",
+        "Test: create temp DB, insert 15 commits across 2 repos + 3 reviews, run `blackbox perf-review` with no LLM key \u2192 expect exit code 1 and stderr contains \"API key\".",
+        "Test: `--from 2020-01-01 --to 2020-01-01` (empty range) \u2192 exit 1, stderr contains \"No activity\".",
+        "Test: `--from baddate` \u2192 exit 1, stderr contains \"Invalid date\".",
+        "Uses `assert_cmd::Command`, `tempfile::TempDir`."
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-08",
+        "US-09"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-13",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P1",
+      "dependencies": [
+        "US-12"
+      ],
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root."
+    }
+  ]
+}

@@ -1,0 +1,310 @@
+{
+  "project": "repo-deep-dive",
+  "branchName": "feature/repo-deep-dive",
+  "description": "blackbox repo <path> \u2014 single-repo deep dive. onefetch-inspired: language breakdown via git2, top files changed, time invested all-time, PR history from DB, branch activity summary, pretty + JSON output.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Repo path resolution and validation",
+      "description": "Resolve the user-supplied path to an absolute canonical path, verify it is a git repo, and look up the normalized form used in the DB (which may differ if the user passed a worktree path or a relative path). Returns an error if the path is not a git repo. Returns a warning (not an error) if the repo has never been seen in the DB \u2014 output will show zeros for activity data.",
+      "acceptanceCriteria": [
+        "`pub fn resolve_repo_path(input: &str) -> anyhow::Result<std::path::PathBuf>` in a new `src/repo_deep_dive.rs` module \u2014 canonicalizes the path, verifies git2::Repository::open() succeeds, returns the canonical PathBuf",
+        "If git2::Repository::open fails: return Err with message 'Not a git repository: <path>'",
+        "If path does not exist: return Err with message 'Path not found: <path>'",
+        "The resolved path is then matched against `repo_path` column in `git_activity` using both exact match and prefix match (to handle worktree variants): `SELECT DISTINCT repo_path FROM git_activity WHERE repo_path = ?1 OR repo_path LIKE ?1 || '/%' LIMIT 1`",
+        "`pub fn find_db_repo_path(conn: &Connection, canonical: &Path) -> anyhow::Result<Option<String>>` in `src/repo_deep_dive.rs` \u2014 returns the DB's repo_path string if found, None if never tracked",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "DB query: all-time activity for a single repo",
+      "description": "Add a query function that returns all git_activity, review_activity, and ai_sessions rows for a specific repo_path (no time filter). This is the raw data layer for the deep dive \u2014 all subsequent computed fields use it.",
+      "acceptanceCriteria": [
+        "`pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result<RepoAllTimeData>` in `src/repo_deep_dive.rs`",
+        "`pub struct RepoAllTimeData` in `src/repo_deep_dive.rs` with fields: `repo_path: String`, `events: Vec<crate::query::ActivityEvent>`, `reviews: Vec<crate::query::ReviewInfo>`, `ai_sessions: Vec<crate::query::AiSessionInfo>`",
+        "events: all rows from git_activity WHERE repo_path = ?1, ordered by timestamp ASC",
+        "reviews: all rows from review_activity WHERE repo_path = ?1, ordered by reviewed_at ASC",
+        "ai_sessions: all rows from ai_sessions WHERE repo_path = ?1, ordered by started_at ASC",
+        "If repo_path not in DB: all three vecs are empty (not an error)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "Language breakdown via git2",
+      "description": "Walk the repo's HEAD tree using git2, count lines (or files as a proxy) per file extension, map extensions to language names, sort by line count descending. Binary files are excluded. This is a pure git2 operation \u2014 no filesystem walk, so it works on any tracked repo.",
+      "acceptanceCriteria": [
+        "`pub struct LanguageBreakdown` in `src/repo_deep_dive.rs`: `language: String`, `file_count: usize`, `line_count: usize`, `percent: f64`",
+        "`pub fn compute_language_breakdown(repo_path: &Path) -> anyhow::Result<Vec<LanguageBreakdown>>` in `src/repo_deep_dive.rs`",
+        "Uses git2::Repository::open(repo_path), repo.head(), head.peel_to_tree(), then tree.walk() to enumerate all blob entries",
+        "For each blob entry: get file extension from entry name; if no extension or extension is empty, skip. Call repo.find_blob(entry.id()) to get the blob; if blob.is_binary() is true, skip it",
+        "Count lines per extension: blob.content() \u2192 split on b'\\n' \u2192 count lines",
+        "Extension-to-language map (hardcoded `match` in a helper fn): rs\u2192Rust, ts\u2192TypeScript, tsx\u2192TypeScript, js\u2192JavaScript, jsx\u2192JavaScript, py\u2192Python, go\u2192Go, java\u2192Java, kt\u2192Kotlin, swift\u2192Swift, rb\u2192Ruby, c\u2192C, cpp\u2192C++, cc\u2192C++, h\u2192C/C++ Header, cs\u2192C#, sh\u2192Shell, bash\u2192Shell, zsh\u2192Shell, fish\u2192Shell, toml\u2192TOML, yaml\u2192YAML, yml\u2192YAML, json\u2192JSON, md\u2192Markdown, html\u2192HTML, css\u2192CSS, scss\u2192CSS, sql\u2192SQL. Unknown extensions: use the extension as-is (lowercase).",
+        "Aggregate by language name (multiple extensions can map to same language), compute percent = line_count / total_lines * 100.0",
+        "Sort result by line_count descending. Return empty vec if HEAD has no tree or repo has no commits",
+        "If git2::Repository::open fails, return empty vec (not an error \u2014 caller already validated)",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "Top files changed query",
+      "description": "Walk commit history from HEAD using git2 (or query from DB commit hashes), compute which files appear most frequently in diffs. Returns top N files by change frequency. This uses git2 diff operations and is bounded by commit count.",
+      "acceptanceCriteria": [
+        "`pub struct FileChurnEntry` in `src/repo_deep_dive.rs`: `path: String`, `change_count: usize`",
+        "`pub fn compute_top_files(repo_path: &Path, limit: usize) -> anyhow::Result<Vec<FileChurnEntry>>` in `src/repo_deep_dive.rs`",
+        "Open repo with git2::Repository::open(repo_path). If repo has no commits (empty repo), return empty vec",
+        "Walk commits from HEAD using revwalk with Sort::TIME, cap at 500 commits to bound runtime",
+        "For each commit: get diff from parent (or empty tree if first commit) via repo.diff_tree_to_tree(). For each diff delta: increment count for delta.new_file().path() (as string). Skip binary deltas (delta.new_file().is_binary())",
+        "Sort by change_count descending, take `limit` entries",
+        "Cap total walk at 500 commits; log::debug if capped",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "Time invested: all-time estimate for single repo",
+      "description": "Compute total estimated time invested in a repo using all tracked events (no time window). Reuses existing estimate_time_v2() logic from query.rs.",
+      "acceptanceCriteria": [
+        "`pub fn compute_time_invested(data: &RepoAllTimeData, session_gap_minutes: u64, first_commit_minutes: u64) -> chrono::Duration` in `src/repo_deep_dive.rs`",
+        "Builds ai_intervals from data.ai_sessions (no clipping \u2014 use full session duration: start=started_at, end=ended_at.unwrap_or(now))",
+        "Calls crate::query::estimate_time_v2(&data.events, &ai_intervals, session_gap_minutes, first_commit_minutes)",
+        "Returns the Duration",
+        "If data.events is empty and data.ai_sessions is empty: returns Duration::zero()",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "PR history for single repo",
+      "description": "Enumerate all PRs ever associated with this repo, combining: (a) review_activity rows from DB, (b) live gh CLI fetch. This gives a richer picture than the time-windowed query in enrichment.rs.",
+      "acceptanceCriteria": [
+        "`pub struct RepoPrEntry` in `src/repo_deep_dive.rs`: `number: u64`, `title: String`, `state: String`, `branch: Option<String>`, `url: Option<String>`",
+        "`pub fn fetch_repo_pr_history(repo_path: &str, data: &RepoAllTimeData) -> Vec<RepoPrEntry>` in `src/repo_deep_dive.rs`",
+        "Step 1: collect unique PR numbers from data.reviews, create RepoPrEntry with title from review_activity, state='REVIEWED', url=None, branch=None",
+        "Step 2: if gh_available() (import from enrichment.rs or duplicate the OnceLock check), run `gh pr list --state all --json number,title,state,headRefName,url --limit 30` in repo_path dir (same pattern as enrichment.rs fetch_prs). Parse as Vec<serde_json::Value>",
+        "Step 3: merge \u2014 for each gh PR, upsert into the map by number (gh data takes precedence over review-only entries). Add any new PRs not in step 1",
+        "Sort by number descending (most recent first). Return empty vec if no gh and no reviews",
+        "Graceful degradation: if gh command fails, return review-only list",
+        "`cargo build` passes"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Branch activity summary",
+      "description": "From git_activity events for this repo, summarize branch activity: list branches seen, commit count per branch, last active timestamp per branch.",
+      "acceptanceCriteria": [
+        "`pub struct BranchActivity` in `src/repo_deep_dive.rs`: `name: String`, `commit_count: usize`, `last_active: chrono::DateTime<chrono::Utc>`",
+        "`pub fn compute_branch_activity(data: &RepoAllTimeData) -> Vec<BranchActivity>` in `src/repo_deep_dive.rs`",
+        "Scan data.events: for each event with event_type='commit' and branch=Some(name), increment commit_count for that branch and track max timestamp",
+        "Also include branches from branch_switch events (branch=Some(name)) even if commit_count=0 for those",
+        "Sort by last_active descending",
+        "Return empty vec if no events",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "title": "RepoDeepDive aggregate struct",
+      "description": "Bundle all computed deep-dive data into one struct. This is what the output layer renders.",
+      "acceptanceCriteria": [
+        "`pub struct RepoDeepDive` in `src/repo_deep_dive.rs` with fields: `repo_path: String`, `repo_name: String`, `total_commits: usize`, `first_commit_at: Option<chrono::DateTime<chrono::Utc>>`, `last_commit_at: Option<chrono::DateTime<chrono::Utc>>`, `total_estimated_time: chrono::Duration`, `languages: Vec<LanguageBreakdown>`, `top_files: Vec<FileChurnEntry>`, `branches: Vec<BranchActivity>`, `prs: Vec<RepoPrEntry>`, `tracked: bool`",
+        "`tracked: bool` = false when find_db_repo_path returned None (repo never seen in DB)",
+        "first_commit_at / last_commit_at: min/max timestamp from data.events where event_type='commit'. None if no commits",
+        "total_commits: count of events with event_type='commit' in RepoAllTimeData",
+        "`pub fn build_deep_dive(repo_path: &str, conn: &Connection, config: &crate::config::Config) -> anyhow::Result<RepoDeepDive>` in `src/repo_deep_dive.rs` \u2014 orchestrates all sub-computations: resolve_repo_path, find_db_repo_path, query_repo_all_time, compute_language_breakdown, compute_top_files, compute_time_invested, compute_branch_activity, fetch_repo_pr_history",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-006",
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "title": "Pretty output for repo deep dive",
+      "description": "Render RepoDeepDive as a human-readable terminal display inspired by onefetch: repo name header, language bar, top stats in two columns, then sections for branches, top files, PR history.",
+      "acceptanceCriteria": [
+        "`pub fn render_repo_pretty(dive: &RepoDeepDive)` in `src/output.rs`",
+        "Header: `=== <repo_name> ===` bold cyan. If !tracked: add `(untracked \u2014 no activity in DB)` dimmed",
+        "Stats block (each on own line, label right-padded to 20 chars): `Tracked commits`, `Total time`, `First commit`, `Last commit`. Dates formatted as `%Y-%m-%d`. Time via format_duration(). If None: show `-`",
+        "Languages section header `Languages:` bold. For each LanguageBreakdown (top 8): `  <language> <percent:.1>%` with a mini bar rendered as colored blocks. Bar: 20 chars wide, filled = round(percent/100*20) chars as `\u2588`, empty as `\u2591`. Color: cycle through [cyan, green, yellow, magenta, blue, red, white, bright_cyan]",
+        "Top files section header `Top files changed:` bold. For each FileChurnEntry (top 10): `  <change_count>x <path>` \u2014 count right-padded to 4 chars",
+        "Branches section header `Branches:` bold. For each BranchActivity: `  <name> \u2014 <commit_count> commits, last active <YYYY-MM-DD>`",
+        "PRs section header `Pull requests:` bold. Only shown if prs is non-empty. For each RepoPrEntry (top 10 by number): `  #<number> <title> [<state>]`. State colors: MERGED=magenta, OPEN=green, CLOSED=dimmed, REVIEWED=cyan",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-008"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "title": "JSON output for repo deep dive",
+      "description": "Serialize RepoDeepDive to JSON. Reuse the --format OutputFormat enum pattern established in Today/Week/Month commands.",
+      "acceptanceCriteria": [
+        "`pub struct JsonRepoDeepDive` in `src/output.rs` with serde::Serialize \u2014 mirrors RepoDeepDive but with chrono fields as RFC3339 strings and Duration as minutes (i64)",
+        "`pub fn render_repo_json(dive: &RepoDeepDive) -> String` in `src/output.rs` \u2014 constructs JsonRepoDeepDive and calls serde_json::to_string_pretty()",
+        "LanguageBreakdown, FileChurnEntry, BranchActivity, RepoPrEntry all derive serde::Serialize (add derives in repo_deep_dive.rs)",
+        "All Option<DateTime> fields serialize as Option<String> (rfc3339 or null)",
+        "Duration fields serialize as `*_minutes: i64`",
+        "`cargo build` passes"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-008"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "title": "CLI command wiring: blackbox repo <path>",
+      "description": "Add the `repo` subcommand to the Commands enum and wire it in main.rs.",
+      "acceptanceCriteria": [
+        "Add variant to Commands enum in cli.rs: `/// Single-repo deep dive (language breakdown, top files, time invested, PR history)` / `Repo { #[arg()] path: String, #[arg(long, default_value = \"pretty\")] format: OutputFormat }`",
+        "Add match arm in main.rs: open DB, call build_deep_dive(), dispatch to render_repo_pretty() or render_repo_json()",
+        "main.rs match arm for Commands::Repo: load config (for session_gap/first_commit params), open DB, call `blackbox::repo_deep_dive::build_deep_dive(&path, &conn, &config)?`, then match format: Pretty \u2192 render_repo_pretty(&dive), Json \u2192 println!(\"{}\", render_repo_json(&dive)), Csv \u2192 println!(\"{}\", render_repo_json(&dive)) (JSON fallback for CSV)",
+        "Add `pub mod repo_deep_dive;` to `src/lib.rs`",
+        "`cargo build` passes",
+        "`blackbox repo .` runs without panic on any git repo"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-009",
+        "US-010"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-012",
+      "title": "Unit tests: resolve_repo_path and find_db_repo_path",
+      "description": "Tests in tests/repo_deep_dive_test.rs covering path resolution, git repo detection, and DB lookup.",
+      "acceptanceCriteria": [
+        "Test: resolve_repo_path with a valid git repo temp dir \u2192 returns canonical PathBuf, Ok",
+        "Test: resolve_repo_path with a non-existent path \u2192 Err containing 'Path not found'",
+        "Test: resolve_repo_path with a non-git temp dir \u2192 Err containing 'Not a git repository'",
+        "Test: find_db_repo_path on empty DB \u2192 returns Ok(None)",
+        "Test: find_db_repo_path after inserting a row with that repo_path \u2192 returns Ok(Some(path))",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-013",
+      "title": "Unit tests: compute_language_breakdown",
+      "description": "Tests for language breakdown using real git2 repos initialized in temp dirs.",
+      "acceptanceCriteria": [
+        "Test: repo with one committed .rs file containing 3 lines \u2192 languages contains LanguageBreakdown { language: 'Rust', line_count: 3, percent: 100.0, file_count: 1 }",
+        "Test: repo with one .rs file and one .py file \u2192 two entries, percents sum to ~100.0",
+        "Test: repo with a binary file (write 3 null bytes) \u2192 binary file excluded, does not appear in breakdown",
+        "Test: empty repo (no commits) \u2192 returns empty vec without error",
+        "Test: file with no extension \u2192 skipped",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-014",
+      "title": "Unit tests: compute_top_files and compute_branch_activity",
+      "description": "Tests for file churn and branch activity using git2 repos in temp dirs.",
+      "acceptanceCriteria": [
+        "Test: repo with 3 commits all touching the same file \u2192 FileChurnEntry { path: 'file.rs', change_count: 3 } is first result",
+        "Test: repo with 0 commits \u2192 compute_top_files returns empty vec",
+        "Test: compute_branch_activity on RepoAllTimeData with two commit events on 'main' and one on 'feature/x' \u2192 BranchActivity for 'main' has commit_count=2, for 'feature/x' has commit_count=1, sorted by last_active desc",
+        "Test: compute_branch_activity on empty events \u2192 returns empty vec",
+        "All tests pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-004",
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-015",
+      "title": "Integration test: blackbox repo CLI end-to-end",
+      "description": "CLI integration test using assert_cmd: run blackbox repo against a real git repo path and verify output format.",
+      "acceptanceCriteria": [
+        "Test: `blackbox repo <valid_git_repo_path>` \u2192 exits 0, stdout contains repo name",
+        "Test: `blackbox repo <valid_git_repo_path> --format json` \u2192 exits 0, stdout is valid JSON with keys: repo_name, total_commits, total_estimated_minutes, languages, top_files, branches",
+        "Test: `blackbox repo /tmp/definitely-not-a-repo` \u2192 exits non-zero, stderr or stdout contains 'Not a git repository' or 'Path not found'",
+        "Test: `blackbox repo <valid_git_repo_path>` on a repo not in the DB \u2192 exits 0, output contains 'untracked' indicator",
+        "All tests pass"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-011"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-016",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P1",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-015"
+      ]
+    }
+  ]
+}

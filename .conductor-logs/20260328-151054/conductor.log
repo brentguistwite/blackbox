@@ -1,0 +1,35 @@
+[15:10:54] Ralph Conductor starting
+[15:10:54] Plans dir: .planning/ralph-plans
+[15:10:54] Log dir: /Users/brent.guistwite/Documents/flosports/blackbox/.conductor-logs/20260328-151054
+[15:10:54] DRY RUN MODE
+[15:10:54] 
+[15:10:54] ════════════════════════════════════════════
+[15:10:54]   BATCH 1: 01-directory-presence-time 02-contribution-heatmap 03-work-rhythm-insights 18-repo-deep-dive
+[15:10:54] ════════════════════════════════════════════
+[15:10:54] [DRY RUN] Would run: 01-directory-presence-time
+[15:10:54] [DRY RUN] Would run: 02-contribution-heatmap
+[15:10:54] [DRY RUN] Would run: 03-work-rhythm-insights
+[15:10:54] [DRY RUN] Would run: 18-repo-deep-dive
+[15:10:54] 
+[15:10:54] ════════════════════════════════════════════
+[15:10:54]   BATCH 2: 13-sighup-config-reload 17-streak-ambient
+[15:10:54] ════════════════════════════════════════════
+[15:10:54] [DRY RUN] Would run: 13-sighup-config-reload
+[15:10:54] [DRY RUN] Would run: 17-streak-ambient
+[15:10:54] 
+[15:10:54] ════════════════════════════════════════════
+[15:10:54]   SEQUENTIAL QUEUE: 12 plans
+[15:10:54] ════════════════════════════════════════════
+[15:10:54] [DRY RUN] Would run: 11-json-tty-detection
+[15:10:54] [DRY RUN] Would run: 09-context-switch-frequency
+[15:10:54] [DRY RUN] Would run: 04-pr-cycle-time
+[15:10:54] [DRY RUN] Would run: 05-code-churn-rate
+[15:10:54] [DRY RUN] Would run: 12-richer-status
+[15:10:54] [DRY RUN] Would run: 14-os-notifications
+[15:10:54] [DRY RUN] Would run: 16-commit-message-quality
+[15:10:54] [DRY RUN] Would run: 08-multi-ai-tracking
+[15:10:54] [DRY RUN] Would run: 06-llm-insights
+[15:10:54] [DRY RUN] Would run: 07-perf-review
+[15:10:54] [DRY RUN] Would run: 10-weekly-digest
+[15:10:54] [DRY RUN] Would run: 15-next-step-suggestions
+[15:10:54] Conductor finished. Logs: /Users/brent.guistwite/Documents/flosports/blackbox/.conductor-logs/20260328-151054

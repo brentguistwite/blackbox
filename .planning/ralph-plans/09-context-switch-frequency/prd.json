@@ -1,0 +1,195 @@
+{
+  "project": "context-switch-frequency",
+  "branchName": "feature/context-switch-frequency",
+  "description": "Track and surface context-switch frequency from branch changes as a focus metric. Branch switches already recorded in git_activity (event_type='branch_switch', branch=destination, source_branch=NULL currently). Surface: 'You switched branches 14 times today across 5 repos' with implied ~23min focus cost per switch.",
+  "userStories": [
+    {
+      "id": "US-CS-01",
+      "title": "Populate source_branch on branch_switch events",
+      "priority": "P0",
+      "description": "As a user, I want branch_switch events to record the source branch (where I switched FROM) so switch pairs can be analyzed.",
+      "context": "In git_ops.rs poll_repo(), branch_switch is recorded when state.last_head_branch != current_branch. The source_branch column exists in the schema (added in migration M2) but is passed as None for branch_switch events. state.last_head_branch holds the previous branch name at detection time.",
+      "acceptanceCriteria": [
+        "branch_switch INSERT passes state.last_head_branch.as_deref() as source_branch instead of None",
+        "existing branch_switch rows with NULL source_branch are unaffected (no migration needed)",
+        "unit test: poll_repo() on a repo that has switched branches records non-NULL source_branch"
+      ],
+      "deps": [],
+      "files": [
+        "src/git_ops.rs",
+        "tests/git_ops.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-02",
+      "title": "DB query: fetch branch_switch events for a time range",
+      "priority": "P0",
+      "description": "As the system, I need a query function that returns branch_switch events in [from, to], grouped by repo, with timestamps, branch, and source_branch.",
+      "context": "query_activity() in query.rs already fetches all event_types from git_activity. A dedicated query function for branch_switch events allows the context-switch feature to remain decoupled from ActivitySummary.",
+      "acceptanceCriteria": [
+        "fn query_branch_switches(conn, from, to) -> anyhow::Result<Vec<BranchSwitchEvent>> added to query.rs",
+        "BranchSwitchEvent struct: repo_path: String, from_branch: Option<String>, to_branch: Option<String>, timestamp: DateTime<Utc>",
+        "query returns events ordered by timestamp ASC",
+        "unit test: insert two branch_switch rows, query returns both with correct fields"
+      ],
+      "deps": [
+        "US-CS-01"
+      ],
+      "files": [
+        "src/query.rs",
+        "tests/query.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-03",
+      "title": "Switch-filtering algorithm: suppress noise switches",
+      "priority": "P1",
+      "description": "As a user, I don't want automated git operations (rebase, merge tooling, stash pop sequences) counted as context switches. A rapid back-and-forth switch (A->B->A within <2 min) is noise, not a context switch.",
+      "context": "poll_repo() fires on every poll interval (default 30s). A rebase-in-progress can emit A->detached->B->A in quick succession. Detached HEAD (None branch) transitions are not real context switches.",
+      "acceptanceCriteria": [
+        "fn filter_noise_switches(events: &[BranchSwitchEvent], min_dwell_secs: u64) -> Vec<BranchSwitchEvent> added to query.rs",
+        "switches where to_branch is None (detached HEAD) are excluded",
+        "round-trip pairs (A->B->A) where total elapsed < min_dwell_secs (default 120) are collapsed to zero switches",
+        "same-branch re-checkout (from_branch == to_branch) excluded",
+        "unit tests: detached HEAD excluded, round-trip < 2min excluded, round-trip > 2min kept as 2 switches, same-branch excluded"
+      ],
+      "deps": [
+        "US-CS-02"
+      ],
+      "files": [
+        "src/query.rs",
+        "tests/query.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-04",
+      "title": "Per-repo and cross-repo context-switch aggregation",
+      "priority": "P1",
+      "description": "As a user, I want to see how many switches occurred per repo and in total so I can identify which repo is the biggest source of interruption.",
+      "context": "ActivitySummary.repos is Vec<RepoSummary>. RepoSummary needs a branch_switches: usize field. ActivitySummary needs total_branch_switches: usize. Cross-repo switches (switching between repos entirely, tracked via directory_presence) are out of scope for this story.",
+      "acceptanceCriteria": [
+        "RepoSummary gains field: branch_switches: usize",
+        "ActivitySummary gains field: total_branch_switches: usize",
+        "query_activity() populates branch_switches per repo using filter_noise_switches with default min_dwell_secs=120",
+        "total_branch_switches = sum of repo branch_switches",
+        "unit test: two repos with switches, assert per-repo and total counts"
+      ],
+      "deps": [
+        "US-CS-03"
+      ],
+      "files": [
+        "src/query.rs",
+        "src/output.rs",
+        "tests/query.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-05",
+      "title": "Display context-switch signal in pretty output",
+      "priority": "P1",
+      "description": "As a user, when I run `blackbox today`, I want to see a context-switch line in the summary that quantifies distraction and its estimated focus cost.",
+      "context": "render_summary_to_string() in output.rs builds the pretty summary. The summary line currently reads 'N commits, R reviews... across M repos (~Xh Ym)'. The focus cost estimate uses the Gloria Mark research baseline: 23 min to regain deep focus after each switch.",
+      "acceptanceCriteria": [
+        "If total_branch_switches > 0, summary line appends ', N branch switches (~Xm focus cost)' where X = switches * 23",
+        "Per-repo block shows switch count if repo.branch_switches > 0: '  ~ N branch switches (main->feat->main)'  \u2014 last 3 unique branches listed as breadcrumb, truncated with '...' if more",
+        "If total_branch_switches == 0, nothing added (no noise)",
+        "Unit test: summary with 3 switches shows '3 branch switches (~69m focus cost)'"
+      ],
+      "deps": [
+        "US-CS-04"
+      ],
+      "files": [
+        "src/output.rs",
+        "tests/output.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-06",
+      "title": "Include branch-switch data in JSON and CSV output",
+      "priority": "P2",
+      "description": "As a user using --format json or --format csv, I want branch-switch data available for downstream tooling.",
+      "context": "JsonSummary and JsonRepo in output.rs. CsvRow is a flat struct. branch_switch events are already included in events[] in JSON since they're ActivityEvents. Only summary-level counts need adding.",
+      "acceptanceCriteria": [
+        "JsonSummary gains field: total_branch_switches: usize",
+        "JsonRepo gains field: branch_switches: usize",
+        "CsvRow: branch_switch events already included (event_type='branch_switch'); no schema change needed",
+        "Unit test: render_json on summary with switches includes correct counts"
+      ],
+      "deps": [
+        "US-CS-04"
+      ],
+      "files": [
+        "src/output.rs",
+        "tests/output.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-07",
+      "title": "Standalone `blackbox focus` subcommand",
+      "priority": "P2",
+      "description": "As a user, I want `blackbox focus` to show a concise context-switch report without the full activity detail, so I can quickly check my focus health.",
+      "context": "New Commands variant in cli.rs + match arm in main.rs. Reuses query_activity() output. Format: header line + per-repo breakdown of switch counts. Supports --week flag for weekly view.",
+      "acceptanceCriteria": [
+        "Commands::Focus { week: bool } added to cli.rs",
+        "match arm in main.rs calls run_focus_query()",
+        "Output format:\n  === Focus Report: Today ===\n  14 branch switches across 5 repos (~322m focus cost)\n  \n  repo-a: 8 switches\n  repo-b: 4 switches\n  repo-c: 2 switches",
+        "If zero switches: 'No branch switches recorded. Clean focus day.'",
+        "--week flag uses week_range()",
+        "Integration test: blackbox focus runs without error"
+      ],
+      "deps": [
+        "US-CS-04"
+      ],
+      "files": [
+        "src/cli.rs",
+        "src/main.rs",
+        "src/output.rs",
+        "tests/integration.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-08",
+      "title": "Include context-switch line in standup output",
+      "priority": "P3",
+      "description": "As a user, I want standup output to mention context switches if they exceeded a threshold so my standup notes reflect interruption cost.",
+      "context": "render_standup() in output.rs. Only include if total_branch_switches >= 5 (below that it's not noteworthy for a standup).",
+      "acceptanceCriteria": [
+        "render_standup() appends '- Context switches: N (est. ~Xm focus cost)' to Total summary line if total_branch_switches >= 5",
+        "Below threshold: no mention",
+        "Unit test: 6 switches appears in standup, 4 does not"
+      ],
+      "deps": [
+        "US-CS-04"
+      ],
+      "files": [
+        "src/output.rs",
+        "tests/output.rs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-CS-09",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P3",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-CS-08"
+      ]
+    }
+  ]
+}

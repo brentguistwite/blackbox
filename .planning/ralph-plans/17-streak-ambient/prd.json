@@ -1,0 +1,134 @@
+{
+  "project": "streak-ambient",
+  "branchName": "feature/streak-ambient",
+  "description": "Show current commit streak as ambient data in today output \u2014 positive framing only, never nag",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "streak_query: compute current commit streak from DB",
+      "description": "Add `query_streak(conn, exclude_weekends: bool) -> anyhow::Result<u32>` in `src/query.rs`. A streak is the count of consecutive calendar days (local time) ending today on which at least one commit was recorded in `git_activity`. If today has no commits yet, the streak is the count of consecutive days ending yesterday (streak is still alive until EOD). Day boundaries are local-time midnight. Returns 0 if no commits ever recorded.",
+      "acceptanceCriteria": [
+        "Returns 0 when git_activity is empty",
+        "Returns 1 when commits exist only on today",
+        "Returns 1 when commits exist only on yesterday (no commits today yet)",
+        "Returns N for N consecutive days including today",
+        "Returns N for N consecutive days ending yesterday (today not yet committed)",
+        "Gap of 1 day resets streak to days-after-gap count only",
+        "exclude_weekends=true: Saturday and Sunday are skipped \u2014 a commit on Friday + Monday = streak of 2",
+        "exclude_weekends=false (default): weekends counted normally",
+        "Uses local time for day boundaries (not UTC)",
+        "Only event_type='commit' rows count \u2014 branch_switch and merge do not extend a streak",
+        "Unit tests in tests/streak_test.rs cover all cases above"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "ActivitySummary carries streak field",
+      "description": "Add `streak_days: u32` field to `ActivitySummary` in `src/query.rs`. In `run_query()` in `main.rs`, call `query_streak()` after `query_activity()` and populate the field. Pass `config.streak_exclude_weekends` (new config field, default false) to `query_streak`.",
+      "acceptanceCriteria": [
+        "ActivitySummary has `streak_days: u32`",
+        "All existing ActivitySummary constructions in tests compile (compiler-guided)",
+        "run_query() populates streak_days from query_streak()",
+        "Standup command path also populates streak_days (or 0 if skipped \u2014 it is not shown in standup output)",
+        "No panic if DB query fails \u2014 log warn, default to streak_days=0"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "pretty output: streak shown in today header",
+      "description": "In `render_summary_to_string()` in `src/output.rs`, when `summary.period_label == \"Today\"` and `summary.streak_days >= 1`, append the streak to the summary line. Format: `12-day streak` (plain, no emoji). Never show any text about broken streaks or missed days.",
+      "acceptanceCriteria": [
+        "When period='Today' and streak_days=1: summary line ends with `  1-day streak`",
+        "When period='Today' and streak_days=7: summary line ends with `  7-day streak`",
+        "When period='Today' and streak_days=0: no streak text shown",
+        "When period='This Week' or 'This Month': no streak text shown",
+        "Streak text is dimmed (use `.dimmed()` from colored crate)",
+        "Text never contains words: broken, missed, lost, reset, end, over",
+        "Unit test in tests/output_test.rs: streak_days=5 \u2192 contains '5-day streak'",
+        "Unit test: streak_days=0 \u2192 does not contain 'streak'",
+        "Unit test: period='This Week' with streak_days=5 \u2192 does not contain 'streak'"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "JSON output: streak_days field in JsonSummary",
+      "description": "Add `streak_days: u32` to `JsonSummary` struct in `src/output.rs`. Populate from `summary.streak_days` in `render_json()`. Field is always present (not skipped when zero).",
+      "acceptanceCriteria": [
+        "JsonSummary has `streak_days: u32`",
+        "`blackbox today --format json` output contains `\"streak_days\": N`",
+        "streak_days=0 still serializes as `\"streak_days\": 0` (not omitted)",
+        "Unit test: render_json with streak_days=3 \u2192 JSON string contains '\"streak_days\": 3'",
+        "Existing render_json tests still pass"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "config: streak_exclude_weekends field",
+      "description": "Add `streak_exclude_weekends: bool` to `Config` in `src/config.rs` with `#[serde(default)]` (default false). No interactive prompt \u2014 manual config edit only.",
+      "acceptanceCriteria": [
+        "Config struct has `streak_exclude_weekends: bool` with `#[serde(default)]`",
+        "Config::default() sets streak_exclude_weekends = false",
+        "Existing configs without the field load without error (serde default)",
+        "Config round-trip test: serialize + deserialize preserves streak_exclude_weekends=true",
+        "All existing Config constructions in tests compile"
+      ],
+      "priority": "P1",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "integration test: today command includes streak in output",
+      "description": "Add an integration test using `assert_cmd` that wires a real DB with known commit history, calls `blackbox today --format json`, and asserts the streak_days field is correct. Also assert pretty output contains the streak string when streak > 0.",
+      "acceptanceCriteria": [
+        "Test sets up temp DB with commits on today + 2 prior consecutive days",
+        "JSON output: streak_days == 3",
+        "Pretty output contains '3-day streak'",
+        "Test with only today's commit: streak_days == 1, pretty output contains '1-day streak'",
+        "Test uses tempfile for DB, sets XDG env vars to temp dirs",
+        "Test does not depend on system git config or real repos"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-003",
+        "US-004"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P1",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-006"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,242 @@
+{
+  "project": "code-churn-rate",
+  "branchName": "feature/code-churn-rate",
+  "description": "Track code churn rate \u2014 percentage of own lines reworked within N days",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "DB migration: commit_line_stats table",
+      "description": "Add a new migration in `db.rs` `open_db()` that creates `commit_line_stats`. This table stores per-commit line-level stats (lines added, deleted, net) for all files touched by each own commit. Keyed by repo_path + commit_hash. Used later for churn detection.",
+      "acceptanceCriteria": [
+        "New migration appended to the Migrations array in open_db()",
+        "Table: commit_line_stats(id, repo_path TEXT, commit_hash TEXT, file_path TEXT, lines_added INTEGER, lines_deleted INTEGER, committed_at TEXT NOT NULL, created_at TEXT DEFAULT (datetime('now')))",
+        "CREATE UNIQUE INDEX on (repo_path, commit_hash, file_path)",
+        "open_db() runs migrations cleanly on a fresh DB (cargo test passes)",
+        "open_db() runs migrations cleanly on a DB from migration N-1 (idempotent)"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "DB migration: churn_events table",
+      "description": "Add another migration that creates `churn_events`. Each row records that a specific file first written in commit A was subsequently modified in commit B within the churn window. This is the raw evidence for churn rate computation.",
+      "acceptanceCriteria": [
+        "New migration appended after US-001 migration",
+        "Table: churn_events(id, repo_path TEXT, original_commit_hash TEXT, churn_commit_hash TEXT, file_path TEXT, lines_churned INTEGER, churn_window_days INTEGER, detected_at TEXT NOT NULL)",
+        "CREATE UNIQUE INDEX on (repo_path, original_commit_hash, churn_commit_hash, file_path)",
+        "open_db() runs all migrations cleanly"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "insert/query helpers for commit_line_stats",
+      "description": "Add `insert_commit_line_stats` and `query_commit_line_stats_for_repo` functions to `db.rs`. The insert uses INSERT OR IGNORE to leverage the unique index. The query returns all stats for a repo within a given time window, ordered by committed_at ASC.",
+      "acceptanceCriteria": [
+        "insert_commit_line_stats(conn, repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at) -> anyhow::Result<bool>",
+        "Uses INSERT OR IGNORE; returns true if row inserted, false if duplicate",
+        "query_commit_line_stats_for_repo(conn, repo_path, since: DateTime<Utc>) -> anyhow::Result<Vec<CommitLineStat>>",
+        "CommitLineStat struct: repo_path, commit_hash, file_path, lines_added, lines_deleted, committed_at (DateTime<Utc>)",
+        "Unit test: insert two stats for same commit+file \u2192 second is ignored",
+        "Unit test: query returns rows in committed_at ASC order"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "insert helper for churn_events",
+      "description": "Add `insert_churn_event` to `db.rs`. Uses INSERT OR IGNORE. No query helper needed yet \u2014 churn rate is computed in-memory from commit_line_stats.",
+      "acceptanceCriteria": [
+        "insert_churn_event(conn, repo_path, original_commit_hash, churn_commit_hash, file_path, lines_churned, churn_window_days, detected_at) -> anyhow::Result<bool>",
+        "Uses INSERT OR IGNORE; returns true if inserted",
+        "Unit test: duplicate insert returns Ok(false)"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "git diff analysis: extract per-file line stats from a commit",
+      "description": "Add `diff_commit_stats(repo: &Repository, commit: &Commit) -> anyhow::Result<Vec<FileLineStat>>` in a new `src/churn.rs` module. Uses git2 diff to walk parent\u2192commit and collect lines_added/lines_deleted per file. Skips binary files, merge commits (parent_count > 1), and renames (treat rename as deletion of old + addition of new path).",
+      "acceptanceCriteria": [
+        "New file src/churn.rs with pub fn diff_commit_stats",
+        "Returns Vec<FileLineStat> where FileLineStat { file_path: String, lines_added: u32, lines_deleted: u32 }",
+        "Merge commits (parent_count > 1): return empty Vec (skip)",
+        "Binary files: skip (git2 Delta::Binary or hunk callback not called)",
+        "Renamed files: emit two entries \u2014 old path with lines_deleted = old line count, new path with lines_added = new line count",
+        "Repo with no parent (initial commit): diff against empty tree",
+        "Unit test: single-file commit adding 5 lines \u2192 FileLineStat { lines_added: 5, lines_deleted: 0 }",
+        "Unit test: commit editing existing file (3 added, 2 deleted) \u2192 correct counts",
+        "Unit test: merge commit \u2192 empty result",
+        "Unit test: initial commit (no parent) \u2192 counts all added lines"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "Backfill commit_line_stats during daemon poll",
+      "description": "In `git_ops.rs`, after inserting a commit into `git_activity`, call `churn::diff_commit_stats` and insert results into `commit_line_stats` via `db::insert_commit_line_stats`. Apply both on backfill (first-poll path) and on incremental new commits. Only runs for own commits (already filtered by is_own_commit).",
+      "acceptanceCriteria": [
+        "poll_repo calls diff_commit_stats for every commit it would record",
+        "Inserts one commit_line_stats row per file per commit",
+        "Skips merge commits (diff_commit_stats returns empty for them)",
+        "committed_at stored as RFC3339 string from commit.time()",
+        "No crash if diff fails (log warn, continue)",
+        "Integration test: poll a test repo with two commits \u2192 commit_line_stats has correct row count",
+        "Integration test: re-poll same commits \u2192 no duplicate rows (INSERT OR IGNORE)"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-003",
+        "US-005"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-007",
+      "title": "Churn detection algorithm",
+      "description": "Add `compute_churn(conn: &Connection, repo_path: &str, window_days: u32) -> anyhow::Result<ChurnReport>` in `src/churn.rs`. Algorithm: (1) fetch all commit_line_stats for repo within the last window_days. (2) Group stats by file_path. (3) For each file, sort commits by committed_at. (4) For each pair (commit_A, commit_B) where commit_B > commit_A and both touch the same file, if commit_B.committed_at - commit_A.committed_at <= window_days: lines in commit_B that overlap commit_A's lines are churned. Approximation: min(commit_A.lines_added, commit_B.lines_deleted) = churned_lines. (5) Sum all lines_added across all commits = total_lines_written. (6) churn_rate = churned_lines / total_lines_written * 100.0.",
+      "acceptanceCriteria": [
+        "ChurnReport struct: { repo_path: String, window_days: u32, total_lines_written: u64, churned_lines: u64, churn_rate_pct: f64, commit_count: usize, churn_event_count: usize }",
+        "compute_churn returns ChurnReport",
+        "churn_rate_pct = 0.0 if total_lines_written == 0",
+        "Only considers own commits (already filtered at insert time in US-006)",
+        "Inserts detected churn events into churn_events table via insert_churn_event",
+        "Unit test: two commits to same file within window \u2192 non-zero churn",
+        "Unit test: two commits to same file outside window \u2192 zero churn",
+        "Unit test: two commits to different files \u2192 zero churn",
+        "Unit test: total_lines_written = 0 \u2192 churn_rate_pct = 0.0 (no divide-by-zero)"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-003",
+        "US-004"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-008",
+      "title": "Config: churn_window_days field",
+      "description": "Add `churn_window_days: u32` to the `Config` struct in `config.rs` with `#[serde(default)]`. Default = 14. Used by the `churn` command. No interactive prompt needed (advanced config).",
+      "acceptanceCriteria": [
+        "Config struct has pub churn_window_days: u32",
+        "impl Default for churn_window_days returns 14",
+        "Existing configs without the field deserialize without error (serde default)",
+        "Unit test: Config::default() gives churn_window_days = 14",
+        "Existing config-related tests still pass"
+      ],
+      "priority": "P1",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-009",
+      "title": "CLI command: blackbox churn",
+      "description": "Add `Churn` variant to `Commands` enum in `cli.rs` and a match arm in `main.rs`. Accepts optional `--window <days>` (overrides config), `--repo <path>` (filter to one repo), `--format pretty|json|csv`. Calls compute_churn for each tracked repo (or filtered repo) and renders output.",
+      "acceptanceCriteria": [
+        "Commands::Churn { window: Option<u32>, repo: Option<String>, format: OutputFormat } added to cli.rs",
+        "Match arm in main.rs dispatches to run_churn()",
+        "run_churn() loads config, opens DB, determines window (--window > config.churn_window_days), discovers repo list from git_activity (distinct repo_paths), calls compute_churn per repo",
+        "If --repo provided, filters to that repo_path only",
+        "If no repos have any commit_line_stats, prints 'No churn data \u2014 run blackbox start to collect data.'",
+        "cargo build passes",
+        "Integration test via assert_cmd: blackbox churn --help exits 0 and contains 'churn'"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-007",
+        "US-008"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-010",
+      "title": "Pretty output for churn command",
+      "description": "Implement render_churn_pretty(reports: &[ChurnReport]) -> String in src/output.rs. Shows a table: repo name, window, lines written, lines churned, churn %. Color-codes churn rate: green < 10%, yellow 10-25%, red > 25%. Shows global aggregate at bottom.",
+      "acceptanceCriteria": [
+        "render_churn_pretty added to output.rs",
+        "Prints header: '=== Code Churn (last N days) ==='",
+        "Per-repo row: repo_name | lines_written | churned | churn_rate_pct%",
+        "Churn rate colored: green if < 10.0, yellow if 10.0..=25.0, red if > 25.0",
+        "Global summary line: 'Total: X lines written, Y churned (Z%)'",
+        "Empty reports: prints 'No churn data yet.'",
+        "Unit test: reports with known values \u2192 output contains correct percentages",
+        "Unit test: empty reports \u2192 correct empty message"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-011",
+      "title": "JSON and CSV output for churn command",
+      "description": "Add render_churn_json(reports: &[ChurnReport]) -> String and render_churn_csv(reports: &[ChurnReport]) -> String in output.rs. JSON is an array of objects. CSV has columns: repo_path, repo_name, window_days, total_lines_written, churned_lines, churn_rate_pct, commit_count, churn_event_count.",
+      "acceptanceCriteria": [
+        "render_churn_json returns valid JSON array via serde_json::to_string_pretty",
+        "JSON schema: [{repo_path, repo_name, window_days, total_lines_written, churned_lines, churn_rate_pct, commit_count, churn_event_count}]",
+        "render_churn_csv includes header row",
+        "CSV columns: repo_path, repo_name, window_days, total_lines_written, churned_lines, churn_rate_pct, commit_count, churn_event_count",
+        "Unit test: render_churn_json with one report \u2192 valid JSON, correct field values",
+        "Unit test: render_churn_csv with one report \u2192 header present, correct values"
+      ],
+      "priority": "P2",
+      "deps": [
+        "US-010"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-012",
+      "title": "Integration test: end-to-end churn detection",
+      "description": "Add tests/churn_test.rs. Build a temp git repo with at least 3 commits: commit A adds 10 lines to file.txt, commit B (within window) modifies 4 lines of file.txt, commit C adds a new file new.txt with 5 lines. Call poll_repo then compute_churn. Assert churn_rate_pct is approximately 4/15 * 100 (\u224826.7%). Also test window boundary: if B is older than window_days, churn = 0.",
+      "acceptanceCriteria": [
+        "tests/churn_test.rs created",
+        "Test: three-commit repo \u2192 churn_rate_pct \u2248 26.7% (within 1.0 tolerance)",
+        "Test: same repo with window=0 days \u2192 churn_rate_pct = 0.0 (B outside window)",
+        "Test: repo with only one commit \u2192 churn_rate_pct = 0.0",
+        "Test: repo with no commit_line_stats \u2192 ChurnReport has total_lines_written=0 and churn_rate_pct=0.0",
+        "All tests pass with cargo test"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-006",
+        "US-007"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-013",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P2",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-012"
+      ]
+    }
+  ]
+}

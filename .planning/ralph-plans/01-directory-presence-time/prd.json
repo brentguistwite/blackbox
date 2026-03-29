@@ -1,0 +1,108 @@
+{
+  "project": "directory-presence-time",
+  "branchName": "feature/directory-presence-time",
+  "description": "Wire up directory presence data into time estimation for more accurate tracking",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "estimate_time_v2 accepts presence intervals",
+      "description": "Add a `presence_intervals: &[TimeInterval]` parameter to `estimate_time_v2`. Presence intervals are clipped to the query window and passed in alongside AI sessions. When git events are absent for a repo but presence data exists, presence intervals alone contribute to estimated time.",
+      "acceptanceCriteria": [
+        "Function signature changes to: estimate_time_v2(events, ai_sessions, presence_intervals, session_gap_minutes, first_commit_minutes)",
+        "All existing callers updated to pass &[] for presence_intervals",
+        "All existing estimate_time_v2 unit tests still pass",
+        "New unit test: presence intervals with no git events \u2192 time = sum of presence durations",
+        "New unit test: presence intervals merge with git session intervals correctly"
+      ],
+      "priority": "P0",
+      "deps": [],
+      "passes": false
+    },
+    {
+      "id": "US-002",
+      "title": "Presence intervals anchor git session starts",
+      "description": "When a presence interval overlaps the tentative credit window of a git session (first_event - credit), the git session start is pulled back to the presence interval start instead of applying the estimated credit. This yields a more accurate session start time.",
+      "acceptanceCriteria": [
+        "If presence interval starts before (first_event - credit), git session start = presence.start",
+        "If presence interval starts after first_event, no anchoring (current credit logic applies)",
+        "If no presence overlaps the credit window, behavior is identical to pre-change",
+        "Unit test: presence started 45 min before first commit (credit=30) \u2192 session start = presence.start",
+        "Unit test: presence started after first commit \u2192 no anchoring, credit logic unchanged",
+        "Unit test: presence interval covers only part of credit window \u2192 session start = presence.start (presence wins over credit)"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-003",
+      "title": "query_activity fetches and passes presence per repo",
+      "description": "In `query_activity`, call `query_presence` for the time window, look up each repo's presence intervals, and pass them into `estimate_time_v2`. Presence intervals must be clipped to [from, to] before passing (query_presence already clips them).",
+      "acceptanceCriteria": [
+        "query_activity calls query_presence once per query (not per repo)",
+        "Each repo's presence intervals are looked up by repo_path from the BTreeMap returned by query_presence",
+        "Repos with no presence data pass &[] (existing behavior preserved)",
+        "Integration test: repo with presence data + commits \u2192 estimated_time increases vs no-presence baseline",
+        "Integration test: repo with presence only (no commits) still does NOT create a RepoSummary entry (existing test query_activity_presence_does_not_create_repos must still pass)"
+      ],
+      "priority": "P0",
+      "deps": [
+        "US-001",
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-004",
+      "title": "global_estimated_time passes presence to estimate_time_v2",
+      "description": "Update `global_estimated_time` to also accept the per-repo presence intervals and forward them to `estimate_time_v2`. Since global_estimated_time works on already-built RepoSummary slices, presence intervals must be stored on RepoSummary or passed separately.",
+      "acceptanceCriteria": [
+        "RepoSummary gains a `presence_intervals: Vec<TimeInterval>` field",
+        "query_activity populates presence_intervals on each RepoSummary",
+        "global_estimated_time reads repo.presence_intervals and passes them to estimate_time_v2",
+        "All existing RepoSummary constructions in tests updated (compiler-guided)",
+        "Unit test for global_estimated_time with overlapping presence across two repos: no double-counting"
+      ],
+      "priority": "P1",
+      "deps": [
+        "US-003"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-005",
+      "title": "Update doc comment on estimate_time_v2",
+      "description": "The existing doc comment says '/// No presence data.' \u2014 update it to document the new presence_intervals parameter, its role in anchoring session starts, and the merge semantics.",
+      "acceptanceCriteria": [
+        "Doc comment updated to describe presence_intervals parameter",
+        "Doc comment describes anchoring logic (presence start < credit window start \u2192 use presence start)",
+        "Doc comment notes that presence intervals are unioned with git + AI intervals before final merge",
+        "cargo doc builds without warnings on query.rs"
+      ],
+      "priority": "P2",
+      "deps": [
+        "US-002"
+      ],
+      "passes": false
+    },
+    {
+      "id": "US-006",
+      "title": "Update README.md and AGENTS.md",
+      "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
+      "acceptanceCriteria": [
+        "README.md Commands table includes new command (if a CLI command was added)",
+        "README.md describes the new feature/capability",
+        "AGENTS.md Architecture src/ tree lists any new .rs files",
+        "AGENTS.md Key Dependencies updated if new crates added"
+      ],
+      "priority": "P3",
+      "passes": false,
+      "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
+      "deps": [
+        "US-005"
+      ]
+    }
+  ]
+}

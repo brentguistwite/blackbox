@@ -1,0 +1,36 @@
+[12:54:33] Ralph Conductor starting
+[12:54:33] Plans dir: .planning/ralph-plans
+[12:54:33] Log dir: /Users/brent.guistwite/Documents/flosports/blackbox/.conductor-logs/20260328-125433
+[12:54:33] DRY RUN MODE
+[12:54:33] State file: 2 plans already complete
+[12:54:33] 
+[12:54:33] ════════════════════════════════════════════
+[12:54:33]   BATCH 1: 01-directory-presence-time 02-contribution-heatmap 03-work-rhythm-insights 18-repo-deep-dive
+[12:54:33] ════════════════════════════════════════════
+[12:54:33] Skipping 01-directory-presence-time (already done or before resume point)
+[12:54:33] Skipping 02-contribution-heatmap (already done or before resume point)
+[12:54:33] [DRY RUN] Would run: 03-work-rhythm-insights
+[12:54:33] [DRY RUN] Would run: 18-repo-deep-dive
+[12:54:33] 
+[12:54:33] ════════════════════════════════════════════
+[12:54:33]   BATCH 2: 13-sighup-config-reload 17-streak-ambient
+[12:54:33] ════════════════════════════════════════════
+[12:54:33] [DRY RUN] Would run: 13-sighup-config-reload
+[12:54:33] [DRY RUN] Would run: 17-streak-ambient
+[12:54:33] 
+[12:54:33] ════════════════════════════════════════════
+[12:54:33]   SEQUENTIAL QUEUE: 12 plans
+[12:54:33] ════════════════════════════════════════════
+[12:54:33] [DRY RUN] Would run: 11-json-tty-detection
+[12:54:33] [DRY RUN] Would run: 09-context-switch-frequency
+[12:54:33] [DRY RUN] Would run: 04-pr-cycle-time
+[12:54:33] [DRY RUN] Would run: 05-code-churn-rate
+[12:54:33] [DRY RUN] Would run: 12-richer-status
+[12:54:33] [DRY RUN] Would run: 14-os-notifications
+[12:54:33] [DRY RUN] Would run: 16-commit-message-quality
+[12:54:33] [DRY RUN] Would run: 08-multi-ai-tracking
+[12:54:33] [DRY RUN] Would run: 06-llm-insights
+[12:54:33] [DRY RUN] Would run: 07-perf-review
+[12:54:33] [DRY RUN] Would run: 10-weekly-digest
+[12:54:33] [DRY RUN] Would run: 15-next-step-suggestions
+[12:54:33] Conductor finished. Logs: /Users/brent.guistwite/Documents/flosports/blackbox/.conductor-logs/20260328-125433

@@ -41,6 +41,7 @@ blackbox today
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
 | `rhythm` | Work rhythm analysis (`--days N`, `--format pretty\|json`) |
+| `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -89,6 +90,8 @@ Today - 3 repos, 12 commits, 4h 30m estimated
 **Heatmap:** `blackbox heatmap` -- GitHub-style contribution grid in your terminal. Shows commit frequency across all tracked repos as color-intensity blocks. Use `--weeks N` (1-260) to control the range. Displays total commits, active days, and longest streak.
 
 The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
+
+**Repo deep dive:** `blackbox repo <path>` -- onefetch-inspired single-repo analysis showing language breakdown (via git2 tree walk), most-changed files, all-time estimated time, branch activity, and PR history. Works on any git repo; repos not yet tracked by blackbox show git-derived data with an "untracked" indicator.
 
 ## How It Works
 
