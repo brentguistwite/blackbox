@@ -1,9 +1,10 @@
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use clap::{CommandFactory, Parser};
 use blackbox::cli::{Cli, Commands};
-use blackbox::output::OutputFormat;
+use blackbox::output::{OutputFormat, WeeklyDigest};
 use blackbox::query::ActivitySummary;
+use std::path::PathBuf;
 
 fn run_query(
     period_label: &str,
@@ -102,6 +103,98 @@ fn run_focus_query(week: bool) -> anyhow::Result<()> {
     };
 
     println!("{}", blackbox::output::render_focus_report(&summary));
+    Ok(())
+}
+
+fn build_summary_for_range(
+    conn: &rusqlite::Connection,
+    config: &blackbox::config::Config,
+    label: &str,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<ActivitySummary> {
+    let repos = blackbox::query::query_activity(
+        conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
+    )?;
+    let total_commits: usize = repos.iter().map(|r| r.commits).sum();
+    let total_reviews: usize = repos.iter().map(|r| {
+        r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
+    }).sum();
+    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+    let total_ai_session_time = repos.iter().fold(Duration::zero(), |acc, r| {
+        acc + r.ai_sessions.iter().fold(Duration::zero(), |a, s| a + s.duration)
+    });
+    let streak_days = blackbox::query::query_streak(conn, config.streak_exclude_weekends)
+        .unwrap_or(0);
+
+    Ok(ActivitySummary {
+        period_label: label.to_string(),
+        total_commits,
+        total_reviews,
+        total_repos: repos.len(),
+        total_estimated_time: total_time,
+        total_ai_session_time,
+        streak_days,
+        total_branch_switches: repos.iter().map(|r| r.branch_switches).sum(),
+        repos,
+    })
+}
+
+fn run_digest(
+    week_offset: i32,
+    format: OutputFormat,
+    _output_file: Option<PathBuf>,
+    summarize: bool,
+    compare: bool,
+    _notify: bool,
+) -> anyhow::Result<()> {
+    let config = blackbox::config::load_config()?;
+    let data_dir = blackbox::config::data_dir()?;
+    let db_path = data_dir.join("blackbox.db");
+    let conn = blackbox::db::open_db(&db_path)
+        .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
+
+    let week_start = config.week_start_weekday();
+    let (from, to) = blackbox::query::digest_week_range(week_offset, week_start);
+
+    let start_local = from.with_timezone(&chrono::Local);
+    let label = format!("Week of {}", start_local.format("%b %-d, %Y"));
+
+    let current = build_summary_for_range(&conn, &config, &label, from, to)?;
+
+    let previous = if compare {
+        let (prev_from, prev_to) = blackbox::query::digest_week_range(week_offset - 1, week_start);
+        let prev_start = prev_from.with_timezone(&chrono::Local);
+        let prev_label = format!("Week of {}", prev_start.format("%b %-d, %Y"));
+        let prev = build_summary_for_range(&conn, &config, &prev_label, prev_from, prev_to)?;
+        if prev.total_commits == 0 && prev.repos.is_empty() {
+            None
+        } else {
+            Some(prev)
+        }
+    } else {
+        None
+    };
+
+    let digest = WeeklyDigest {
+        current,
+        previous,
+        week_start: from,
+        week_end: to,
+    };
+
+    if summarize {
+        let llm_config = blackbox::llm::build_llm_config(&config)?;
+        let json = blackbox::output::render_json(&digest.current);
+        blackbox::llm::summarize_activity(&llm_config, &json)?;
+    } else {
+        match format {
+            OutputFormat::Pretty => blackbox::output::render_digest(&digest),
+            OutputFormat::Json => println!("{}", blackbox::output::render_json(&digest.current)),
+            OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&digest.current)),
+        }
+    }
+
     Ok(())
 }
 
@@ -262,6 +355,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Insights { window, format } => {
             blackbox::insights::run_insights(window.as_deref(), format)?;
+        }
+        Commands::Digest { format, week, output_file, compare, summarize, notify } => {
+            run_digest(week, format, output_file, summarize, compare, notify)?;
         }
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
