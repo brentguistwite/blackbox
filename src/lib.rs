@@ -20,4 +20,5 @@ pub mod setup;
 pub mod shell_hook;
 pub mod tui;
 pub mod repo_deep_dive;
+pub mod notifications;
 pub mod watcher;
