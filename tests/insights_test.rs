@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use blackbox::llm::build_insights_prompt;
+use blackbox::llm::{build_insights_prompt, INSIGHTS_SYSTEM_PROMPT};
 use blackbox::enrichment::PrInfo;
 use blackbox::query::{aggregate_insights_data, ActivityEvent, InsightsData, RepoInsights, RepoSummary};
 use chrono::{Datelike, Duration, Utc};
@@ -618,6 +618,31 @@ fn cli_insights_empty_db_exits_zero_with_no_activity_msg() {
     assert!(
         !stdout.contains("llm_api_key") && !stderr.contains("llm_api_key"),
         "should not hit API key error path"
+    );
+}
+
+// --- US-015: INSIGHTS_SYSTEM_PROMPT content assertions ---
+
+#[test]
+fn system_prompt_instructs_quantitative_claims() {
+    assert!(
+        INSIGHTS_SYSTEM_PROMPT.contains("quantitative") || INSIGHTS_SYSTEM_PROMPT.contains("specific"),
+        "INSIGHTS_SYSTEM_PROMPT should instruct numeric/quantitative claims"
+    );
+}
+
+#[test]
+fn system_prompt_prohibits_filler_language() {
+    assert!(!INSIGHTS_SYSTEM_PROMPT.contains("Great job"), "must not contain 'Great job'");
+    assert!(!INSIGHTS_SYSTEM_PROMPT.contains("Consider"), "must not contain 'Consider'");
+}
+
+#[test]
+fn system_prompt_is_real_not_placeholder() {
+    assert!(
+        INSIGHTS_SYSTEM_PROMPT.len() > 100,
+        "INSIGHTS_SYSTEM_PROMPT too short ({}), likely placeholder",
+        INSIGHTS_SYSTEM_PROMPT.len()
     );
 }
 
