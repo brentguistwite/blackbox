@@ -199,6 +199,7 @@ pub fn get_active_sessions(conn: &Connection) -> anyhow::Result<Vec<String>> {
 /// Insert a git activity record. Uses INSERT OR IGNORE for events with commit_hash
 /// (commits, merges) to leverage the partial unique index. Branch switch events
 /// (NULL commit_hash) use regular INSERT. Returns true if a row was inserted.
+#[allow(clippy::too_many_arguments)]
 pub fn insert_activity(
     conn: &Connection,
     repo_path: &str,

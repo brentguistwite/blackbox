@@ -20,6 +20,7 @@ const FULL_SCAN_SECS: u64 = 30 * 60;
 /// Ensure a RepoState entry exists for a repo path, resolving worktrees.
 /// For worktrees, main_repo_path = resolved main repo root.
 /// For regular repos, main_repo_path = repo_path.
+#[allow(clippy::ptr_arg)]
 fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoState>) {
     repo_states.entry(repo_path.clone()).or_insert_with(|| {
         let main_repo_path = if repo_scanner::is_worktree(repo_path).is_some() {

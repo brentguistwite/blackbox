@@ -1,5 +1,6 @@
 use blackbox::churn::{compute_churn, diff_commit_stats};
 use blackbox::db;
+use blackbox::git_ops::{poll_repo, RepoState};
 use git2::{Repository, Signature};
 use std::path::Path;
 use tempfile::TempDir;
@@ -212,6 +213,133 @@ fn test_churn_no_data_zero_rate() {
     assert_eq!(report.total_lines_written, 0);
     assert_eq!(report.churned_lines, 0);
     assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.commit_count, 0);
+    assert_eq!(report.churn_event_count, 0);
+}
+
+// --- US-012: End-to-end integration tests ---
+
+fn make_commit_at(repo: &Repository, message: &str, files: &[(&str, &str)], epoch: i64) -> git2::Oid {
+    let time = git2::Time::new(epoch, 0);
+    let sig = Signature::new("Test User", "test@example.com", &time).unwrap();
+    let mut index = repo.index().unwrap();
+    for (name, content) in files {
+        std::fs::write(repo.workdir().unwrap().join(name), content).unwrap();
+        index.add_path(Path::new(name)).unwrap();
+    }
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+    let parents: Vec<git2::Commit> = repo
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_commit().ok())
+        .map(|c| vec![c])
+        .unwrap_or_default();
+    let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+    repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parent_refs)
+        .unwrap()
+}
+
+/// Create 3-commit test repo, poll it, return (db_file, conn, repo_dir, repo_path_str).
+fn setup_three_commit_repo() -> (tempfile::NamedTempFile, rusqlite::Connection, TempDir, String) {
+    let tmp_repo = TempDir::new().unwrap();
+    let repo = init_repo(&tmp_repo);
+    let (tmp_db, conn) = setup_db();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    // Commit A: adds 10 lines to file.txt
+    make_commit_at(
+        &repo,
+        "add file.txt",
+        &[("file.txt", "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")],
+        now - 100,
+    );
+    // Commit B: removes 4 lines from file.txt (within window)
+    make_commit_at(
+        &repo,
+        "trim file.txt",
+        &[("file.txt", "line1\nline2\nline3\nline4\nline5\nline6\n")],
+        now - 50,
+    );
+    // Commit C: adds new file with 5 lines
+    make_commit_at(
+        &repo,
+        "add new.txt",
+        &[("new.txt", "new1\nnew2\nnew3\nnew4\nnew5\n")],
+        now,
+    );
+
+    let repo_path_str = tmp_repo.path().to_str().unwrap().to_string();
+    let mut state = RepoState::default();
+    poll_repo(tmp_repo.path(), &repo_path_str, &mut state, &conn).unwrap();
+
+    (tmp_db, conn, tmp_repo, repo_path_str)
+}
+
+#[test]
+fn test_e2e_three_commit_churn() {
+    let (_db, conn, _repo_dir, repo_path) = setup_three_commit_repo();
+
+    let report = compute_churn(&conn, &repo_path, 14).unwrap();
+
+    // churned = min(A.added=10, B.deleted=4) = 4
+    // total_written = 10 + 0 + 5 = 15
+    // churn_rate = 4/15 * 100 ≈ 26.67
+    assert_eq!(report.total_lines_written, 15);
+    assert_eq!(report.churned_lines, 4);
+    assert!(
+        (report.churn_rate_pct - 26.67).abs() < 1.0,
+        "expected ≈26.7%, got {:.2}%",
+        report.churn_rate_pct
+    );
+}
+
+#[test]
+fn test_e2e_window_zero_no_churn() {
+    let (_db, conn, _repo_dir, repo_path) = setup_three_commit_repo();
+
+    // window=0 → since=now → no stats returned → 0 churn
+    let report = compute_churn(&conn, &repo_path, 0).unwrap();
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.total_lines_written, 0);
+}
+
+#[test]
+fn test_e2e_single_commit_no_churn() {
+    let tmp_repo = TempDir::new().unwrap();
+    let repo = init_repo(&tmp_repo);
+    let (_tmp_db, conn) = setup_db();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    make_commit_at(&repo, "initial", &[("file.txt", "a\nb\nc\nd\ne\n")], now);
+
+    let repo_path_str = tmp_repo.path().to_str().unwrap();
+    let mut state = RepoState::default();
+    poll_repo(tmp_repo.path(), repo_path_str, &mut state, &conn).unwrap();
+
+    let report = compute_churn(&conn, repo_path_str, 14).unwrap();
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.churned_lines, 0);
+    assert!(report.total_lines_written > 0, "should have recorded line stats");
+}
+
+#[test]
+fn test_e2e_no_commit_line_stats() {
+    let (_tmp_db, conn) = setup_db();
+
+    let report = compute_churn(&conn, "/nonexistent/repo", 14).unwrap();
+    assert_eq!(report.total_lines_written, 0);
+    assert_eq!(report.churn_rate_pct, 0.0);
+    assert_eq!(report.churned_lines, 0);
     assert_eq!(report.commit_count, 0);
     assert_eq!(report.churn_event_count, 0);
 }
