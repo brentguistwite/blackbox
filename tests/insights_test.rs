@@ -387,6 +387,44 @@ fn prompt_has_prs_marker_on_repos() {
     assert!(prompt.contains("[has PRs]"));
 }
 
+// --- US-012: commit message length trend ---
+
+#[test]
+fn prompt_msg_len_trend_shorter_toward_end_of_week() {
+    // Default make_insights_data: Mon=42, Fri=28 → diff=14 > 10
+    let data = make_insights_data(3);
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("Avg commit msg length by day:"));
+    assert!(prompt.contains("(trend: shorter toward end of week)"));
+}
+
+#[test]
+fn prompt_msg_len_trend_longer_toward_end_of_week() {
+    let mut data = make_insights_data(3);
+    data.avg_msg_len_by_dow[0] = 20.0; // Mon
+    data.avg_msg_len_by_dow[4] = 45.0; // Fri
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("(trend: longer toward end of week)"));
+}
+
+#[test]
+fn prompt_msg_len_no_trend_when_diff_small() {
+    let mut data = make_insights_data(3);
+    data.avg_msg_len_by_dow[0] = 30.0; // Mon
+    data.avg_msg_len_by_dow[4] = 25.0; // Fri — diff=5, <10
+    let prompt = build_insights_prompt(&data);
+    assert!(prompt.contains("Avg commit msg length by day:"));
+    assert!(!prompt.contains("(trend:"));
+}
+
+#[test]
+fn prompt_msg_len_omitted_when_fewer_than_2_days() {
+    let mut data = make_insights_data(3);
+    data.avg_msg_len_by_dow = [42.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]; // only Mon
+    let prompt = build_insights_prompt(&data);
+    assert!(!prompt.contains("Avg commit msg length by day:"));
+}
+
 // --- US-006: InsightsData JSON serialization ---
 
 #[test]

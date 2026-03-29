@@ -255,6 +255,17 @@ pub fn build_insights_prompt(data: &InsightsData) -> String {
             .map(|(i, v)| format!("{}: {}ch", dow_names[*i], v.round() as i64))
             .collect();
         out.push_str(&parts.join(", "));
+
+        // Trend annotation: compare Mon (index 0) vs Fri (index 4) if both have data
+        let mon_avg = data.avg_msg_len_by_dow[0];
+        let fri_avg = data.avg_msg_len_by_dow[4];
+        if mon_avg > 0.0 && fri_avg > 0.0 {
+            if mon_avg > fri_avg + 10.0 {
+                out.push_str(" (trend: shorter toward end of week)");
+            } else if fri_avg > mon_avg + 10.0 {
+                out.push_str(" (trend: longer toward end of week)");
+            }
+        }
         out.push('\n');
     }
 
