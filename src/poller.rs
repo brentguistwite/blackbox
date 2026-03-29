@@ -95,6 +95,86 @@ fn full_scan(
     repos
 }
 
+fn maybe_send_daily_notification(config: &Config, conn: &Connection) {
+    if !config.notifications_enabled {
+        return;
+    }
+    if !crate::notifications::is_available() {
+        return;
+    }
+
+    let parts: Vec<&str> = config.notification_time.split(':').collect();
+    let (notify_hour, notify_min) = match parts.as_slice() {
+        [h, m] => {
+            let h: u32 = match h.parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    log::warn!("Invalid notification_time '{}': bad hour", config.notification_time);
+                    return;
+                }
+            };
+            let m: u32 = match m.parse() {
+                Ok(v) => v,
+                Err(_) => {
+                    log::warn!("Invalid notification_time '{}': bad minute", config.notification_time);
+                    return;
+                }
+            };
+            (h, m)
+        }
+        _ => {
+            log::warn!("Invalid notification_time format '{}': expected HH:MM", config.notification_time);
+            return;
+        }
+    };
+
+    let now_local = chrono::Local::now();
+    let now_time = now_local.time();
+    let notify_time = match chrono::NaiveTime::from_hms_opt(notify_hour, notify_min, 0) {
+        Some(t) => t,
+        None => {
+            log::warn!("Invalid notification_time '{}': out of range", config.notification_time);
+            return;
+        }
+    };
+
+    if now_time < notify_time {
+        return;
+    }
+
+    let today_date = now_local.date_naive().to_string();
+
+    match crate::db::notification_was_sent(conn, &today_date, "daily_summary") {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(e) => {
+            log::warn!("Failed to check notification_log: {}", e);
+            return;
+        }
+    }
+
+    let body = match crate::query::daily_summary_for_notification(
+        conn,
+        config.session_gap_minutes,
+        config.first_commit_minutes,
+    ) {
+        Ok(Some(b)) => b,
+        Ok(None) => return,
+        Err(e) => {
+            log::warn!("Failed to build daily summary for notification: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = crate::notifications::send_notification("Blackbox Daily Summary", &body) {
+        log::warn!("OS notification failed: {}", e);
+    }
+
+    if let Err(e) = crate::db::record_notification_sent(conn, &today_date, "daily_summary") {
+        log::warn!("Failed to record notification_sent: {}", e);
+    }
+}
+
 pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     // Register SIGHUP handler — sets atomic flag, checked each loop iteration
     let reload_requested = Arc::new(AtomicBool::new(false));
@@ -107,6 +187,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     // Initial full scan
     let mut repos = full_scan(&config, &mut repo_states, &conn);
     write_heartbeat(&conn, repos.len());
+    maybe_send_daily_notification(&config, &conn);
 
     // Try to set up filesystem watcher
     let mut watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -135,6 +216,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                     // Re-discover repos and recreate watcher with new config
                     repos = full_scan(&config, &mut repo_states, &conn);
                     write_heartbeat(&conn, repos.len());
+                    maybe_send_daily_notification(&config, &conn);
                     watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
                     last_full_scan = Instant::now();
                     debounce_map.clear();
@@ -176,6 +258,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
                 repos = full_scan(&config, &mut repo_states, &conn);
                 write_heartbeat(&conn, repos.len());
+                maybe_send_daily_notification(&config, &conn);
 
                 // Recreate watcher with updated repo list
                 watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -190,6 +273,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
             repos = full_scan(&config, &mut repo_states, &conn);
             write_heartbeat(&conn, repos.len());
+            maybe_send_daily_notification(&config, &conn);
 
             // Retry watcher setup on each full scan
             watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
