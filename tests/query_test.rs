@@ -1,8 +1,8 @@
 use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
 use blackbox::query::{
     estimate_time_v2, global_estimated_time, median_commit_gap, merge_intervals,
-    query_activity, query_presence, today_range, week_range, month_range,
-    ActivityEvent, RepoSummary, TimeInterval,
+    query_activity, query_branch_switches, query_presence, today_range, week_range, month_range,
+    ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Duration, TimeZone, Utc};
 use tempfile::NamedTempFile;
@@ -629,4 +629,63 @@ fn query_activity_populates_presence_intervals() {
     assert!(!alpha.presence_intervals.is_empty(), "presence_intervals should be populated");
     assert_eq!(alpha.presence_intervals[0].start, ts(9, 0));
     assert_eq!(alpha.presence_intervals[0].end, ts(10, 5));
+}
+
+// ===== US-CS-02: query_branch_switches =====
+
+#[test]
+fn query_branch_switches_returns_events_ordered_by_timestamp() {
+    let (conn, _tmp) = setup_db();
+
+    // Insert two branch_switch events with source_branch populated (US-CS-01)
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("feature-a"), Some("main"), None, None, None, "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("main"), Some("feature-a"), None, None, None, "2025-01-15T11:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+
+    let switches = query_branch_switches(&conn, from, to).unwrap();
+
+    assert_eq!(switches.len(), 2);
+
+    // First event: main -> feature-a
+    assert_eq!(switches[0].repo_path, "/repo/alpha");
+    assert_eq!(switches[0].from_branch, Some("main".to_string()));
+    assert_eq!(switches[0].to_branch, Some("feature-a".to_string()));
+    assert_eq!(switches[0].timestamp, Utc.with_ymd_and_hms(2025, 1, 15, 10, 0, 0).unwrap());
+
+    // Second event: feature-a -> main
+    assert_eq!(switches[1].from_branch, Some("feature-a".to_string()));
+    assert_eq!(switches[1].to_branch, Some("main".to_string()));
+    assert_eq!(switches[1].timestamp, Utc.with_ymd_and_hms(2025, 1, 15, 11, 0, 0).unwrap());
+
+    // Verify ordering: first timestamp < second
+    assert!(switches[0].timestamp < switches[1].timestamp);
+}
+
+#[test]
+fn query_branch_switches_excludes_commits_and_merges() {
+    let (conn, _tmp) = setup_db();
+
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("msg"), "2025-01-15T10:00:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "branch_switch", Some("feat"), Some("main"), None, None, None, "2025-01-15T10:30:00Z").unwrap();
+    insert_activity(&conn, "/repo/alpha", "merge", Some("main"), None, Some("bbb"), Some("dev"), Some("merge"), "2025-01-15T11:00:00Z").unwrap();
+
+    let from = Utc.with_ymd_and_hms(2025, 1, 15, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 1, 15, 23, 59, 59).unwrap();
+
+    let switches = query_branch_switches(&conn, from, to).unwrap();
+    assert_eq!(switches.len(), 1);
+    assert_eq!(switches[0].to_branch, Some("feat".to_string()));
+}
+
+#[test]
+fn query_branch_switches_empty_range() {
+    let (conn, _tmp) = setup_db();
+
+    let from = Utc.with_ymd_and_hms(2025, 6, 1, 0, 0, 0).unwrap();
+    let to = Utc.with_ymd_and_hms(2025, 6, 30, 23, 59, 59).unwrap();
+
+    let switches = query_branch_switches(&conn, from, to).unwrap();
+    assert!(switches.is_empty());
 }
