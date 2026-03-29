@@ -91,4 +91,4 @@ XDG data: `~/.local/share/blackbox/` (DB, logs)
 - When adding struct fields, update ALL test constructions (compiler catches this)
 
 ## Key Dependencies
-clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, reqwest 0.12 (blocking+json), serde+toml, daemonize+nix (daemon/signals), etcetera (XDG), walkdir (fs traversal)
+clap 4.5 (derive), rusqlite 0.38 (bundled), git2 0.20, chrono 0.4, ratatui 0.29, crossterm 0.28, notify 7, reqwest 0.12 (blocking+json), serde+toml, daemonize+nix (daemon/signals), signal-hook 0.3 (SIGHUP config reload), etcetera (XDG), walkdir (fs traversal)
