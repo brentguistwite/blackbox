@@ -145,6 +145,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Heatmap { weeks } => {
             blackbox::heatmap::run_heatmap(weeks)?;
         }
+        Commands::Rhythm { days, format } => {
+            blackbox::rhythm::run_rhythm(days, format)?;
+        }
         Commands::Standup { week, summarize } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);

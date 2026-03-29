@@ -90,6 +90,15 @@ pub enum Commands {
         #[arg(long, default_value_t = 52)]
         weeks: u32,
     },
+    /// Show work rhythm patterns (commit timing analysis)
+    Rhythm {
+        /// Number of days to analyze (default 30)
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Output activity in Slack/Teams-friendly format
     Standup {
         /// Show this week's activity instead of today

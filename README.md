@@ -40,6 +40,7 @@ blackbox today
 | `install` | Register as OS service (launchd on macOS, systemd on Linux) |
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
+| `rhythm` | Work rhythm analysis (`--days N`, `--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -96,6 +97,22 @@ A background daemon polls your watched directories for git repos, recording comm
 When shell hooks are installed (see above), blackbox also records directory presence — when you enter and leave a repo directory. Presence data anchors git session start times to when you actually started working, rather than relying on estimated credits. This produces more accurate time estimates, especially for repos where you spend significant time before your first commit.
 
 When `gh` CLI is available, output is enriched with PR titles and URLs.
+
+## Work Rhythm
+
+`blackbox rhythm` analyzes your commit timestamps to surface work patterns — a mirror, not a score. Includes:
+
+- **Hour-of-day histogram** — when you commit most (local time)
+- **Day-of-week histogram** — weekday vs weekend distribution
+- **After-hours/weekend ratio** — commits outside core hours (09:00–18:00)
+- **Session length distribution** — median, p90, mean session durations
+- **Commit pattern** — bursty vs steady (coefficient of variation of inter-commit gaps)
+
+```
+blackbox rhythm              # last 30 days, pretty output
+blackbox rhythm --days 7     # last 7 days
+blackbox rhythm --format json
+```
 
 ## License
 

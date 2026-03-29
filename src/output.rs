@@ -407,6 +407,184 @@ pub fn render_summary_to_string(summary: &ActivitySummary) -> String {
     lines.join("\n")
 }
 
+/// Render hour-of-day histogram as ASCII bar chart.
+/// Returns empty message if all slots are zero.
+pub fn render_hour_histogram(histogram: &[u32; 24]) -> String {
+    let max = *histogram.iter().max().unwrap_or(&0);
+    if max == 0 {
+        return "No commit activity in this period.".dimmed().to_string();
+    }
+
+    let max_bar_width: u32 = 20;
+    let mut lines: Vec<String> = Vec::new();
+
+    // Find peak hour
+    let peak_hour = histogram
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, v)| v)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    for (hour, &count) in histogram.iter().enumerate() {
+        let bar_len = if max > 0 {
+            (count as u64 * max_bar_width as u64 / max as u64) as usize
+        } else {
+            0
+        };
+        let bar = "█".repeat(bar_len);
+        let padding = " ".repeat(max_bar_width as usize - bar_len);
+        if hour == peak_hour && count > 0 {
+            lines.push(format!(
+                "{:>2} | {}{} {:>4}  <- peak",
+                hour,
+                bar.green(),
+                padding,
+                count
+            ));
+        } else {
+            lines.push(format!(
+                "{:>2} | {}{} {:>4}",
+                hour,
+                bar.yellow(),
+                padding,
+                count
+            ));
+        }
+    }
+
+    let commit_word = if histogram[peak_hour] == 1 { "commit" } else { "commits" };
+    lines.push(format!(
+        "Peak: {:02}:00–{:02}:00 ({} {})",
+        peak_hour,
+        (peak_hour + 1) % 24,
+        histogram[peak_hour],
+        commit_word,
+    ));
+
+    lines.join("\n")
+}
+
+/// Render day-of-week histogram as ASCII bar chart.
+/// Index 0=Mon..6=Sun. Returns empty message if all slots are zero.
+pub fn render_dow_histogram(histogram: &[u32; 7]) -> String {
+    const DAY_LABELS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    let max = *histogram.iter().max().unwrap_or(&0);
+    if max == 0 {
+        return "No commit activity in this period.".dimmed().to_string();
+    }
+
+    let max_bar_width: u32 = 20;
+    let mut lines: Vec<String> = Vec::new();
+
+    let peak_idx = histogram
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, v)| v)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    for (i, &count) in histogram.iter().enumerate() {
+        let bar_len = if max > 0 {
+            (count as u64 * max_bar_width as u64 / max as u64) as usize
+        } else {
+            0
+        };
+        let bar = "█".repeat(bar_len);
+        let padding = " ".repeat(max_bar_width as usize - bar_len);
+        let weekend_tag = if i >= 5 { " [wknd]" } else { "" };
+
+        if i == peak_idx && count > 0 {
+            lines.push(format!(
+                "{} | {}{} {:>4}  <- peak{}",
+                DAY_LABELS[i],
+                bar.green(),
+                padding,
+                count,
+                weekend_tag,
+            ));
+        } else {
+            lines.push(format!(
+                "{} | {}{} {:>4}{}",
+                DAY_LABELS[i],
+                bar.yellow(),
+                padding,
+                count,
+                weekend_tag,
+            ));
+        }
+    }
+
+    let commit_word = if histogram[peak_idx] == 1 { "commit" } else { "commits" };
+    lines.push(format!(
+        "Peak: {} ({} {})",
+        DAY_LABELS[peak_idx],
+        histogram[peak_idx],
+        commit_word,
+    ));
+
+    lines.join("\n")
+}
+
+/// Render after-hours/weekend stats as a compact display.
+/// No evaluative language — mirror, not a score.
+pub fn render_after_hours_stats(stats: &crate::query::AfterHoursStats) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    let ah_pct = (stats.after_hours_ratio * 100.0).round() as u32;
+    let wk_pct = (stats.weekend_ratio * 100.0).round() as u32;
+
+    lines.push(format!(
+        "After-hours: {}/{} commits ({}%)",
+        stats.after_hours_commits, stats.total_commits, ah_pct,
+    ));
+    lines.push(format!(
+        "Weekend:     {}/{} commits ({}%)",
+        stats.weekend_commits, stats.total_commits, wk_pct,
+    ));
+
+    if stats.after_hours_ratio > 0.5 {
+        lines.push("(more than half outside core hours)".to_string());
+    }
+
+    lines.join("\n")
+}
+
+/// Render session length distribution as compact stats line.
+/// Shows median, p90, mean. No flow/quality scoring language.
+pub fn render_session_distribution(dist: &crate::query::SessionDistribution) -> String {
+    if dist.sessions.is_empty() {
+        return "No sessions detected in this period".to_string();
+    }
+
+    let session_word = if dist.sessions.len() == 1 { "session" } else { "sessions" };
+    format!(
+        "Session lengths ({} {}):  median {}  p90 {}  mean {}",
+        dist.sessions.len(),
+        session_word,
+        format_duration(Duration::minutes(dist.median_minutes)),
+        format_duration(Duration::minutes(dist.p90_minutes)),
+        format_duration(Duration::minutes(dist.mean_minutes)),
+    )
+}
+
+/// Render burst pattern stats as descriptive label.
+/// Neutral pattern labels only — no evaluative language.
+pub fn render_burst_stats(stats: &crate::query::BurstStats) -> String {
+    match stats.pattern {
+        crate::query::CommitPattern::Burst => {
+            format!("Commit pattern: bursty (CV={:.2})", stats.cv_of_gaps)
+        }
+        crate::query::CommitPattern::Steady => {
+            format!("Commit pattern: steady (CV={:.2})", stats.cv_of_gaps)
+        }
+        crate::query::CommitPattern::Insufficient => {
+            "Commit pattern: insufficient data (< 3 commits)".to_string()
+        }
+    }
+}
+
 /// Print summary to stdout with colors.
 pub fn render_summary(summary: &ActivitySummary) {
     print!("{}", render_summary_to_string(summary));
@@ -493,4 +671,94 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
     lines.push(format!("Total: ~{} across {} {}", format_duration_plain(summary.total_estimated_time), summary.total_repos, repo_word));
 
     lines.join("\n")
+}
+
+// --- Rhythm report ---
+
+/// Aggregated rhythm analysis report for a time window.
+#[derive(Debug, Clone, Serialize)]
+pub struct RhythmReport {
+    pub days: u64,
+    pub hour_histogram: [u32; 24],
+    pub dow_histogram: [u32; 7],
+    pub after_hours: crate::query::AfterHoursStats,
+    pub session_distribution: crate::query::SessionDistribution,
+    pub burst_stats: crate::query::BurstStats,
+}
+
+/// Render full rhythm report as pretty terminal output.
+/// Composes all rhythm sections with headers and blank-line separators.
+pub fn render_rhythm(report: &RhythmReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push(
+        format!("=== Work Rhythm (last {} days) ===", report.days)
+            .bold()
+            .cyan()
+            .to_string(),
+    );
+    lines.push(String::new());
+
+    // Hour of day
+    lines.push("Hour of day".bold().to_string());
+    lines.push(render_hour_histogram(&report.hour_histogram));
+    lines.push(String::new());
+
+    // Day of week
+    lines.push("Day of week".bold().to_string());
+    lines.push(render_dow_histogram(&report.dow_histogram));
+    lines.push(String::new());
+
+    // Sustainability (after-hours)
+    lines.push("Sustainability".bold().to_string());
+    lines.push(render_after_hours_stats(&report.after_hours));
+    lines.push(String::new());
+
+    // Session lengths
+    lines.push("Session lengths".bold().to_string());
+    lines.push(render_session_distribution(&report.session_distribution));
+    lines.push(String::new());
+
+    // Commit pattern
+    lines.push("Commit pattern".bold().to_string());
+    lines.push(render_burst_stats(&report.burst_stats));
+
+    lines.join("\n")
+}
+
+/// JSON struct for rhythm report output.
+#[derive(Serialize)]
+pub struct RhythmReportJson {
+    pub days: u64,
+    pub hour_histogram: [u32; 24],
+    pub dow_histogram: [u32; 7],
+    pub after_hours: crate::query::AfterHoursStats,
+    pub session_distribution: SessionDistributionJson,
+    pub burst_stats: crate::query::BurstStats,
+}
+
+#[derive(Serialize)]
+pub struct SessionDistributionJson {
+    pub session_count: usize,
+    pub median_minutes: i64,
+    pub p90_minutes: i64,
+    pub mean_minutes: i64,
+}
+
+/// Render rhythm report as pretty-printed JSON string.
+pub fn render_rhythm_json(report: &RhythmReport) -> String {
+    let json = RhythmReportJson {
+        days: report.days,
+        hour_histogram: report.hour_histogram,
+        dow_histogram: report.dow_histogram,
+        after_hours: report.after_hours.clone(),
+        session_distribution: SessionDistributionJson {
+            session_count: report.session_distribution.sessions.len(),
+            median_minutes: report.session_distribution.median_minutes,
+            p90_minutes: report.session_distribution.p90_minutes,
+            mean_minutes: report.session_distribution.mean_minutes,
+        },
+        burst_stats: report.burst_stats.clone(),
+    };
+    serde_json::to_string_pretty(&json).expect("JSON serialization should not fail")
 }

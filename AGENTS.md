@@ -23,6 +23,7 @@ cargo run -- <subcommand>      # Run locally
 cargo run -- setup             # Full interactive onboarding
 cargo run -- start             # Start polling daemon
 cargo run -- today             # Show today's activity
+cargo run -- rhythm            # Work rhythm analysis (--days N, --format pretty|json)
 ```
 
 ## Architecture
@@ -47,6 +48,7 @@ src/
 ├── poller.rs         # run_poll_loop() — main daemon loop
 ├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges
 ├── repo_scanner.rs   # discover_repos() — recursive git repo finder
+├── rhythm.rs         # Work rhythm analysis orchestrator (run_rhythm)
 ├── service.rs        # launchd/systemd install/uninstall (cfg-gated)
 ├── setup.rs          # Full interactive onboarding wizard
 ├── shell_hook.rs     # Shell hook generation for zsh/bash/fish

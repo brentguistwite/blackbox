@@ -1,5 +1,5 @@
 use crate::enrichment::PrInfo;
-use chrono::{Datelike, DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
+use chrono::{Datelike, DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 
@@ -637,6 +637,348 @@ pub fn query_daily_commit_counts(
     }
 
     Ok(result)
+}
+
+
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AfterHoursStats {
+    pub total_commits: u32,
+    pub after_hours_commits: u32,
+    pub weekend_commits: u32,
+    pub after_hours_ratio: f64,
+    pub weekend_ratio: f64,
+}
+
+/// Count commits during after-hours (local hour < 9 or >= 18) and on weekends (Sat/Sun local).
+/// Returns counts and ratios. Ratios are 0.0 when total_commits == 0.
+/// Only counts event_type='commit'.
+pub fn after_hours_ratio(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<AfterHoursStats> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2",
+    )?;
+
+    let mut total: u32 = 0;
+    let mut after_hours: u32 = 0;
+    let mut weekend: u32 = 0;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        let local_dt = utc_dt.with_timezone(&Local);
+        let hour = local_dt.hour();
+        let dow = local_dt.weekday().num_days_from_monday();
+
+        total += 1;
+        if !(9..18).contains(&hour) {
+            after_hours += 1;
+        }
+        if dow >= 5 {
+            weekend += 1;
+        }
+    }
+
+    let ah_ratio = if total > 0 { after_hours as f64 / total as f64 } else { 0.0 };
+    let wk_ratio = if total > 0 { weekend as f64 / total as f64 } else { 0.0 };
+
+    Ok(AfterHoursStats {
+        total_commits: total,
+        after_hours_commits: after_hours,
+        weekend_commits: weekend,
+        after_hours_ratio: ah_ratio,
+        weekend_ratio: wk_ratio,
+    })
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionDistribution {
+    #[serde(skip)]
+    pub sessions: Vec<Duration>,
+    pub median_minutes: i64,
+    pub p90_minutes: i64,
+    pub mean_minutes: i64,
+}
+
+/// Compute session length distribution from commit timestamps across all repos.
+/// Uses same session-gap logic as estimate_time_v2: adaptive thresholds from median commit gap.
+/// Sessions < 5 min excluded as noise. Returns all-zero struct if no qualifying sessions.
+pub fn session_length_distribution(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    session_gap_minutes: u64,
+    first_commit_minutes: u64,
+) -> anyhow::Result<SessionDistribution> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        timestamps.push(utc_dt);
+    }
+
+    if timestamps.is_empty() {
+        return Ok(SessionDistribution {
+            sessions: vec![],
+            median_minutes: 0,
+            p90_minutes: 0,
+            mean_minutes: 0,
+        });
+    }
+
+    // Compute adaptive thresholds (same as estimate_time_v2)
+    let gaps: Vec<Duration> = timestamps
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .filter(|d| d.num_seconds() > 0)
+        .collect();
+
+    let (effective_gap, effective_credit) = if gaps.is_empty() {
+        (
+            Duration::minutes(session_gap_minutes as i64),
+            Duration::minutes(first_commit_minutes as i64),
+        )
+    } else {
+        let mut sorted_gaps = gaps.clone();
+        sorted_gaps.sort();
+        let mid = sorted_gaps.len() / 2;
+        let median = if sorted_gaps.len().is_multiple_of(2) {
+            (sorted_gaps[mid - 1] + sorted_gaps[mid]) / 2
+        } else {
+            sorted_gaps[mid]
+        };
+        let median_mins = median.num_minutes();
+        let gap = (median_mins * 3).clamp(MIN_GAP_FLOOR_MINS, MAX_GAP_CAP_MINS);
+        let credit = median_mins.clamp(MIN_CREDIT_MINS, MAX_CREDIT_MINS);
+        (Duration::minutes(gap), Duration::minutes(credit))
+    };
+
+    // Group into sessions
+    let mut session_durations: Vec<Duration> = Vec::new();
+    let mut session_start = 0usize;
+
+    for i in 1..=timestamps.len() {
+        let is_end = i == timestamps.len()
+            || (timestamps[i] - timestamps[i - 1]) >= effective_gap;
+        if is_end {
+            let first_ts = timestamps[session_start];
+            let last_ts = timestamps[i - 1];
+            let duration = (last_ts - first_ts) + effective_credit;
+            session_durations.push(duration);
+            if i < timestamps.len() {
+                session_start = i;
+            }
+        }
+    }
+
+    // Exclude sessions < 5 min
+    let min_session = Duration::minutes(5);
+    let mut qualifying: Vec<Duration> = session_durations
+        .into_iter()
+        .filter(|d| *d >= min_session)
+        .collect();
+
+    if qualifying.is_empty() {
+        return Ok(SessionDistribution {
+            sessions: vec![],
+            median_minutes: 0,
+            p90_minutes: 0,
+            mean_minutes: 0,
+        });
+    }
+
+    qualifying.sort();
+    let n = qualifying.len();
+
+    let median = if n.is_multiple_of(2) {
+        (qualifying[n / 2 - 1] + qualifying[n / 2]) / 2
+    } else {
+        qualifying[n / 2]
+    };
+
+    let p90_idx = ((n as f64 * 0.9).ceil() as usize).min(n) - 1;
+    let p90 = qualifying[p90_idx];
+
+    let total_mins: i64 = qualifying.iter().map(|d| d.num_minutes()).sum();
+    let mean_mins = total_mins / n as i64;
+
+    Ok(SessionDistribution {
+        sessions: qualifying,
+        median_minutes: median.num_minutes(),
+        p90_minutes: p90.num_minutes(),
+        mean_minutes: mean_mins,
+    })
+}
+
+/// Count commits per local hour of day. Returns [u32; 24] indexed 0–23.
+/// Only counts event_type='commit'. Converts UTC timestamps to local time before bucketing.
+pub fn commit_hour_histogram(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<[u32; 24]> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2",
+    )?;
+
+    let mut histogram = [0u32; 24];
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        let local_dt = utc_dt.with_timezone(&Local);
+        let hour = local_dt.hour() as usize;
+        histogram[hour] += 1;
+    }
+
+    Ok(histogram)
+}
+
+/// Count commits per local day of week. Returns [u32; 7] indexed Mon=0..Sun=6.
+/// Only counts event_type='commit'. Converts UTC timestamps to local time before bucketing.
+pub fn commit_dow_histogram(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<[u32; 7]> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2",
+    )?;
+
+    let mut histogram = [0u32; 7];
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        let local_dt = utc_dt.with_timezone(&Local);
+        let dow = local_dt.weekday().num_days_from_monday() as usize;
+        histogram[dow] += 1;
+    }
+
+    Ok(histogram)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum CommitPattern {
+    Burst,
+    Steady,
+    Insufficient,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BurstStats {
+    pub commit_count: u32,
+    pub cv_of_gaps: f64,
+    pub pattern: CommitPattern,
+}
+
+/// Classify commit pattern as burst vs steady using coefficient of variation of inter-commit gaps.
+/// Insufficient when < 3 commits. Burst when CV > 1.0. Steady when CV <= 1.0.
+/// CV = std_dev / mean; 0.0 if mean is 0.
+pub fn burst_pattern(
+    conn: &Connection,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> anyhow::Result<BurstStats> {
+    let from_str = from.to_rfc3339();
+    let to_str = to.to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT timestamp FROM git_activity
+         WHERE event_type = 'commit' AND timestamp >= ?1 AND timestamp <= ?2
+         ORDER BY timestamp ASC",
+    )?;
+
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    let mut timestamps: Vec<DateTime<Utc>> = Vec::new();
+    for row in rows {
+        let ts_str = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)?.with_timezone(&Utc);
+        timestamps.push(utc_dt);
+    }
+
+    let commit_count = timestamps.len() as u32;
+
+    if commit_count < 3 {
+        return Ok(BurstStats {
+            commit_count,
+            cv_of_gaps: 0.0,
+            pattern: CommitPattern::Insufficient,
+        });
+    }
+
+    let gaps: Vec<f64> = timestamps
+        .windows(2)
+        .map(|w| (w[1] - w[0]).num_seconds() as f64)
+        .collect();
+
+    let n = gaps.len() as f64;
+    let mean = gaps.iter().sum::<f64>() / n;
+
+    if mean == 0.0 {
+        return Ok(BurstStats {
+            commit_count,
+            cv_of_gaps: 0.0,
+            pattern: CommitPattern::Insufficient,
+        });
+    }
+
+    let variance = gaps.iter().map(|g| (g - mean).powi(2)).sum::<f64>() / n;
+    let std_dev = variance.sqrt();
+    let cv = std_dev / mean;
+
+    let pattern = if cv > 1.0 {
+        CommitPattern::Burst
+    } else {
+        CommitPattern::Steady
+    };
+
+    Ok(BurstStats {
+        commit_count,
+        cv_of_gaps: cv,
+        pattern,
+    })
 }
 
 #[cfg(test)]
