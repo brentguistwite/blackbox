@@ -239,8 +239,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::PerfReview { from, to } => {
             let config = blackbox::config::load_config()?;
-            // Fail fast if no API key configured
-            let llm_config = blackbox::llm::build_llm_config(&config)?;
+            // Fail fast if no API key configured (US-10: perf-review-specific error)
+            let llm_config = blackbox::llm::build_llm_config(&config)
+                .context("blackbox perf-review requires an LLM API key")?;
             let (from_utc, to_utc) = blackbox::query::resolve_perf_review_range(
                 from.as_deref(),
                 to.as_deref(),
