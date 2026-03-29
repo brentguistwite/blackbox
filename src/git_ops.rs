@@ -173,6 +173,7 @@ pub fn poll_repo(
                     Some(&message),
                     &ts,
                 )?;
+                backfill_line_stats(&repo, &commit, conn, db_repo_path, &hash, &ts);
             }
         }
 
@@ -233,12 +234,44 @@ pub fn poll_repo(
                     Some(&message),
                     &ts,
                 )?;
+                backfill_line_stats(&repo, &commit, conn, db_repo_path, &hash, &ts);
             }
         }
     }
 
     state.last_commit_oid = Some(current_oid);
     Ok(())
+}
+
+/// Compute per-file line stats for a commit and insert into DB. Logs warnings on failure.
+fn backfill_line_stats(
+    repo: &Repository,
+    commit: &git2::Commit,
+    conn: &Connection,
+    db_repo_path: &str,
+    hash: &str,
+    ts: &str,
+) {
+    match crate::churn::diff_commit_stats(repo, commit) {
+        Ok(file_stats) => {
+            for stat in &file_stats {
+                if let Err(e) = db::insert_commit_line_stats(
+                    conn,
+                    db_repo_path,
+                    hash,
+                    &stat.file_path,
+                    stat.lines_added as i64,
+                    stat.lines_deleted as i64,
+                    ts,
+                ) {
+                    warn!("insert_commit_line_stats failed: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            warn!("diff_commit_stats failed for {hash}: {e}");
+        }
+    }
 }
 
 /// Try to resolve the source branch of a merge from parent[1].
