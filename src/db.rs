@@ -71,6 +71,31 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
         ),
+        // US-001: pr_snapshots table for PR cycle time metrics
+        M::up(
+            "CREATE TABLE IF NOT EXISTS pr_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                state TEXT NOT NULL,
+                head_ref TEXT NOT NULL,
+                base_ref TEXT NOT NULL,
+                author_login TEXT,
+                created_at_gh TEXT,
+                merged_at TEXT,
+                closed_at TEXT,
+                first_review_at TEXT,
+                additions INTEGER,
+                deletions INTEGER,
+                commits INTEGER,
+                iteration_count INTEGER,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_snapshots_repo_pr ON pr_snapshots(repo_path, pr_number);
+            CREATE INDEX IF NOT EXISTS idx_pr_snapshots_repo_state ON pr_snapshots(repo_path, state);"
+        ),
     ]);
     migrations.to_latest(&mut conn)?;
 
