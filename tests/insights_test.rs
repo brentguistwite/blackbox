@@ -1,6 +1,9 @@
+use assert_cmd::Command;
 use blackbox::llm::build_insights_prompt;
 use blackbox::query::{aggregate_insights_data, ActivityEvent, InsightsData, RepoInsights, RepoSummary};
 use chrono::{Datelike, Duration, Utc};
+use std::fs;
+use tempfile::TempDir;
 
 /// Helper: build a RepoSummary with commit events at given timestamps+messages.
 fn repo(
@@ -435,4 +438,100 @@ fn render_insights_json_empty_data() {
     assert_eq!(val["total_commits"], 0);
     assert!(val["per_repo"].as_array().unwrap().is_empty());
     assert!(val["pr_merge_times_hours"].as_array().unwrap().is_empty());
+}
+
+// --- US-016: CLI integration test: blackbox insights --format json ---
+
+/// Helper: init config + open DB + insert sample commits for CLI tests.
+fn setup_insights_cli_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Init config (no llm_api_key — json path shouldn't need it)
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    // Populate DB with commits
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let conn = blackbox::db::open_db(&db_dir.join("blackbox.db")).unwrap();
+    let now = chrono::Utc::now();
+    for i in 0..5 {
+        let ts = now - chrono::Duration::hours(i);
+        conn.execute(
+            "INSERT INTO git_activity (repo_path, event_type, branch, commit_hash, author, message, timestamp)
+             VALUES (?1, 'commit', 'main', ?2, 'tester', 'test commit', ?3)",
+            rusqlite::params!["/tmp/repos/foo", format!("abc{i}"), ts.to_rfc3339()],
+        )
+        .unwrap();
+    }
+
+    (tmp, config_dir, data_dir)
+}
+
+#[test]
+fn cli_insights_json_exits_zero() {
+    let (_tmp, config_dir, data_dir) = setup_insights_cli_env();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["insights", "--format", "json"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn cli_insights_json_is_valid_json_with_total_commits() {
+    let (_tmp, config_dir, data_dir) = setup_insights_cli_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["insights", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let val: serde_json::Value =
+        serde_json::from_str(&stdout).expect("stdout should be valid JSON");
+    assert!(
+        val.get("total_commits").is_some(),
+        "JSON must contain total_commits field"
+    );
+    assert!(
+        val["total_commits"].as_u64().unwrap() >= 5,
+        "should have at least the 5 inserted commits"
+    );
+}
+
+#[test]
+fn cli_insights_json_no_llm_key_required() {
+    // Verify --format json works without any llm_api_key configured
+    let (_tmp, config_dir, data_dir) = setup_insights_cli_env();
+
+    // Confirm config has no llm_api_key
+    let config_path = config_dir.join("blackbox/config.toml");
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        !content.contains("llm_api_key"),
+        "test config should not have llm_api_key"
+    );
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["insights", "--format", "json"])
+        .assert()
+        .success();
 }
