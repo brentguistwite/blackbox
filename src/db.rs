@@ -1,6 +1,7 @@
 use std::path::Path;
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
+use crate::enrichment::GhPrDetail;
 
 pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
     if let Some(parent) = path.parent() {
@@ -70,6 +71,31 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
                 SELECT MIN(id) FROM git_activity WHERE commit_hash IS NOT NULL GROUP BY repo_path, commit_hash
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_repo_commit ON git_activity(repo_path, commit_hash) WHERE commit_hash IS NOT NULL;"
+        ),
+        // US-001: pr_snapshots table for PR cycle time metrics
+        M::up(
+            "CREATE TABLE IF NOT EXISTS pr_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_path TEXT NOT NULL,
+                pr_number INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                url TEXT NOT NULL,
+                state TEXT NOT NULL,
+                head_ref TEXT NOT NULL,
+                base_ref TEXT NOT NULL,
+                author_login TEXT,
+                created_at_gh TEXT,
+                merged_at TEXT,
+                closed_at TEXT,
+                first_review_at TEXT,
+                additions INTEGER,
+                deletions INTEGER,
+                commits INTEGER,
+                iteration_count INTEGER,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pr_snapshots_repo_pr ON pr_snapshots(repo_path, pr_number);
+            CREATE INDEX IF NOT EXISTS idx_pr_snapshots_repo_state ON pr_snapshots(repo_path, state);"
         ),
     ]);
     migrations.to_latest(&mut conn)?;
@@ -194,4 +220,54 @@ pub fn insert_activity(
         rusqlite::params![repo_path, event_type, branch, source_branch, commit_hash, author, message, timestamp],
     )?;
     Ok(rows > 0)
+}
+
+/// Upsert a PR snapshot row. Computes first_review_at and iteration_count from reviews vec.
+/// Uses INSERT OR REPLACE — the unique index on (repo_path, pr_number) triggers replacement.
+pub fn upsert_pr_snapshot(
+    conn: &Connection,
+    repo_path: &str,
+    pr: &GhPrDetail,
+) -> anyhow::Result<()> {
+    // Earliest non-PENDING review
+    let first_review_at: Option<String> = pr
+        .reviews
+        .iter()
+        .filter(|r| r.state != "PENDING")
+        .map(|r| r.submitted_at.clone())
+        .min();
+
+    // Number of CHANGES_REQUESTED reviews
+    let iteration_count: i64 = pr
+        .reviews
+        .iter()
+        .filter(|r| r.state == "CHANGES_REQUESTED")
+        .count() as i64;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO pr_snapshots
+         (repo_path, pr_number, title, url, state, head_ref, base_ref,
+          author_login, created_at_gh, merged_at, closed_at, first_review_at,
+          additions, deletions, commits, iteration_count)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+        rusqlite::params![
+            repo_path,
+            pr.number as i64,
+            &pr.title,
+            &pr.url,
+            &pr.state,
+            &pr.head_ref_name,
+            &pr.base_ref_name,
+            pr.author.as_ref().map(|a| &a.login),
+            &pr.created_at,
+            &pr.merged_at,
+            &pr.closed_at,
+            first_review_at,
+            pr.additions,
+            pr.deletions,
+            pr.commits.len() as i64,
+            iteration_count,
+        ],
+    )?;
+    Ok(())
 }

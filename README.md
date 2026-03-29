@@ -44,6 +44,7 @@ blackbox today
 | `reload` | Send SIGHUP to running daemon to reload config without restart |
 | `focus` | Context-switch focus report (`--week` for weekly) |
 | `repo <path>` | Single-repo deep dive: language breakdown, top files, time invested, branches, PRs (`--format pretty\|json`) |
+| `prs` | PR cycle time metrics (`--days N`, `--repo <path>`, `--format pretty\|json`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -122,7 +123,25 @@ A background daemon polls your watched directories for git repos, recording comm
 
 When shell hooks are installed (see above), blackbox also records directory presence — when you enter and leave a repo directory. Presence data anchors git session start times to when you actually started working, rather than relying on estimated credits. This produces more accurate time estimates, especially for repos where you spend significant time before your first commit.
 
-When `gh` CLI is available, output is enriched with PR titles and URLs.
+When `gh` CLI is available, PR data is collected during each poll and stored locally.
+
+## PR Cycle Time
+
+`blackbox prs` surfaces PR lifecycle metrics from data collected at poll time (requires `gh` CLI):
+
+- **Cycle time** — created → merged (median across PRs)
+- **Time to first review** — created → first non-pending review
+- **PR size** — additions + deletions
+- **Iteration count** — number of changes-requested reviews
+
+```
+blackbox prs               # last 30 days, pretty output
+blackbox prs --days 7      # last 7 days
+blackbox prs --repo /path  # single repo
+blackbox prs --format json
+```
+
+Data is persisted in the `pr_snapshots` table and updated every full scan (≈30 min). The `--limit 50` cap means only the 50 most recent open/closed PRs per repo are captured.
 
 ## Work Rhythm
 

@@ -24,6 +24,7 @@ cargo run -- setup             # Full interactive onboarding
 cargo run -- start             # Start polling daemon
 cargo run -- today             # Show today's activity
 cargo run -- rhythm            # Work rhythm analysis (--days N, --format pretty|json)
+cargo run -- prs               # PR cycle time metrics (--days N, --repo, --format pretty|json)
 ```
 
 ## Architecture
@@ -38,16 +39,16 @@ src/
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
 ├── daemon.rs         # Daemon lifecycle (start/stop/status, PID management)
-├── db.rs             # SQLite with WAL, migrations, insert/query functions
+├── db.rs             # SQLite with WAL, migrations, insert/query functions, pr_snapshots upsert
 ├── doctor.rs         # Health checks and diagnostics
-├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation)
+├── enrichment.rs     # gh CLI integration (OnceLock, graceful degradation, PR snapshot collection)
 ├── error.rs          # Custom error types (thiserror)
 ├── git_ops.rs        # poll_repo(), RepoState, commit/branch/merge detection
 ├── heatmap.rs        # GitHub-style contribution heatmap rendering
 ├── llm.rs            # LLM integration for --summarize flag
-├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv
+├── output.rs         # OutputFormat enum, is_tty(), resolve_format(), render_summary/json/csv, PR cycle time output
 ├── poller.rs         # run_poll_loop() — main daemon loop
-├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges
+├── query.rs          # ActivitySummary, RepoSummary, time estimation, date ranges, PrCycleStats
 ├── repo_deep_dive.rs # Single-repo deep dive (language breakdown, top files, time, branches, PRs)
 ├── repo_scanner.rs   # discover_repos() — recursive git repo finder
 ├── rhythm.rs         # Work rhythm analysis orchestrator (run_rhythm)

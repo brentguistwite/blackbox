@@ -152,6 +152,18 @@ pub enum Commands {
         #[arg(long)]
         week: bool,
     },
+    /// Show PR cycle time metrics
+    Prs {
+        /// Number of days to analyze (default 30)
+        #[arg(long, default_value_t = 30)]
+        days: u64,
+        /// Filter to a specific repo path
+        #[arg(long)]
+        repo: Option<String>,
+        /// Output format: pretty, json
+        #[arg(long, default_value = "pretty")]
+        format: OutputFormat,
+    },
     /// Single-repo deep dive (language breakdown, top files, time invested, PR history)
     Repo {
         /// Path to the git repository
