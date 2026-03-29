@@ -237,6 +237,9 @@ fn main() -> anyhow::Result<()> {
                 OutputFormat::Csv => anyhow::bail!("--format csv not supported for prs command"),
             }
         }
+        Commands::Insights { window, format } => {
+            blackbox::insights::run_insights(window.as_deref(), format)?;
+        }
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
         }

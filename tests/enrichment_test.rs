@@ -23,6 +23,8 @@ fn pr_info_serializes_to_json() {
         title: "My PR".to_string(),
         state: "OPEN".to_string(),
         head_ref_name: "my-branch".to_string(),
+        created_at: None,
+        merged_at: None,
     };
     let json = serde_json::to_string(&pr).unwrap();
     assert!(json.contains("\"number\":7"));
@@ -51,12 +53,16 @@ fn match_prs_to_branch_finds_match() {
             title: "First".to_string(),
             state: "OPEN".to_string(),
             head_ref_name: "main".to_string(),
+            created_at: None,
+            merged_at: None,
         },
         PrInfo {
             number: 2,
             title: "Feature".to_string(),
             state: "OPEN".to_string(),
             head_ref_name: "feature-branch".to_string(),
+            created_at: None,
+            merged_at: None,
         },
     ];
     let branches = vec!["feature-branch".to_string()];
@@ -75,6 +81,8 @@ fn match_prs_no_match_returns_empty() {
         title: "First".to_string(),
         state: "OPEN".to_string(),
         head_ref_name: "other-branch".to_string(),
+        created_at: None,
+        merged_at: None,
     }];
     let branches = vec!["my-branch".to_string()];
     let matched: Vec<&PrInfo> = prs
