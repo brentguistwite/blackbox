@@ -108,6 +108,8 @@ pub enum Commands {
         #[arg(long)]
         summarize: bool,
     },
+    /// Send SIGHUP to running daemon to reload config
+    Reload,
     /// Single-repo deep dive (language breakdown, top files, time invested, PR history)
     Repo {
         /// Path to the git repository

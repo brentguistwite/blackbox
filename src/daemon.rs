@@ -108,6 +108,20 @@ pub fn run_foreground(config: Config, data_dir: &Path) -> anyhow::Result<()> {
     poller::run_poll_loop(config)
 }
 
+pub fn reload_daemon(data_dir: &Path) -> anyhow::Result<()> {
+    match is_daemon_running(data_dir)? {
+        Some(pid) => {
+            nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(pid as i32),
+                nix::sys::signal::Signal::SIGHUP,
+            )?;
+            println!("Reloading config (PID {})", pid);
+        }
+        None => println!("Daemon not running"),
+    }
+    Ok(())
+}
+
 pub fn daemon_status(data_dir: &Path) -> anyhow::Result<()> {
     match is_daemon_running(data_dir)? {
         Some(pid) => println!("Running (PID {})", pid),
