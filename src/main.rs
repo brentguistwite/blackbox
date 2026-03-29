@@ -143,10 +143,10 @@ fn build_summary_for_range(
 fn run_digest(
     week_offset: i32,
     format: OutputFormat,
-    _output_file: Option<PathBuf>,
+    output_file: Option<PathBuf>,
     summarize: bool,
     compare: bool,
-    _notify: bool,
+    notify: bool,
 ) -> anyhow::Result<()> {
     let config = blackbox::config::load_config()?;
     let data_dir = blackbox::config::data_dir()?;
@@ -183,19 +183,71 @@ fn run_digest(
         week_end: to,
     };
 
-    if summarize {
+    let output_str = if summarize {
         let llm_config = blackbox::llm::build_llm_config(&config)?;
-        let json = blackbox::output::render_json(&digest.current);
+        let json = blackbox::output::render_digest_json(&digest);
         blackbox::llm::summarize_activity(&llm_config, &json)?;
+        return Ok(());
     } else {
         match format {
-            OutputFormat::Pretty => blackbox::output::render_digest(&digest),
-            OutputFormat::Json => println!("{}", blackbox::output::render_json(&digest.current)),
-            OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&digest.current)),
+            OutputFormat::Pretty => blackbox::output::render_digest_to_string(&digest),
+            OutputFormat::Json => blackbox::output::render_digest_json(&digest),
+            OutputFormat::Csv => blackbox::output::render_digest_csv(&digest),
         }
+    };
+
+    if let Some(path) = output_file {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create dirs for {}", path.display()))?;
+        }
+        std::fs::write(&path, &output_str)
+            .with_context(|| format!("Failed to write digest to {}", path.display()))?;
+        println!("Digest written to {}", path.display());
+    } else {
+        print!("{}", output_str);
+    }
+
+    if notify {
+        let stats = format!(
+            "{} commits, {}, {} repos",
+            digest.current.total_commits,
+            blackbox::output::format_duration(digest.current.total_estimated_time),
+            digest.current.total_repos,
+        );
+        send_digest_notification(&stats);
     }
 
     Ok(())
+}
+
+fn send_digest_notification(body: &str) {
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{}\" with title \"Blackbox Weekly Digest\"",
+            body.replace('"', "\\\"")
+        );
+        if let Err(e) = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+        {
+            eprintln!("Warning: failed to send notification: {e}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Err(e) = std::process::Command::new("notify-send")
+            .args(["Blackbox Weekly Digest", body])
+            .output()
+        {
+            eprintln!("Warning: failed to send notification: {e}");
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = body;
+    }
 }
 
 fn main() -> anyhow::Result<()> {
