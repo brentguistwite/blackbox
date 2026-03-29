@@ -791,6 +791,55 @@ fn test_json_and_csv_conflict() {
         .failure();
 }
 
+// --- US-004: Strip ANSI codes in non-TTY ---
+
+#[test]
+fn test_pretty_output_no_ansi_in_pipe() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env(); // has commits → non-empty pretty output
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--format", "pretty"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "today --format pretty should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("\x1b["),
+        "piped pretty output should contain no ANSI escape sequences, got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_rhythm_pretty_no_ansi_in_pipe() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["rhythm", "--format", "pretty"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "rhythm --format pretty should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // rhythm uses colored output (bold, cyan, green, yellow) — must be stripped in pipe
+    assert!(
+        !stdout.is_empty(),
+        "rhythm output should not be empty"
+    );
+    assert!(
+        !stdout.contains("\x1b["),
+        "piped rhythm pretty output should contain no ANSI escape sequences, got: {}",
+        stdout
+    );
+}
+
 #[test]
 fn test_json_flag_overrides_format_pretty() {
     let (_tmp, config_dir, data_dir) = setup_empty_env();

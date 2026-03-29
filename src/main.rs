@@ -64,6 +64,11 @@ fn run_query(
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
+    // Strip ANSI codes when stdout is not a TTY (piped/redirected)
+    if !blackbox::output::is_tty() {
+        colored::control::set_override(false);
+    }
+
     // First-run detection: redirect to setup wizard if no config exists
     if !blackbox::config::config_exists() && !cli.command.is_exempt_from_config_check() {
         println!("Welcome to blackbox! No config found. Let's get you set up.\n");
