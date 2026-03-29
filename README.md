@@ -30,10 +30,10 @@ blackbox today
 | `start` | Start background daemon |
 | `stop` | Stop running daemon |
 | `status` | Show daemon status (running/stopped) |
-| `today` | Show today's git activity (`--format pretty\|json\|csv`, `--summarize`) |
-| `week` | Show this week's activity (`--format pretty\|json\|csv`, `--summarize`) |
-| `month` | Show this month's activity (`--format pretty\|json\|csv`, `--summarize`) |
-| `standup` | Slack/Teams-friendly activity summary (`--week`, `--summarize`) |
+| `today` | Show today's git activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
+| `week` | Show this week's activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
+| `month` | Show this month's activity (`--json`, `--csv`, `--format pretty\|json\|csv`, `--summarize`) |
+| `standup` | Slack/Teams-friendly activity summary (`--week`, `--json`, `--csv`, `--summarize`) |
 | `heatmap` | GitHub-style contribution heatmap (`--weeks N`, default 52) |
 | `live` | Interactive TUI dashboard |
 | `doctor` | Run health checks and report status |
@@ -72,7 +72,7 @@ Config lives at `~/.config/blackbox/config.toml`:
 
 ## Output Formats
 
-**Pretty** (default):
+**Pretty** (default in terminal):
 ```
 Today - 3 repos, 12 commits, 4h 30m estimated
 
@@ -81,9 +81,11 @@ Today - 3 repos, 12 commits, 4h 30m estimated
   dotfiles         1 commit      15m
 ```
 
-**JSON:** `blackbox today --format json` -- structured output with repo details, commit counts, time estimates, and PR info (when gh CLI available).
+**JSON:** `blackbox today --json` (or `--format json`) -- structured output with repo details, commit counts, time estimates, and PR info (when gh CLI available).
 
-**CSV:** `blackbox today --format csv` -- flat rows suitable for spreadsheets/pipelines.
+**CSV:** `blackbox today --csv` (or `--format csv`) -- flat rows suitable for spreadsheets/pipelines.
+
+**TTY auto-detection:** When stdout is piped or redirected (not a terminal), output defaults to JSON automatically. ANSI color codes are stripped in non-TTY mode. Explicit flags (`--json`, `--csv`, `--format`) always take precedence over auto-detection.
 
 **Standup:** `blackbox standup` -- copy-paste-ready summary for Slack/Teams. Use `--week` for weekly and `--summarize` for LLM-generated summaries.
 
