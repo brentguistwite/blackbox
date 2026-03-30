@@ -1099,7 +1099,58 @@ fn test_rhythm_pretty_no_ansi_in_pipe() {
     );
 }
 
-// --- US-005: Standup --json / --csv ---
+// --- US-005: Non-TTY hint suppression ---
+
+#[test]
+fn test_piped_pretty_output_has_no_hints_on_stderr() {
+    // assert_cmd runs as subprocess w/ piped I/O → is_tty() = false → no hints
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env(); // has commits → activity present
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--format", "pretty"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("hint:"),
+        "piped (non-TTY) pretty output should have no hints on stderr, got: {}",
+        stderr
+    );
+}
+
+#[test]
+fn test_piped_json_output_has_no_hints_on_stderr() {
+    let (_tmp, config_dir, data_dir) = setup_rhythm_env();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("hint:"),
+        "piped JSON output should have no hints on stderr, got: {}",
+        stderr
+    );
+    // stdout is clean JSON
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("hint:"),
+        "JSON stdout should never contain hint text"
+    );
+}
+
+// --- Standup --json / --csv ---
 
 #[test]
 fn test_standup_json_flag_outputs_valid_json() {
@@ -1373,4 +1424,40 @@ fn test_status_json_no_daemon_running_false_health_red() {
 
     assert_eq!(json["running"], false, "daemon should not be running");
     assert_eq!(json["health"], "Red", "health should be Red when stopped");
+}
+
+// --- US-007: Hint suppression integration tests ---
+
+#[test]
+fn test_today_json_stdout_is_valid_json_no_hints() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["today", "--format", "json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "today --format json should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let _json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout must be valid JSON with no hint contamination: {e}\nstdout: {stdout}"));
+    // Hints go to stderr, never stdout — stdout must be pure JSON
+    assert!(!stdout.contains("hint:"), "stdout must not contain hint text");
 }

@@ -64,6 +64,7 @@ src/
 ├── service.rs        # launchd/systemd install/uninstall (cfg-gated)
 ├── setup.rs          # Full interactive onboarding wizard
 ├── shell_hook.rs     # Shell hook generation for zsh/bash/fish
+├── suggestions.rs    # Context-aware next-step hint engine (SuggestionContext, generate_suggestions — pure, no I/O)
 ├── tui.rs            # Live TUI dashboard (ratatui)
 └── watcher.rs        # Event-driven repo watching (notify crate)
 
@@ -78,6 +79,7 @@ tests/                # Integration tests (one file per module)
   insights_test.rs    # InsightsData aggregation, prompt construction, system prompt, CLI integration tests
   perf_review_test.rs # perf-review CLI integration tests (assert_cmd: API key error, empty range, invalid date)
   query_test.rs       # daily_summary_for_notification tests
+  suggestions_test.rs # generate_suggestions unit tests (all context combinations, format guards, hint suppression)
 ```
 
 XDG config: `~/.config/blackbox/config.toml`

@@ -63,7 +63,30 @@ fn run_query(
         blackbox::llm::summarize_activity(&llm_config, &json)?;
     } else {
         match format {
-            OutputFormat::Pretty => blackbox::output::render_summary(&summary),
+            OutputFormat::Pretty => {
+                blackbox::output::render_summary(&summary);
+                // Only emit hints in interactive TTY sessions.
+                // Suppresses hints when piped (blackbox today | jq ...) or in CI.
+                if blackbox::output::is_tty() && config.show_hints
+                    && let Some(command) = blackbox::suggestions::SuggestionCommand::from_period_label(period_label)
+                {
+                    let ctx = blackbox::suggestions::SuggestionContext {
+                        command,
+                        has_activity: summary.total_commits > 0 || summary.total_reviews > 0,
+                        summarize_used: summarize,
+                        daemon_running: blackbox::daemon::is_daemon_running(&data_dir)
+                            .unwrap_or(None)
+                            .is_some(),
+                        llm_configured: config.llm_provider.is_some(),
+                        format: format.clone(),
+                    };
+                    let hints = blackbox::suggestions::generate_suggestions(&ctx);
+                    let rendered = blackbox::output::render_suggestions(&hints);
+                    if !rendered.is_empty() {
+                        eprint!("{}", rendered);
+                    }
+                }
+            }
             OutputFormat::Json => println!("{}", blackbox::output::render_json(&summary)),
             OutputFormat::Csv => println!("{}", blackbox::output::render_csv(&summary)),
         }
