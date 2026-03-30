@@ -60,6 +60,7 @@ blackbox today
 | `churn` | Code churn rate analysis (`--window N`, `--repo <path>`, `--format pretty\|json\|csv`) |
 | `insights` | LLM-powered behavioral analysis of activity patterns (`--window week\|month`, `--format pretty\|json`) |
 | `perf-review` | LLM-powered performance review self-assessment (`--from YYYY-MM-DD`, `--to YYYY-MM-DD`; defaults to current quarter) |
+| `commit-quality` | Commit message quality scores and trends (`--weeks N`, `--show-reverts`, `--format pretty\|json\|csv`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -278,6 +279,26 @@ blackbox perf-review --from 2025-01-01 --to 2025-03-31 # custom range
 ```
 
 Output includes sections for Summary, Key Contributions, Technical Themes, Collaboration & Code Review, and Time Investment. Requires `llm_api_key` in config (Anthropic or OpenAI). Gracefully handles missing PR data (when `gh` CLI is unavailable) and sparse activity windows.
+
+## Commit Message Quality
+
+`blackbox commit-quality` scores every commit message 0–100 and tracks trends over time. Helps identify vague messages ("wip", "fix", "update") and correlate low-quality commits with reverts.
+
+Scoring factors:
+- **Subject length** — 10–72 chars optimal (+30 proportional)
+- **Conventional commit prefix** (feat/fix/chore/docs/etc.) — +20
+- **Body present** (blank line after subject) — +10
+- **Penalties** — too short (-20), too long (-10), all-lowercase no punctuation (-5)
+- **Merge/revert commits** — fixed score of 50, exempt from vague detection
+
+```
+blackbox commit-quality                    # last 8 weeks, pretty output
+blackbox commit-quality --weeks 4          # last 4 weeks
+blackbox commit-quality --show-reverts     # include revert correlation
+blackbox commit-quality --format json      # machine-readable JSON
+```
+
+Scoring happens automatically during daemon polling — no extra setup needed. Existing commits are backfilled on first poll (up to 200).
 
 ## License
 
