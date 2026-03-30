@@ -545,3 +545,41 @@ fn test_week_start_day_roundtrip() {
     assert_eq!(deserialized.week_start_day.as_deref(), Some("sunday"));
     assert_eq!(deserialized.week_start_weekday(), Weekday::Sun);
 }
+
+// --- US-006: show_hints config opt-out ---
+
+#[test]
+fn test_default_config_show_hints_true() {
+    let cfg = Config::default();
+    assert!(cfg.show_hints);
+}
+
+#[test]
+fn test_parse_missing_show_hints_defaults_true() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(cfg.show_hints);
+}
+
+#[test]
+fn test_parse_show_hints_false() {
+    let toml_str = r#"
+        watch_dirs = []
+        show_hints = false
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.show_hints);
+}
+
+#[test]
+fn test_show_hints_roundtrip() {
+    let cfg = Config {
+        show_hints: false,
+        ..Config::default()
+    };
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert!(!deserialized.show_hints);
+}
