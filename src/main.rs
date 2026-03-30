@@ -65,6 +65,8 @@ fn run_query(
         match format {
             OutputFormat::Pretty => {
                 blackbox::output::render_summary(&summary);
+                // Only emit hints in interactive TTY sessions.
+                // Suppresses hints when piped (blackbox today | jq ...) or in CI.
                 if blackbox::output::is_tty()
                     && let Some(command) = blackbox::suggestions::SuggestionCommand::from_period_label(period_label)
                 {
