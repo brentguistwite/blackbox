@@ -165,3 +165,34 @@ fn no_summarize_hint_when_llm_not_configured() {
     let hints = generate_suggestions(&ctx);
     assert!(!hints.iter().any(|h| h.contains("--summarize")));
 }
+
+// --- US-004: period_label → SuggestionCommand mapping ---
+
+#[test]
+fn from_period_label_today() {
+    assert_eq!(
+        SuggestionCommand::from_period_label("Today"),
+        Some(SuggestionCommand::Today)
+    );
+}
+
+#[test]
+fn from_period_label_this_week() {
+    assert_eq!(
+        SuggestionCommand::from_period_label("This Week"),
+        Some(SuggestionCommand::Week)
+    );
+}
+
+#[test]
+fn from_period_label_this_month() {
+    assert_eq!(
+        SuggestionCommand::from_period_label("This Month"),
+        Some(SuggestionCommand::Month)
+    );
+}
+
+#[test]
+fn from_period_label_unknown_returns_none() {
+    assert_eq!(SuggestionCommand::from_period_label("Yesterday"), None);
+}
