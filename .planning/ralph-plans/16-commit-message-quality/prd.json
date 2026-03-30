@@ -163,7 +163,7 @@
         "No clippy warnings: cargo clippy -- -D warnings",
         "No test uses std::env::set_var without unsafe block (Rust 2024 rule)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-09",
