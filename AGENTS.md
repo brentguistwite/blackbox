@@ -29,6 +29,7 @@ cargo run -- churn             # Code churn rate (--window N, --repo <path>, --f
 cargo run -- status            # Daemon status with health indicator (--format pretty|json)
 cargo run -- insights          # LLM behavioral insights (--window week|month, --format pretty|json)
 cargo run -- perf-review       # LLM perf review self-assessment (--from YYYY-MM-DD, --to YYYY-MM-DD)
+cargo run -- commit-quality    # Commit message quality scores/trends (--weeks N, --show-reverts, --format pretty|json|csv)
 ```
 
 ## Architecture
@@ -41,6 +42,7 @@ src/
 ├── lib.rs            # Module declarations
 ├── churn.rs          # Code churn detection (diff stats, churn algorithm, ChurnReport)
 ├── cli.rs            # Clap CLI definition (Commands enum)
+├── commit_quality.rs # Commit message scoring (score_message 0–100, is_vague pattern detection)
 ├── ai_tracking.rs    # Multi-AI tool detection (trait, Codex/Copilot/Cursor/Windsurf detectors, process inspection)
 ├── claude_tracking.rs # Claude Code session tracking integration
 ├── config.rs         # Config struct, XDG paths, TOML parsing, run_init()
@@ -79,6 +81,7 @@ tests/                # Integration tests (one file per module)
   insights_test.rs    # InsightsData aggregation, prompt construction, system prompt, CLI integration tests
   perf_review_test.rs # perf-review CLI integration tests (assert_cmd: API key error, empty range, invalid date)
   query_test.rs       # daily_summary_for_notification tests
+  commit_quality_test.rs # score_message variants, is_vague patterns, DB dedup, multi-week trend, revert correlation, CLI integration
   suggestions_test.rs # generate_suggestions unit tests (all context combinations, format guards, hint suppression)
 ```
 

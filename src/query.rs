@@ -1605,6 +1605,174 @@ pub fn aggregate_insights_data(repos: &[RepoSummary], period_label: &str) -> Ins
     }
 }
 
+// --- Commit quality trend (US-016-04) ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WeeklyQuality {
+    pub week_start: NaiveDate,
+    pub commit_count: usize,
+    pub avg_score: f64,
+    pub vague_count: usize,
+    pub vague_pct: f64,
+}
+
+/// Weekly average commit quality scores over `weeks` calendar weeks back from now.
+/// Groups by ISO week (Monday start). Weeks with zero scored commits get avg_score=0.0.
+pub fn commit_quality_trend(
+    conn: &Connection,
+    weeks: u32,
+) -> anyhow::Result<Vec<WeeklyQuality>> {
+    let now = Local::now();
+    let today = now.date_naive();
+    let days_since_monday = today.weekday().num_days_from_monday();
+    let this_monday = today - Duration::days(days_since_monday as i64);
+    let start_monday = this_monday - Duration::days((weeks as i64 - 1) * 7);
+    let from_str = start_monday.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Local).unwrap().to_rfc3339();
+
+    let mut stmt = conn.prepare(
+        "SELECT cq.score, cq.is_vague, ga.timestamp
+         FROM commit_quality cq
+         JOIN git_activity ga ON ga.repo_path = cq.repo_path AND ga.commit_hash = cq.commit_hash
+         WHERE ga.event_type = 'commit' AND ga.timestamp >= ?1
+         ORDER BY ga.timestamp ASC",
+    )?;
+
+    // Bucket by ISO week
+    let mut buckets: BTreeMap<NaiveDate, (Vec<u8>, usize)> = BTreeMap::new();
+    let rows = stmt.query_map(rusqlite::params![from_str], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+    })?;
+
+    for row in rows {
+        let (score, is_vague, ts_str) = row?;
+        let utc_dt = DateTime::parse_from_rfc3339(&ts_str)
+            .map(|d| d.with_timezone(&Local))
+            .unwrap_or_else(|_| Local::now());
+        let d = utc_dt.date_naive();
+        let dow = d.weekday().num_days_from_monday();
+        let monday = d - Duration::days(dow as i64);
+        let entry = buckets.entry(monday).or_insert_with(|| (Vec::new(), 0));
+        entry.0.push(score as u8);
+        if is_vague != 0 {
+            entry.1 += 1;
+        }
+    }
+
+    // Build result with zero-filled weeks
+    let mut result = Vec::with_capacity(weeks as usize);
+    let mut week = start_monday;
+    while week <= this_monday {
+        if let Some((scores, vague_count)) = buckets.get(&week) {
+            let count = scores.len();
+            let sum: u64 = scores.iter().map(|&s| s as u64).sum();
+            let avg = if count > 0 { sum as f64 / count as f64 } else { 0.0 };
+            let vague_pct = if count > 0 { *vague_count as f64 / count as f64 * 100.0 } else { 0.0 };
+            result.push(WeeklyQuality {
+                week_start: week,
+                commit_count: count,
+                avg_score: avg,
+                vague_count: *vague_count,
+                vague_pct,
+            });
+        } else {
+            result.push(WeeklyQuality {
+                week_start: week,
+                commit_count: 0,
+                avg_score: 0.0,
+                vague_count: 0,
+                vague_pct: 0.0,
+            });
+        }
+        week += Duration::days(7);
+    }
+
+    Ok(result)
+}
+
+// --- Revert correlation (US-016-05) ---
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RevertedCommit {
+    pub original_hash: String,
+    pub original_message: String,
+    pub revert_hash: String,
+    pub score: Option<u8>,
+    pub repo_path: String,
+}
+
+/// Find commits that were reverted and correlate with their quality scores.
+/// Detects reverts by message matching `^[Rr]evert .+` with body containing
+/// `This reverts commit <hash>`.
+pub fn find_reverted_commits(conn: &Connection) -> anyhow::Result<Vec<RevertedCommit>> {
+    let mut stmt = conn.prepare(
+        "SELECT repo_path, commit_hash, message
+         FROM git_activity
+         WHERE event_type = 'commit' AND message LIKE 'revert %'",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut results = Vec::new();
+    for row in rows {
+        let (repo_path, revert_hash, message) = row?;
+        // Extract original hash: find first 40-char hex string in message
+        let original_hash = match find_hex40(&message) {
+            Some(h) => h,
+            None => continue,
+        };
+
+        // Look up original message
+        let original_message: String = conn
+            .query_row(
+                "SELECT COALESCE(message, '') FROM git_activity WHERE commit_hash = ?1 AND repo_path = ?2",
+                rusqlite::params![&original_hash, &repo_path],
+                |row| row.get(0),
+            )
+            .unwrap_or_default();
+
+        // Look up score
+        let score: Option<u8> = conn
+            .query_row(
+                "SELECT score FROM commit_quality WHERE commit_hash = ?1 AND repo_path = ?2",
+                rusqlite::params![&original_hash, &repo_path],
+                |row| row.get::<_, i64>(0).map(|s| s as u8),
+            )
+            .ok();
+
+        results.push(RevertedCommit {
+            original_hash,
+            original_message,
+            revert_hash,
+            score,
+            repo_path,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Find first contiguous 40-char lowercase hex string in `s`.
+fn find_hex40(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i + 40 <= bytes.len() {
+        if bytes[i].is_ascii_hexdigit() && bytes[i].is_ascii_lowercase() || bytes[i].is_ascii_digit() {
+            let candidate = &s[i..i + 40];
+            if candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Some(candidate.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
