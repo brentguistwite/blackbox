@@ -30,6 +30,7 @@ cargo run -- status            # Daemon status with health indicator (--format p
 cargo run -- insights          # LLM behavioral insights (--window week|month, --format pretty|json)
 cargo run -- perf-review       # LLM perf review self-assessment (--from YYYY-MM-DD, --to YYYY-MM-DD)
 cargo run -- commit-quality    # Commit message quality scores/trends (--weeks N, --show-reverts, --format pretty|json|csv)
+cargo run -- digest            # Weekly digest (--week N, --compare, --output-file, --notify, --format pretty|json|csv)
 ```
 
 ## Architecture
