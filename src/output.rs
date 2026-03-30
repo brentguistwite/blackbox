@@ -1644,6 +1644,112 @@ pub fn render_suggestions(hints: &[String]) -> String {
     out
 }
 
+// --- Commit quality output ---
+
+/// Render commit quality trend and optional revert correlation.
+pub fn render_commit_quality(
+    trend: &[crate::query::WeeklyQuality],
+    reverts: &[crate::query::RevertedCommit],
+    format: &OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Pretty => render_commit_quality_pretty(trend, reverts),
+        OutputFormat::Json => render_commit_quality_json(trend, reverts),
+        OutputFormat::Csv => render_commit_quality_csv(trend),
+    }
+}
+
+fn render_commit_quality_pretty(
+    trend: &[crate::query::WeeklyQuality],
+    reverts: &[crate::query::RevertedCommit],
+) -> String {
+    let mut lines = Vec::new();
+
+    let has_data = trend.iter().any(|w| w.commit_count > 0);
+    if !has_data {
+        return format!("No scored commits in the last {} weeks.", trend.len());
+    }
+
+    lines.push(format!("{}", "=== Commit Message Quality ===".bold().cyan()));
+    lines.push(String::new());
+    lines.push(format!(
+        "{:<12} {:>8} {:>10} {:>6} {:>7}",
+        "Week", "Commits", "Avg Score", "Vague", "Vague%"
+    ));
+    lines.push("-".repeat(47));
+
+    for w in trend {
+        let score_str = if w.commit_count > 0 {
+            let s = format!("{:.1}", w.avg_score);
+            if w.avg_score >= 70.0 {
+                s.green().to_string()
+            } else if w.avg_score >= 40.0 {
+                s.yellow().to_string()
+            } else {
+                s.red().to_string()
+            }
+        } else {
+            "-".dimmed().to_string()
+        };
+        let vague_pct_str = if w.commit_count > 0 {
+            let s = format!("{:.0}%", w.vague_pct);
+            if w.vague_pct > 20.0 { s.red().to_string() } else { s }
+        } else {
+            "-".dimmed().to_string()
+        };
+        lines.push(format!(
+            "{:<12} {:>8} {:>10} {:>6} {:>7}",
+            w.week_start.format("%Y-%m-%d"),
+            w.commit_count,
+            score_str,
+            w.vague_count,
+            vague_pct_str,
+        ));
+    }
+
+    if !reverts.is_empty() {
+        lines.push(String::new());
+        lines.push(format!("{}", "Reverted Commits".bold()));
+        for r in reverts {
+            let score_str = match r.score {
+                Some(s) => format!("{s}"),
+                None => "?".to_string(),
+            };
+            lines.push(format!(
+                "  {} (score: {}) {}",
+                &r.original_hash[..8.min(r.original_hash.len())],
+                score_str,
+                r.original_message.lines().next().unwrap_or(""),
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_commit_quality_json(
+    trend: &[crate::query::WeeklyQuality],
+    reverts: &[crate::query::RevertedCommit],
+) -> String {
+    #[derive(serde::Serialize)]
+    struct Output<'a> {
+        trend: &'a [crate::query::WeeklyQuality],
+        reverts: &'a [crate::query::RevertedCommit],
+    }
+    serde_json::to_string_pretty(&Output { trend, reverts }).unwrap_or_default()
+}
+
+fn render_commit_quality_csv(trend: &[crate::query::WeeklyQuality]) -> String {
+    let mut lines = vec!["week_start,commit_count,avg_score,vague_count,vague_pct".to_string()];
+    for w in trend {
+        lines.push(format!(
+            "{},{},{:.1},{},{:.1}",
+            w.week_start, w.commit_count, w.avg_score, w.vague_count, w.vague_pct,
+        ));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1685,4 +1791,3 @@ mod tests {
         assert_eq!(result.matches('\n').count(), 4);
     }
 }
-

@@ -1,5 +1,6 @@
 pub mod ai_tracking;
 pub mod churn;
+pub mod commit_quality;
 pub mod claude_tracking;
 pub mod cli;
 pub mod heatmap;

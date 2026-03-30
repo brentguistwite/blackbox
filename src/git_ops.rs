@@ -164,7 +164,7 @@ pub fn poll_repo(
                     &ts,
                 )?;
             } else {
-                db::insert_activity(
+                if db::insert_activity(
                     conn,
                     db_repo_path,
                     "commit",
@@ -174,10 +174,15 @@ pub fn poll_repo(
                     Some(&author_name),
                     Some(&message),
                     &ts,
-                )?;
+                )? {
+                    score_and_store(conn, db_repo_path, &hash, &message);
+                }
                 backfill_line_stats(&repo, &commit, conn, db_repo_path, &hash, &ts);
             }
         }
+
+        // Backfill quality scores for existing unscored commits (capped at 200)
+        backfill_commit_quality(conn, db_repo_path);
 
         return Ok(());
     }
@@ -225,7 +230,7 @@ pub fn poll_repo(
                     &ts,
                 )?;
             } else {
-                db::insert_activity(
+                if db::insert_activity(
                     conn,
                     db_repo_path,
                     "commit",
@@ -235,7 +240,9 @@ pub fn poll_repo(
                     Some(&author_name),
                     Some(&message),
                     &ts,
-                )?;
+                )? {
+                    score_and_store(conn, db_repo_path, &hash, &message);
+                }
                 backfill_line_stats(&repo, &commit, conn, db_repo_path, &hash, &ts);
             }
         }
@@ -273,6 +280,47 @@ fn backfill_line_stats(
         Err(e) => {
             warn!("diff_commit_stats failed for {hash}: {e}");
         }
+    }
+}
+
+/// Score a commit message and store the result in the DB.
+fn score_and_store(conn: &Connection, repo_path: &str, hash: &str, message: &str) {
+    let score = crate::commit_quality::score_message(message);
+    let vague = crate::commit_quality::is_vague(message);
+    let _ = db::insert_commit_quality(conn, repo_path, hash, score, vague);
+}
+
+/// Backfill quality scores for existing commits in git_activity that lack a commit_quality row.
+/// Capped at 200 rows to avoid slow startup.
+fn backfill_commit_quality(conn: &Connection, repo_path: &str) {
+    let mut stmt = match conn.prepare(
+        "SELECT ga.commit_hash, ga.message FROM git_activity ga
+         LEFT JOIN commit_quality cq ON ga.repo_path = cq.repo_path AND ga.commit_hash = cq.commit_hash
+         WHERE ga.repo_path = ?1 AND ga.event_type = 'commit' AND ga.commit_hash IS NOT NULL AND cq.id IS NULL
+         LIMIT 200",
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("backfill_commit_quality prepare failed: {e}");
+            return;
+        }
+    };
+
+    let rows: Vec<(String, String)> = match stmt.query_map(rusqlite::params![repo_path], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        ))
+    }) {
+        Ok(iter) => iter.filter_map(|r| r.ok()).collect(),
+        Err(e) => {
+            warn!("backfill_commit_quality query failed: {e}");
+            return;
+        }
+    };
+
+    for (hash, message) in &rows {
+        score_and_store(conn, repo_path, hash, message);
     }
 }
 

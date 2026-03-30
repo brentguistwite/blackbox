@@ -22,7 +22,7 @@
         "Score is deterministic \u2014 same input always same output",
         "Unit tests cover all scoring branches in tests/commit_quality.rs"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-02",
@@ -41,7 +41,7 @@
         "is_vague returns false for any message scoring \u2265 50",
         "Unit tests cover all pattern variants"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-03",
@@ -62,7 +62,7 @@
         "Migration is additive \u2014 existing DB opens without data loss",
         "Integration test: insert activity, open DB, verify quality row present"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-04",
@@ -81,7 +81,7 @@
         "Only 'commit' event_type rows are included (not merges, not branch_switch)",
         "Unit test: insert known scores across 3 weeks, verify trend output"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-05",
@@ -101,7 +101,7 @@
         "Returns empty vec if no reverts found \u2014 no error",
         "Unit test: seed revert commit in git_activity, seed score, verify correlation result"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-06",
@@ -121,7 +121,7 @@
         "Uses existing load_config / open_db pattern from main.rs",
         "CLI integration test: cargo run -- commit-quality exits 0 with empty DB"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-07",
@@ -144,7 +144,7 @@
         "render_commit_quality_to_string used in unit tests (no stdout side effects)",
         "Unit test: known WeeklyQuality slice produces expected pretty string"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-08",
@@ -163,14 +163,14 @@
         "No clippy warnings: cargo clippy -- -D warnings",
         "No test uses std::env::set_var without unsafe block (Rust 2024 rule)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-09",
       "title": "Update README.md and AGENTS.md",
       "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
       "dependencies": [
         "US-016-08"
