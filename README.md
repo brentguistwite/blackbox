@@ -88,6 +88,7 @@ Config lives at `~/.config/blackbox/config.toml`:
 | `session_gap_minutes` | `120` | Minutes of inactivity before new session |
 | `first_commit_minutes` | `30` | Time credit for first commit in a session |
 | `streak_exclude_weekends` | `false` | Skip weekends when computing commit streak |
+| `show_hints` | `true` | Show contextual next-step hints after pretty output |
 | `notifications_enabled` | `false` | Enable opt-in OS desktop notifications |
 | `notification_time` | `"17:00"` | Local time (HH:MM, 24h) to fire daily summary notification |
 
@@ -107,6 +108,8 @@ Today - 3 repos, 12 commits, 4h 30m estimated  12-day streak
 **CSV:** `blackbox today --csv` (or `--format csv`) -- flat rows suitable for spreadsheets/pipelines.
 
 **TTY auto-detection:** When stdout is piped or redirected (not a terminal), output defaults to JSON automatically. ANSI color codes are stripped in non-TTY mode. Explicit flags (`--json`, `--csv`, `--format`) always take precedence over auto-detection.
+
+**Next-step hints:** After `today`, `week`, and `month` pretty output, blackbox shows dim/italic hint lines on stderr suggesting logical next commands — e.g. `blackbox start` if the daemon isn't running, `blackbox today --summarize` if LLM is configured, or `blackbox live` for the TUI dashboard. Hints are suppressed in JSON/CSV output, non-TTY sessions, when `--summarize` is used, and for the `standup` command. Disable with `show_hints = false` in config.
 
 **Standup:** `blackbox standup` -- copy-paste-ready summary for Slack/Teams. Use `--week` for weekly and `--summarize` for LLM-generated summaries.
 
