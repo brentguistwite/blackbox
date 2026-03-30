@@ -28,6 +28,9 @@ fn default_churn_window_days() -> u32 {
 fn default_notification_time() -> String {
     "17:00".to_string()
 }
+fn default_show_hints() -> bool {
+    true
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -65,6 +68,8 @@ pub struct Config {
     pub insights_window: Option<String>,
     #[serde(default)]
     pub week_start_day: Option<String>,
+    #[serde(default = "default_show_hints")]
+    pub show_hints: bool,
 }
 
 impl Default for Config {
@@ -87,6 +92,7 @@ impl Default for Config {
             insights_max_tokens: None,
             insights_window: None,
             week_start_day: None,
+            show_hints: default_show_hints(),
         }
     }
 }
