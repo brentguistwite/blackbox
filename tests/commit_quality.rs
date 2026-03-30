@@ -1,4 +1,5 @@
 use blackbox::commit_quality::{is_vague, score_message};
+use chrono::Datelike;
 
 // --- score_message tests (US-016-01, preserved) ---
 
@@ -360,7 +361,71 @@ fn find_reverted_commits_with_revert() {
     assert_eq!(reverts[0].original_message, "feat: original change");
 }
 
-// --- CLI integration test (US-016-06) ---
+// --- Multi-week trend test (US-016-08) ---
+
+#[test]
+fn commit_quality_trend_multi_week() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+
+    let now = chrono::Local::now();
+    let today = now.date_naive();
+    let dow = today.weekday().num_days_from_monday();
+    let this_monday = today - chrono::Duration::days(dow as i64);
+
+    // Week 0 (current): 1 commit, score 90
+    let w0 = this_monday.and_hms_opt(12, 0, 0).unwrap()
+        .and_local_timezone(chrono::Local).unwrap().to_rfc3339();
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("w0hash1"), Some("dev"),
+        Some("feat(auth): add OAuth2 login flow"), &w0,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "w0hash1", 90, false).unwrap();
+
+    // Week -1: 2 commits, scores 60 and 40 → avg 50, 1 vague
+    let w1 = (this_monday - chrono::Duration::days(7)).and_hms_opt(12, 0, 0).unwrap()
+        .and_local_timezone(chrono::Local).unwrap().to_rfc3339();
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("w1hash1"), Some("dev"),
+        Some("Add some config changes"), &w1,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "w1hash1", 60, false).unwrap();
+
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("w1hash2"), Some("dev"),
+        Some("misc updates"), &w1,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "w1hash2", 40, true).unwrap();
+
+    // Week -2: 1 commit, score 30, vague
+    let w2 = (this_monday - chrono::Duration::days(14)).and_hms_opt(12, 0, 0).unwrap()
+        .and_local_timezone(chrono::Local).unwrap().to_rfc3339();
+    blackbox::db::insert_activity(
+        &conn, "/repo", "commit", Some("main"), None, Some("w2hash1"), Some("dev"),
+        Some("stuff"), &w2,
+    ).unwrap();
+    blackbox::db::insert_commit_quality(&conn, "/repo", "w2hash1", 30, true).unwrap();
+
+    let trend = blackbox::query::commit_quality_trend(&conn, 4).unwrap();
+    assert_eq!(trend.len(), 4);
+
+    // Find weeks with data by commit_count > 0
+    let with_data: Vec<_> = trend.iter().filter(|w| w.commit_count > 0).collect();
+    assert_eq!(with_data.len(), 3, "expected data in 3 of 4 weeks");
+
+    // Verify scores are in expected ranges
+    let scores: Vec<f64> = with_data.iter().map(|w| w.avg_score).collect();
+    assert!(scores.iter().any(|&s| (s - 90.0).abs() < 0.1), "should have week with avg 90");
+    assert!(scores.iter().any(|&s| (s - 50.0).abs() < 0.1), "should have week with avg 50");
+    assert!(scores.iter().any(|&s| (s - 30.0).abs() < 0.1), "should have week with avg 30");
+
+    // Total vague across all weeks = 2
+    let total_vague: usize = trend.iter().map(|w| w.vague_count).sum();
+    assert_eq!(total_vague, 2);
+}
+
+// --- CLI integration tests (US-016-06 / US-016-08) ---
 
 #[test]
 fn cli_commit_quality_exits_0_empty_db() {
@@ -381,4 +446,33 @@ fn cli_commit_quality_exits_0_empty_db() {
         .env("BLACKBOX_DATA_DIR", &data_dir)
         .assert()
         .success();
+}
+
+#[test]
+fn cli_commit_quality_json_format_valid() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "watch_dirs = [\"/tmp\"]\npoll_interval = 30\n",
+    ).unwrap();
+
+    let output = assert_cmd::Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["commit-quality", "--weeks", "4", "--format", "json"])
+        .env("BLACKBOX_CONFIG_DIR", &config_dir)
+        .env("BLACKBOX_DATA_DIR", &data_dir)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("stdout should be valid JSON");
+    assert!(parsed.get("trend").is_some(), "JSON should have 'trend' key");
+    assert!(parsed.get("reverts").is_some(), "JSON should have 'reverts' key");
+    assert!(parsed["trend"].as_array().unwrap().len() == 4, "should have 4 weeks");
 }
