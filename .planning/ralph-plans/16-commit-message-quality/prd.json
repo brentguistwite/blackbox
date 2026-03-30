@@ -144,7 +144,7 @@
         "render_commit_quality_to_string used in unit tests (no stdout side effects)",
         "Unit test: known WeeklyQuality slice produces expected pretty string"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "US-016-08",
@@ -170,7 +170,7 @@
       "title": "Update README.md and AGENTS.md",
       "description": "Update project documentation to reflect new feature. README.md: add new command to Commands table if applicable, update feature descriptions. AGENTS.md: add new source files to Architecture tree, update Key Patterns if new patterns introduced.",
       "priority": "high",
-      "passes": false,
+      "passes": true,
       "notes": "This must be the LAST story executed. Reference README.md and AGENTS.md in project root.",
       "dependencies": [
         "US-016-08"
