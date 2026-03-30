@@ -18,6 +18,18 @@ pub struct SuggestionContext {
     pub format: OutputFormat,
 }
 
+impl SuggestionCommand {
+    /// Map run_query's period_label string to a SuggestionCommand.
+    pub fn from_period_label(label: &str) -> Option<Self> {
+        match label {
+            "Today" => Some(Self::Today),
+            "This Week" => Some(Self::Week),
+            "This Month" => Some(Self::Month),
+            _ => None,
+        }
+    }
+}
+
 /// Returns zero or more hint strings based on context.
 /// Pure function — no I/O, no side effects.
 pub fn generate_suggestions(ctx: &SuggestionContext) -> Vec<String> {
