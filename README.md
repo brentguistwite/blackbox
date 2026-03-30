@@ -61,6 +61,7 @@ blackbox today
 | `insights` | LLM-powered behavioral analysis of activity patterns (`--window week\|month`, `--format pretty\|json`) |
 | `perf-review` | LLM-powered performance review self-assessment (`--from YYYY-MM-DD`, `--to YYYY-MM-DD`; defaults to current quarter) |
 | `commit-quality` | Commit message quality scores and trends (`--weeks N`, `--show-reverts`, `--format pretty\|json\|csv`) |
+| `digest` | Structured weekly digest with week-over-week comparison (`--week N`, `--compare`, `--output-file`, `--notify`, `--format pretty\|json\|csv`) |
 | `completions <shell>` | Generate shell completions |
 
 ## Shell Hooks
@@ -299,6 +300,22 @@ blackbox commit-quality --format json      # machine-readable JSON
 ```
 
 Scoring happens automatically during daemon polling — no extra setup needed. Existing commits are backfilled on first poll (up to 200).
+
+## Weekly Digest
+
+`blackbox digest` produces a structured weekly rollup aggregating git activity, PR contributions, review history, and AI sessions — useful for 1:1s, sprint retros, or personal tracking.
+
+```
+blackbox digest                       # current week
+blackbox digest --week -1             # last week
+blackbox digest --compare             # week-over-week comparison (default: on)
+blackbox digest --output-file weekly.md
+blackbox digest --format json
+blackbox digest --notify              # send OS notification with summary
+blackbox digest --summarize           # LLM-generated narrative summary
+```
+
+Includes commit counts, time estimates, repo breakdown, PR merge/open/review stats, and week-over-week deltas (e.g. "+3 commits, -1h estimated time"). The `--notify` flag sends the summary as an OS desktop notification. The `--output-file` flag writes to disk instead of stdout.
 
 ## License
 
