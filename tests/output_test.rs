@@ -699,11 +699,9 @@ fn streak_one_day_singular_format() {
 
 #[test]
 fn is_tty_returns_bool() {
-    // Cannot assert specific TTY state in CI/test (stdout is a pipe),
-    // but function must compile, be callable, and return a bool.
-    let result: bool = is_tty();
-    // In test harness, stdout is piped → expect false
-    assert!(!result, "stdout should not be a TTY when running under cargo test");
+    // Just verify is_tty() compiles and returns a bool.
+    // Actual value depends on test runner (captured vs --nocapture).
+    let _result: bool = is_tty();
 }
 
 // --- US-002 + US-003: resolve_format tests ---
