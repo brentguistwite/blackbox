@@ -1,3 +1,0 @@
-Successes: 0, Failures: 0, Skipped: 18
-Total commits: 0
-Duration: 0m0s
