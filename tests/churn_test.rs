@@ -1,6 +1,7 @@
 use blackbox::churn::{compute_churn, diff_commit_stats};
 use blackbox::db;
 use blackbox::git_ops::{poll_repo, RepoState};
+use chrono::{Duration, Utc};
 use git2::{Repository, Signature};
 use std::path::Path;
 use tempfile::TempDir;
@@ -154,10 +155,13 @@ fn test_churn_two_commits_same_file_within_window() {
     let (_tmp, conn) = setup_db();
     let repo_path = "/test/repo";
 
+    let yesterday = (Utc::now() - Duration::days(1)).to_rfc3339();
+    let today = Utc::now().to_rfc3339();
+
     // Commit A: adds 10 lines to file.txt
-    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, "2026-03-20T10:00:00+00:00").unwrap();
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, &yesterday).unwrap();
     // Commit B: deletes 4 lines from file.txt (within 14-day window)
-    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, "2026-03-21T10:00:00+00:00").unwrap();
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, &today).unwrap();
 
     let report = compute_churn(&conn, repo_path, 14).unwrap();
     // churned = min(A.lines_added=10, B.lines_deleted=4) = 4
@@ -177,11 +181,15 @@ fn test_churn_two_commits_same_file_outside_window() {
     let (_tmp, conn) = setup_db();
     let repo_path = "/test/repo";
 
-    // Commit A: 2026-03-01
-    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, "2026-03-01T10:00:00+00:00").unwrap();
-    // Commit B: 2026-03-20 — 19 days later, outside 14-day window
-    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, "2026-03-20T10:00:00+00:00").unwrap();
+    // Commit A: 20 days ago — outside a 14-day query window
+    let twenty_days_ago = (Utc::now() - Duration::days(20)).to_rfc3339();
+    // Commit B: 1 day ago — inside window
+    let one_day_ago = (Utc::now() - Duration::days(1)).to_rfc3339();
 
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "file.txt", 10, 0, &twenty_days_ago).unwrap();
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "file.txt", 2, 4, &one_day_ago).unwrap();
+
+    // window=14: commit A filtered out by query, only B returned → no churn pair
     let report = compute_churn(&conn, repo_path, 14).unwrap();
     assert_eq!(report.churned_lines, 0);
     assert_eq!(report.churn_rate_pct, 0.0);
@@ -193,8 +201,11 @@ fn test_churn_two_commits_different_files() {
     let (_tmp, conn) = setup_db();
     let repo_path = "/test/repo";
 
-    db::insert_commit_line_stats(&conn, repo_path, "aaa", "a.txt", 10, 0, "2026-03-20T10:00:00+00:00").unwrap();
-    db::insert_commit_line_stats(&conn, repo_path, "bbb", "b.txt", 5, 3, "2026-03-21T10:00:00+00:00").unwrap();
+    let yesterday = (Utc::now() - Duration::days(1)).to_rfc3339();
+    let today = Utc::now().to_rfc3339();
+
+    db::insert_commit_line_stats(&conn, repo_path, "aaa", "a.txt", 10, 0, &yesterday).unwrap();
+    db::insert_commit_line_stats(&conn, repo_path, "bbb", "b.txt", 5, 3, &today).unwrap();
 
     let report = compute_churn(&conn, repo_path, 14).unwrap();
     // Different files → no churn pairs
