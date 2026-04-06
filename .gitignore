@@ -1,6 +1,4 @@
 /target
 .ralph/
 .worktrees/
-.conductor.json
-.conductor-logs/
-.conductor-state
+.conductor/*
