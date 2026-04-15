@@ -81,9 +81,8 @@ pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result
         .collect();
 
     // ai_sessions
-    let now = Utc::now();
     let mut stmt = conn.prepare(
-        "SELECT tool, session_id, started_at, ended_at, turns
+        "SELECT tool, session_id, started_at, ended_at, turns, last_active_at
          FROM ai_sessions WHERE repo_path = ?1
          ORDER BY started_at ASC",
     )?;
@@ -95,17 +94,21 @@ pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
             ))
         })?
         .filter_map(|r| r.ok())
-        .filter_map(|(tool, session_id, started_str, ended_str, turns)| {
+        .filter_map(|(tool, session_id, started_str, ended_str, turns, last_active_str)| {
             let started_at = DateTime::parse_from_rfc3339(&started_str).ok()?.with_timezone(&Utc);
             let ended_at = ended_str.as_deref()
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&Utc));
-            let end = ended_at.unwrap_or(now);
-            let duration = end - started_at;
-            Some(AiSessionInfo { tool, session_id, started_at, ended_at, duration, turns })
+            let last_active_at = last_active_str.as_deref()
+                .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&Utc));
+            let info = AiSessionInfo { tool, session_id, started_at, ended_at, last_active_at, duration: chrono::Duration::zero(), turns };
+            let duration = info.effective_end() - started_at;
+            Some(AiSessionInfo { duration, ..info })
         })
         .collect();
 

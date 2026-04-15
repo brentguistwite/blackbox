@@ -928,6 +928,7 @@ mod tests {
             session_id: "test".into(),
             started_at: Utc::now(),
             ended_at: None,
+            last_active_at: None,
             duration: chrono::Duration::minutes(30),
             turns: None,
         };
@@ -941,6 +942,7 @@ mod tests {
             session_id: "test".into(),
             started_at: Utc::now() - chrono::Duration::minutes(45),
             ended_at: Some(Utc::now()),
+            last_active_at: None,
             duration: chrono::Duration::minutes(45),
             turns: Some(10),
         };

@@ -142,6 +142,8 @@ pub fn open_db(path: &Path) -> anyhow::Result<Connection> {
             CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_quality_repo_hash
                 ON commit_quality(repo_path, commit_hash);"
         ),
+        // idle-cap: track last activity timestamp for AI sessions
+        M::up("ALTER TABLE ai_sessions ADD COLUMN last_active_at TEXT;"),
     ]);
     migrations.to_latest(&mut conn)?;
 
@@ -219,6 +221,19 @@ pub fn update_session_ended(
         rusqlite::params![ended_at, turns, session_id],
     )?;
     Ok(rows > 0)
+}
+
+/// Update last_active_at for an AI session (heartbeat from file mtime etc).
+pub fn update_session_last_active(
+    conn: &Connection,
+    session_id: &str,
+    last_active_at: &str,
+) -> anyhow::Result<()> {
+    conn.execute(
+        "UPDATE ai_sessions SET last_active_at = ?1 WHERE session_id = ?2",
+        rusqlite::params![last_active_at, session_id],
+    )?;
+    Ok(())
 }
 
 /// Check if a session already exists (by session_id).
