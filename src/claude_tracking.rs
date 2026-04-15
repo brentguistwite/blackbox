@@ -14,9 +14,12 @@ pub struct SessionFile {
     pub started_at: u64, // Unix timestamp in milliseconds
 }
 
-/// Encode a path the way Claude Code does: /Users/foo/bar → -Users-foo-bar
+/// Encode a path the way Claude Code does: replace all non-alphanumeric chars with `-`.
+/// e.g. /Users/brent.guistwite/repo → -Users-brent-guistwite-repo
 pub fn encode_project_path(path: &str) -> String {
-    path.replace('/', "-")
+    path.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// Check if a process is still running (same pattern as daemon.rs stale PID detection).

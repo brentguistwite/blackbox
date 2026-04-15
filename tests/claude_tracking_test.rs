@@ -22,6 +22,14 @@ fn test_encode_project_path_simple() {
 }
 
 #[test]
+fn test_encode_project_path_dots_replaced() {
+    assert_eq!(
+        claude_tracking::encode_project_path("/Users/brent.guistwite/Documents/repo"),
+        "-Users-brent-guistwite-Documents-repo"
+    );
+}
+
+#[test]
 fn test_poll_sessions_discovers_active_session() {
     let tmp = TempDir::new().unwrap();
     let conn = setup_db(&tmp);
