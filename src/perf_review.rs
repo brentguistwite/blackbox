@@ -440,6 +440,7 @@ mod tests {
             session_id: "sess-1".to_string(),
             started_at: now - Duration::hours(1),
             ended_at: Some(now),
+            last_active_at: None,
             duration: Duration::hours(1),
             turns: Some(10),
         }];

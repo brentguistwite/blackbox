@@ -173,7 +173,7 @@ impl AiToolDetector for CodexDetector {
                 Err(e) => log::warn!("Failed to insert codex session {}: {}", session_id, e),
             }
 
-            // Update turns
+            // Update turns + last_active_at from updated_at
             let turns = count_lines(path);
             if let Some(t) = turns {
                 let _ = conn.execute(
@@ -181,6 +181,7 @@ impl AiToolDetector for CodexDetector {
                     rusqlite::params![t, session_id],
                 );
             }
+            let _ = db::update_session_last_active(conn, &session_id, &meta.updated_at);
 
             // Check if session should be marked ended:
             // codex process not running OR updated_at older than 5 minutes
@@ -314,13 +315,16 @@ impl AiToolDetector for CopilotDetector {
                 Err(e) => log::warn!("Failed to insert copilot-cli session {}: {}", session_id, e),
             }
 
-            // Update turns from events.jsonl
+            // Update turns from events.jsonl + last_active_at from workspace mtime
             let events_path = subdir.join("events.jsonl");
             if let Some(turns) = count_lines(&events_path) {
                 let _ = conn.execute(
                     "UPDATE ai_sessions SET turns = ?1 WHERE session_id = ?2",
                     rusqlite::params![turns, session_id],
                 );
+            }
+            if let Some(mtime) = mtime_rfc3339(&workspace_path) {
+                let _ = db::update_session_last_active(conn, &session_id, &mtime);
             }
 
             // Check if session should be marked ended:
@@ -439,7 +443,10 @@ impl AiToolDetector for CursorDetector {
                 Err(e) => log::warn!("Failed to insert cursor session {}: {}", session_id, e),
             }
 
-            // turns: None (no conversation log available)
+            // Update last_active_at from workspace.json mtime
+            if let Some(mtime) = mtime_rfc3339(&workspace_path) {
+                let _ = db::update_session_last_active(conn, &session_id, &mtime);
+            }
 
             // Still running: Cursor process running AND workspace.json mtime within 30 min
             let is_recent = modified_within_minutes(&workspace_path, 30);
@@ -539,7 +546,10 @@ impl WindsurfDetector {
                 Err(e) => log::warn!("Failed to insert windsurf session {}: {}", session_id, e),
             }
 
-            // turns: None
+            // Update last_active_at from workspace.json mtime
+            if let Some(mtime) = mtime_rfc3339(&workspace_path) {
+                let _ = db::update_session_last_active(conn, &session_id, &mtime);
+            }
 
             let is_recent = modified_within_minutes(&workspace_path, 30);
             if !windsurf_running || !is_recent {

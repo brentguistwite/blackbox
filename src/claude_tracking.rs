@@ -51,6 +51,14 @@ fn millis_to_rfc3339(millis: u64) -> String {
         .to_rfc3339()
 }
 
+/// Get file mtime as RFC3339 string.
+fn mtime_rfc3339(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let dt: chrono::DateTime<chrono::Utc> = modified.into();
+    Some(dt.to_rfc3339())
+}
+
 /// Count turns in a JSONL conversation log file. Each line is a turn.
 fn count_turns(jsonl_path: &Path) -> Option<i64> {
     let content = std::fs::read_to_string(jsonl_path).ok()?;
@@ -129,6 +137,15 @@ pub fn poll_claude_sessions_with_paths(
             Ok(true) => log::debug!("Recorded new AI session: {} in {}", session.session_id, repo_path),
             Ok(false) => {} // already exists
             Err(e) => log::warn!("Failed to insert AI session {}: {}", session.session_id, e),
+        }
+    }
+
+    // Phase 1b: Update last_active_at from JSONL conversation log mtime
+    for session in &session_files {
+        if let Some(log_path) = find_session_log(projects_path, &session.cwd, &session.session_id) {
+            if let Some(mtime) = mtime_rfc3339(&log_path) {
+                let _ = db::update_session_last_active(conn, &session.session_id, &mtime);
+            }
         }
     }
 

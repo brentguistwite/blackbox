@@ -268,3 +268,76 @@ fn test_poll_sessions_malformed_json_skipped() {
         .unwrap();
     assert_eq!(count, 1);
 }
+
+#[test]
+fn test_poll_updates_last_active_at_from_jsonl_mtime() {
+    let tmp = TempDir::new().unwrap();
+    let conn = setup_db(&tmp);
+
+    let sessions_dir = tmp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+
+    let pid = std::process::id();
+    let repo_path = "/tmp/myrepo";
+    let session_json = format!(
+        r#"{{"pid":{},"sessionId":"active-test","cwd":"{}","startedAt":1773674448026}}"#,
+        pid, repo_path
+    );
+    std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
+
+    // Create projects dir with a JSONL conversation log
+    let projects_dir = tmp.path().join("projects");
+    let encoded = claude_tracking::encode_project_path(repo_path);
+    let project_dir = projects_dir.join(&encoded);
+    std::fs::create_dir_all(&project_dir).unwrap();
+    std::fs::write(project_dir.join("active-test.jsonl"), "{}\n{}\n{}\n").unwrap();
+
+    let watched: Vec<PathBuf> = vec![];
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn, &watched, Some(&sessions_dir), Some(&projects_dir),
+    );
+
+    // last_active_at should be set (from JSONL mtime)
+    let last_active: Option<String> = conn
+        .query_row(
+            "SELECT last_active_at FROM ai_sessions WHERE session_id = 'active-test'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(last_active.is_some(), "last_active_at should be set from JSONL mtime");
+}
+
+#[test]
+fn test_poll_without_jsonl_leaves_last_active_null() {
+    let tmp = TempDir::new().unwrap();
+    let conn = setup_db(&tmp);
+
+    let sessions_dir = tmp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+
+    let pid = std::process::id();
+    let session_json = format!(
+        r#"{{"pid":{},"sessionId":"no-log-test","cwd":"/tmp/nope","startedAt":1773674448026}}"#,
+        pid
+    );
+    std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
+
+    let projects_dir = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects_dir).unwrap();
+    // No JSONL file created
+
+    let watched: Vec<PathBuf> = vec![];
+    claude_tracking::poll_claude_sessions_with_paths(
+        &conn, &watched, Some(&sessions_dir), Some(&projects_dir),
+    );
+
+    let last_active: Option<String> = conn
+        .query_row(
+            "SELECT last_active_at FROM ai_sessions WHERE session_id = 'no-log-test'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(last_active.is_none(), "last_active_at should be NULL without JSONL log");
+}

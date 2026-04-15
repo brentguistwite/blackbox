@@ -318,6 +318,7 @@ fn time_invested_with_ai_sessions() {
                 session_id: "s1".into(),
                 started_at: t1,
                 ended_at: Some(t2),
+                last_active_at: None,
                 duration: t2 - t1,
                 turns: Some(3),
             },

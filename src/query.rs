@@ -237,14 +237,31 @@ pub struct ReviewInfo {
     pub reviewed_at: DateTime<Utc>,
 }
 
+/// Default idle cap for AI sessions: if no activity for this many minutes,
+/// stop counting session time. Applies to open sessions (no ended_at).
+const AI_IDLE_CAP_MINUTES: i64 = 30;
+
 #[derive(Debug, Clone)]
 pub struct AiSessionInfo {
     pub tool: String,
     pub session_id: String,
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub last_active_at: Option<DateTime<Utc>>,
     pub duration: Duration,
     pub turns: Option<i64>,
+}
+
+impl AiSessionInfo {
+    /// Effective end time, accounting for idle cap on open sessions.
+    pub fn effective_end(&self) -> DateTime<Utc> {
+        let now = Utc::now();
+        match (self.ended_at, self.last_active_at) {
+            (Some(ended), _) => ended,
+            (None, Some(active)) => (active + chrono::Duration::minutes(AI_IDLE_CAP_MINUTES)).min(now),
+            (None, None) => now,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -694,7 +711,6 @@ pub fn query_activity(
         .cloned()
         .collect();
 
-    let now = Utc::now();
     let mut repos: Vec<RepoSummary> = Vec::new();
     for repo_path in all_repo_paths {
         let events = repo_map.remove(&repo_path).unwrap_or_default();
@@ -721,9 +737,8 @@ pub fn query_activity(
 
         // Extract AI session time intervals, clip to [from, to]
         let ai_intervals: Vec<TimeInterval> = ai_sessions.iter().filter_map(|s| {
-            let end = s.ended_at.unwrap_or(now);
             let start = s.started_at.max(from);
-            let end = end.min(to);
+            let end = s.effective_end().min(to);
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
 
@@ -760,11 +775,10 @@ pub fn global_estimated_time(
     session_gap_minutes: u64,
     first_commit_minutes: u64,
 ) -> Duration {
-    let now = Utc::now();
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     for repo in repos {
         let ai_intervals: Vec<TimeInterval> = repo.ai_sessions.iter().filter_map(|s| {
-            let end = s.ended_at.unwrap_or(now);
+            let end = s.effective_end();
             if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
         }).collect();
         let (_, intervals) = estimate_time_v2(
@@ -864,13 +878,14 @@ fn query_ai_sessions(
     let to_str = to.to_rfc3339();
 
     let mut stmt = conn.prepare(
-        "SELECT repo_path, tool, session_id, started_at, ended_at, turns
+        "SELECT repo_path, tool, session_id, started_at, ended_at, turns, last_active_at
          FROM ai_sessions
          WHERE started_at >= ?1 AND started_at <= ?2
          ORDER BY repo_path, started_at ASC",
     )?;
 
     let now = Utc::now();
+    let idle_cap = chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
     let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -879,18 +894,29 @@ fn query_ai_sessions(
             row.get::<_, String>(3)?,
             row.get::<_, Option<String>>(4)?,
             row.get::<_, Option<i64>>(5)?,
+            row.get::<_, Option<String>>(6)?,
         ))
     })?;
 
     let mut map: BTreeMap<String, Vec<AiSessionInfo>> = BTreeMap::new();
     for row in rows {
-        let (repo_path, tool, session_id, started_at_str, ended_at_str, turns) = row?;
+        let (repo_path, tool, session_id, started_at_str, ended_at_str, turns, last_active_str) = row?;
         let started_at = DateTime::parse_from_rfc3339(&started_at_str)?.with_timezone(&Utc);
         let ended_at = ended_at_str
             .as_deref()
             .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
             .transpose()?;
-        let end = ended_at.unwrap_or(now);
+        let last_active_at = last_active_str
+            .as_deref()
+            .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
+            .transpose()?;
+
+        // For open sessions with a last_active_at, cap at last_active + idle threshold
+        let end = match (ended_at, last_active_at) {
+            (Some(ended), _) => ended,                          // closed session: use ended_at
+            (None, Some(active)) => (active + idle_cap).min(now), // open + heartbeat: cap it
+            (None, None) => now,                                  // open + no heartbeat: legacy behavior
+        };
         let duration = end - started_at;
 
         map.entry(repo_path).or_default().push(AiSessionInfo {
@@ -898,6 +924,7 @@ fn query_ai_sessions(
             session_id,
             started_at,
             ended_at,
+            last_active_at,
             duration,
             turns,
         });
@@ -1907,5 +1934,108 @@ mod tests {
         let end_local = end.with_timezone(&Local).date_naive();
         let today = Local::now().date_naive();
         assert_eq!(end_local, today);
+    }
+
+    #[test]
+    fn test_ai_session_effective_end_closed() {
+        let now = Utc::now();
+        let ended = now - chrono::Duration::hours(1);
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::hours(2),
+            ended_at: Some(ended),
+            last_active_at: None,
+            duration: chrono::Duration::hours(1),
+            turns: None,
+        };
+        assert_eq!(s.effective_end(), ended);
+    }
+
+    #[test]
+    fn test_ai_session_effective_end_open_no_heartbeat() {
+        let now = Utc::now();
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::hours(2),
+            ended_at: None,
+            last_active_at: None,
+            duration: chrono::Duration::hours(2),
+            turns: None,
+        };
+        // No heartbeat → legacy behavior (now)
+        let end = s.effective_end();
+        assert!((end - now).num_seconds().abs() < 2);
+    }
+
+    #[test]
+    fn test_ai_session_effective_end_idle_capped() {
+        let now = Utc::now();
+        let last_active = now - chrono::Duration::hours(8);
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::hours(10),
+            ended_at: None,
+            last_active_at: Some(last_active),
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let end = s.effective_end();
+        let expected = last_active + chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
+        // Should be capped at last_active + 30min, not now
+        assert!((end - expected).num_seconds().abs() < 2,
+            "expected ~{expected}, got {end}");
+        // And definitely NOT close to now
+        assert!((now - end).num_hours() >= 7, "should be hours ago, not now");
+    }
+
+    #[test]
+    fn test_ai_session_effective_end_recent_activity() {
+        let now = Utc::now();
+        let last_active = now - chrono::Duration::minutes(5);
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::hours(1),
+            ended_at: None,
+            last_active_at: Some(last_active),
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let end = s.effective_end();
+        // last_active + 30min is in the future → capped at now
+        assert!((end - now).num_seconds().abs() < 2);
+    }
+
+    #[test]
+    fn test_idle_ai_session_excluded_from_time_estimate() {
+        // An AI session with last_active_at 8 hours ago should NOT contribute 8 hours
+        let now = Utc::now();
+        let session_start = now - chrono::Duration::hours(10);
+        let last_active = now - chrono::Duration::hours(8);
+
+        let ai_intervals: Vec<TimeInterval> = {
+            let s = AiSessionInfo {
+                tool: "claude-code".into(),
+                session_id: "t".into(),
+                started_at: session_start,
+                ended_at: None,
+                last_active_at: Some(last_active),
+                duration: chrono::Duration::zero(),
+                turns: None,
+            };
+            let end = s.effective_end();
+            if session_start < end {
+                vec![TimeInterval { start: session_start, end }]
+            } else {
+                vec![]
+            }
+        };
+
+        let (est, _) = estimate_time_v2(&[], &ai_intervals, &[], 120, 30);
+        // Should be ~2h30m (10h start to 8h-ago + 30min cap), not 10h
+        assert!(est.num_hours() < 4, "expected <4h, got {}h{}m", est.num_hours(), est.num_minutes() % 60);
     }
 }
