@@ -40,7 +40,7 @@ fn run_query(
     let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
     }).sum();
-    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes, from, to);
     let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
         acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
     });
@@ -143,7 +143,7 @@ fn build_summary_for_range(
     let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
     }).sum();
-    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+    let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes, from, to);
     let total_ai_session_time = repos.iter().fold(Duration::zero(), |acc, r| {
         acc + r.ai_sessions.iter().fold(Duration::zero(), |a, s| a + s.duration)
     });
@@ -475,7 +475,7 @@ fn main() -> anyhow::Result<()> {
             let total_reviews: usize = repos.iter().map(|r| {
         r.reviews.iter().map(|rv| rv.pr_number).collect::<std::collections::BTreeSet<_>>().len()
     }).sum();
-            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+            let total_time = blackbox::query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes, from, to);
             let total_ai_session_time = repos.iter().fold(chrono::Duration::zero(), |acc, r| {
                 acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
             });

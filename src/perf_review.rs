@@ -207,7 +207,7 @@ pub fn aggregate_perf_review(
         })
         .sum();
     let total_time =
-        query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes);
+        query::global_estimated_time(&repos, config.session_gap_minutes, config.first_commit_minutes, from, to);
     let total_ai_session_time = repos.iter().fold(Duration::zero(), |acc, r| {
         acc + r
             .ai_sessions
