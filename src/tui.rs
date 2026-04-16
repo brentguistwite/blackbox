@@ -197,7 +197,7 @@ impl App {
 
         // Total time — global merge avoids double-counting concurrent repo work
         let total_time = crate::query::global_estimated_time(
-            &repos, self.session_gap_minutes, self.first_commit_minutes,
+            &repos, self.session_gap_minutes, self.first_commit_minutes, from, to,
         );
         self.total_time_mins = total_time.num_minutes();
 
