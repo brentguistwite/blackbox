@@ -1,4 +1,4 @@
-use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended};
+use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, update_session_ended, update_session_last_active};
 use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
@@ -436,8 +436,8 @@ fn query_presence_null_left_at_capped() {
 #[test]
 fn query_presence_spanning_boundary_included() {
     let (conn, _tmp) = setup_db();
-    // Presence started before 'from' but extends into the window
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T08:00:00Z", Some("2025-01-15T11:00:00Z"));
+    // Presence started before 'from' but extends into the window (within gap)
+    insert_presence(&conn, "/repo/alpha", "2025-01-15T09:00:00Z", Some("2025-01-15T10:30:00Z"));
 
     let from = ts(10, 0); // query starts at 10:00
     let to = ts(23, 59);
@@ -446,22 +446,105 @@ fn query_presence_spanning_boundary_included() {
     let intervals = map.get("/repo/alpha").unwrap();
     assert_eq!(intervals.len(), 1);
     // Clipped to query window: start clamped to from
-    assert_eq!(intervals[0], iv(10, 0, 11, 0));
+    assert_eq!(intervals[0], iv(10, 0, 10, 30));
 }
 
 #[test]
 fn query_presence_clipped_to_query_window() {
     let (conn, _tmp) = setup_db();
-    // Presence spans wider than the query window on both sides
-    insert_presence(&conn, "/repo/alpha", "2025-01-15T08:00:00Z", Some("2025-01-15T20:00:00Z"));
+    // Presence spans wider than query window on both sides (within gap)
+    insert_presence(&conn, "/repo/alpha", "2025-01-15T14:00:00Z", Some("2025-01-15T15:30:00Z"));
 
-    let from = ts(10, 0);
+    let from = ts(14, 30);
     let to = ts(15, 0);
     let map = query_presence(&conn, from, to, 120).unwrap();
 
     let intervals = map.get("/repo/alpha").unwrap();
     assert_eq!(intervals.len(), 1);
-    assert_eq!(intervals[0], iv(10, 0, 15, 0)); // clipped both sides
+    assert_eq!(intervals[0], iv(14, 30, 15, 0)); // clipped both sides
+}
+
+#[test]
+fn query_presence_stale_left_at_capped() {
+    let (conn, _tmp) = setup_db();
+    // Stale entry: cd'd on April 7, left_at lazily set to April 15 on return.
+    // Should be capped at entered + gap (120min), not span 8 days.
+    insert_presence(&conn, "/repo/alpha", "2025-01-15T10:00:00Z", Some("2025-01-22T10:00:00Z"));
+
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+    let map = query_presence(&conn, from, to, 120).unwrap();
+
+    let intervals = map.get("/repo/alpha").unwrap();
+    assert_eq!(intervals.len(), 1);
+    assert_eq!(intervals[0], iv(10, 0, 12, 0)); // capped at entered + 120min
+}
+
+// ===== Cross-day AI session tests =====
+
+#[test]
+fn cross_day_ai_session_visible_in_query() {
+    // Session started 5 days ago, still open, last_active_at = today.
+    // Should appear in today's query_activity results.
+    let (conn, _tmp) = setup_db();
+
+    let now = chrono::Utc::now();
+    let five_days_ago = (now - Duration::days(5)).to_rfc3339();
+    let ten_min_ago = (now - Duration::minutes(10)).to_rfc3339();
+
+    insert_ai_session(&conn, "claude-code", "/repo/alpha", "cross-day-1", &five_days_ago).unwrap();
+    update_session_last_active(&conn, "cross-day-1", &ten_min_ago).unwrap();
+
+    let (from, to) = blackbox::query::today_range();
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha");
+    assert!(alpha.is_some(), "cross-day session repo should appear in today's query");
+
+    let alpha = alpha.unwrap();
+    assert_eq!(alpha.ai_sessions.len(), 1);
+    assert_eq!(alpha.ai_sessions[0].session_id, "cross-day-1");
+}
+
+#[test]
+fn cross_day_ai_session_time_not_inflated() {
+    // Session started 5 days ago, last_active 10 min ago.
+    // Estimated time should be ~30-40 min, NOT hours from midnight.
+    let (conn, _tmp) = setup_db();
+
+    let now = chrono::Utc::now();
+    let five_days_ago = (now - Duration::days(5)).to_rfc3339();
+    let ten_min_ago = (now - Duration::minutes(10)).to_rfc3339();
+
+    insert_ai_session(&conn, "claude-code", "/repo/alpha", "cross-day-2", &five_days_ago).unwrap();
+    update_session_last_active(&conn, "cross-day-2", &ten_min_ago).unwrap();
+
+    let (from, to) = blackbox::query::today_range();
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    // Should be ~40 min (10 min since last_active + 30 min idle cap), not hours
+    assert!(alpha.estimated_time.num_minutes() <= 45,
+        "expected <=45 min, got {} min", alpha.estimated_time.num_minutes());
+}
+
+#[test]
+fn old_idle_ai_session_excluded_from_today() {
+    // Session started 5 days ago, last_active 5 days ago.
+    // Should NOT appear in today's query.
+    let (conn, _tmp) = setup_db();
+
+    let now = chrono::Utc::now();
+    let five_days_ago = (now - Duration::days(5)).to_rfc3339();
+
+    insert_ai_session(&conn, "claude-code", "/repo/alpha", "old-idle-1", &five_days_ago).unwrap();
+    update_session_last_active(&conn, "old-idle-1", &five_days_ago).unwrap();
+
+    let (from, to) = blackbox::query::today_range();
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha");
+    assert!(alpha.is_none(), "old idle session should not appear in today's query");
 }
 
 // ===== US-002: presence anchoring tests =====
@@ -618,7 +701,7 @@ fn global_estimated_time_no_double_count_overlapping_presence() {
         presence_intervals: vec![iv(10, 0, 11, 0)],
         branch_switches: 0,
     };
-    let total = global_estimated_time(&[repo_a, repo_b], 120, 30);
+    let total = global_estimated_time(&[repo_a, repo_b], 120, 30, ts(0, 0), ts(23, 59));
     assert_eq!(total, Duration::minutes(60), "overlapping presence across repos should not double-count");
 }
 

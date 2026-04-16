@@ -196,8 +196,13 @@ pub fn query_presence(
     for row in rows {
         let (repo_path, entered_str, left_str) = row?;
         let entered = DateTime::parse_from_rfc3339(&entered_str)?.with_timezone(&Utc);
+        // Cap all entries at entered + gap. Closed entries have stale left_at
+        // (set on next return, not actual departure) so treat same as NULL.
         let effective_end = match left_str {
-            Some(ref s) => DateTime::parse_from_rfc3339(s)?.with_timezone(&Utc),
+            Some(ref s) => {
+                let left = DateTime::parse_from_rfc3339(s)?.with_timezone(&Utc);
+                left.min(entered + gap)
+            }
             None => entered + gap,
         };
 
@@ -253,12 +258,28 @@ pub struct AiSessionInfo {
 }
 
 impl AiSessionInfo {
-    /// Effective end time, accounting for idle cap on open sessions.
+    /// Effective start for time estimation within a query window.
+    /// Cross-day sessions use last_active_at to avoid midnight-to-now inflation.
+    pub fn effective_start(&self, window_start: DateTime<Utc>) -> DateTime<Utc> {
+        if self.started_at >= window_start {
+            self.started_at
+        } else {
+            // Session spans across days — last_active_at is the best proxy
+            // for when today's work started.
+            self.last_active_at.unwrap_or(self.started_at).max(window_start)
+        }
+    }
+
+    /// Effective end time, accounting for idle cap.
+    /// Caps both open AND closed sessions: lazy-close sets ended_at = now
+    /// when a stale PID is detected, even if the session was idle for days.
     pub fn effective_end(&self) -> DateTime<Utc> {
         let now = Utc::now();
+        let idle_cap = chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
         match (self.ended_at, self.last_active_at) {
-            (Some(ended), _) => ended,
-            (None, Some(active)) => (active + chrono::Duration::minutes(AI_IDLE_CAP_MINUTES)).min(now),
+            (Some(ended), Some(active)) => ended.min(active + idle_cap),
+            (Some(ended), None) => ended,
+            (None, Some(active)) => (active + idle_cap).min(now),
             (None, None) => now,
         }
     }
@@ -737,7 +758,7 @@ pub fn query_activity(
 
         // Extract AI session time intervals, clip to [from, to]
         let ai_intervals: Vec<TimeInterval> = ai_sessions.iter().filter_map(|s| {
-            let start = s.started_at.max(from);
+            let start = s.effective_start(from);
             let end = s.effective_end().min(to);
             if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
@@ -774,12 +795,15 @@ pub fn global_estimated_time(
     repos: &[RepoSummary],
     session_gap_minutes: u64,
     first_commit_minutes: u64,
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
 ) -> Duration {
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     for repo in repos {
         let ai_intervals: Vec<TimeInterval> = repo.ai_sessions.iter().filter_map(|s| {
-            let end = s.effective_end();
-            if s.started_at < end { Some(TimeInterval { start: s.started_at, end }) } else { None }
+            let start = s.effective_start(from);
+            let end = s.effective_end().min(to);
+            if start < end { Some(TimeInterval { start, end }) } else { None }
         }).collect();
         let (_, intervals) = estimate_time_v2(
             &repo.events, &ai_intervals, &repo.presence_intervals, session_gap_minutes, first_commit_minutes,
@@ -806,7 +830,7 @@ pub fn daily_summary_for_notification(
     }
 
     let repo_count = repos.len();
-    let total_time = global_estimated_time(&repos, session_gap_minutes, first_commit_minutes);
+    let total_time = global_estimated_time(&repos, session_gap_minutes, first_commit_minutes, from, to);
 
     let commit_word = if total_commits == 1 { "commit" } else { "commits" };
     let repo_word = if repo_count == 1 { "repo" } else { "repos" };
@@ -876,17 +900,19 @@ fn query_ai_sessions(
 ) -> anyhow::Result<BTreeMap<String, Vec<AiSessionInfo>>> {
     let from_str = from.to_rfc3339();
     let to_str = to.to_rfc3339();
+    // Include sessions whose effective end could overlap with the query window.
+    // For open sessions, effective end = last_active_at + idle_cap.
+    let from_minus_idle = (from - chrono::Duration::minutes(AI_IDLE_CAP_MINUTES)).to_rfc3339();
 
     let mut stmt = conn.prepare(
         "SELECT repo_path, tool, session_id, started_at, ended_at, turns, last_active_at
          FROM ai_sessions
-         WHERE started_at >= ?1 AND started_at <= ?2
+         WHERE started_at <= ?2
+           AND (started_at >= ?1 OR last_active_at >= ?3)
          ORDER BY repo_path, started_at ASC",
     )?;
 
-    let now = Utc::now();
-    let idle_cap = chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
-    let rows = stmt.query_map(rusqlite::params![from_str, to_str], |row| {
+    let rows = stmt.query_map(rusqlite::params![from_str, to_str, from_minus_idle], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
@@ -911,23 +937,18 @@ fn query_ai_sessions(
             .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
             .transpose()?;
 
-        // For open sessions with a last_active_at, cap at last_active + idle threshold
-        let end = match (ended_at, last_active_at) {
-            (Some(ended), _) => ended,                          // closed session: use ended_at
-            (None, Some(active)) => (active + idle_cap).min(now), // open + heartbeat: cap it
-            (None, None) => now,                                  // open + no heartbeat: legacy behavior
-        };
-        let duration = end - started_at;
-
-        map.entry(repo_path).or_default().push(AiSessionInfo {
+        // Build struct, then derive duration from effective_end (handles idle cap)
+        let info = AiSessionInfo {
             tool,
             session_id,
             started_at,
             ended_at,
             last_active_at,
-            duration,
+            duration: chrono::Duration::zero(),
             turns,
-        });
+        };
+        let duration = info.effective_end() - started_at;
+        map.entry(repo_path).or_default().push(AiSessionInfo { duration, ..info });
     }
 
     Ok(map)
@@ -2037,5 +2058,85 @@ mod tests {
         let (est, _) = estimate_time_v2(&[], &ai_intervals, &[], 120, 30);
         // Should be ~2h30m (10h start to 8h-ago + 30min cap), not 10h
         assert!(est.num_hours() < 4, "expected <4h, got {}h{}m", est.num_hours(), est.num_minutes() % 60);
+    }
+
+    #[test]
+    fn test_effective_start_same_day_session() {
+        let now = Utc::now();
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::hours(2),
+            ended_at: None,
+            last_active_at: Some(now - chrono::Duration::minutes(5)),
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let window_start = now - chrono::Duration::hours(12); // midnight-ish
+        // started_at is after window_start → use started_at
+        assert_eq!(s.effective_start(window_start), s.started_at);
+    }
+
+    #[test]
+    fn test_effective_start_cross_day_session() {
+        let now = Utc::now();
+        let last_active = now - chrono::Duration::minutes(5);
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::days(5),
+            ended_at: None,
+            last_active_at: Some(last_active),
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let window_start = now - chrono::Duration::hours(12);
+        // started_at is before window → use last_active_at
+        assert_eq!(s.effective_start(window_start), last_active);
+    }
+
+    #[test]
+    fn test_effective_start_cross_day_no_heartbeat() {
+        let now = Utc::now();
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::days(5),
+            ended_at: None,
+            last_active_at: None,
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let window_start = now - chrono::Duration::hours(12);
+        // No heartbeat, started before window → clamp to window_start
+        assert_eq!(s.effective_start(window_start), window_start);
+    }
+
+    #[test]
+    fn test_cross_day_session_interval_not_inflated() {
+        // Session started 5 days ago, last_active 10 min ago.
+        // effective_end = min(last_active + 30min, now) = now (since +30 is future)
+        // Interval = [last_active, now] = ~10 min. NOT midnight-to-now.
+        let now = Utc::now();
+        let last_active = now - chrono::Duration::minutes(10);
+        let s = AiSessionInfo {
+            tool: "claude-code".into(),
+            session_id: "t".into(),
+            started_at: now - chrono::Duration::days(5),
+            ended_at: None,
+            last_active_at: Some(last_active),
+            duration: chrono::Duration::zero(),
+            turns: None,
+        };
+        let window_start = now - chrono::Duration::hours(12);
+        let start = s.effective_start(window_start);
+        let end = s.effective_end();
+        let duration = end - start;
+        // Should be ~10min (now - last_active), not 12h
+        assert!(duration.num_minutes() <= 15,
+            "expected <=15min, got {}min", duration.num_minutes());
+        // And definitely not hours
+        assert!(duration.num_hours() < 1,
+            "expected <1h, got {}h", duration.num_hours());
     }
 }
