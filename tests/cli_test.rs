@@ -1257,6 +1257,44 @@ fn test_standup_help_shows_json_schema() {
 }
 
 #[test]
+fn test_standup_lookback_from_config() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    // Create config with standup_lookback_days = 1
+    let cfg_dir = config_dir.join("blackbox");
+    fs::create_dir_all(&cfg_dir).unwrap();
+    fs::write(
+        cfg_dir.join("config.toml"),
+        r#"
+watch_dirs = ["/tmp/repos"]
+poll_interval_secs = 300
+standup_lookback_days = 1
+"#,
+    )
+    .unwrap();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("standup")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "standup with config lookback=1 should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Should NOT say "Today" — should show a date range or "No activity recorded for <range>"
+    assert!(!stdout.contains("\"Today\"") && !stdout.contains("**Today"),
+        "lookback=1 should not label as Today, got: {}", stdout);
+}
+
+#[test]
 fn test_json_flag_overrides_format_pretty() {
     let (_tmp, config_dir, data_dir) = setup_empty_env();
 
