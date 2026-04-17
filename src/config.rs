@@ -70,6 +70,8 @@ pub struct Config {
     pub week_start_day: Option<String>,
     #[serde(default = "default_show_hints")]
     pub show_hints: bool,
+    #[serde(default)]
+    pub standup_lookback_days: u32,
 }
 
 impl Default for Config {
@@ -93,6 +95,7 @@ impl Default for Config {
             insights_window: None,
             week_start_day: None,
             show_hints: default_show_hints(),
+            standup_lookback_days: 0,
         }
     }
 }
