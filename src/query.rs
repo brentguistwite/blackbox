@@ -358,6 +358,20 @@ pub fn today_range() -> (DateTime<Utc>, DateTime<Utc>) {
     (start_utc, now)
 }
 
+/// Returns ((today - lookback_days) at midnight local → now_utc).
+/// lookback_days=0 is identical to today_range().
+pub fn standup_range(lookback_days: u32) -> (DateTime<Utc>, DateTime<Utc>) {
+    let now = Utc::now();
+    let local_today = Local::now().date_naive();
+    let start_date = local_today - Duration::days(lookback_days as i64);
+    let start_local = start_date.and_hms_opt(0, 0, 0).unwrap();
+    let start_utc = Local
+        .from_local_datetime(&start_local)
+        .unwrap()
+        .with_timezone(&Utc);
+    (start_utc, now)
+}
+
 /// Returns (monday_midnight_local_as_utc, now_utc)
 pub fn week_range() -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();

@@ -3,7 +3,7 @@ use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
     query_branch_switches, query_presence, resolve_perf_review_range,
-    today_range, week_range, month_range, quarter_range,
+    standup_range, today_range, week_range, month_range, quarter_range,
     ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
 use chrono::{Datelike, Duration, Timelike, TimeZone, Utc};
@@ -1109,4 +1109,38 @@ fn resolve_range_only_from_errors() {
 fn resolve_range_only_to_errors() {
     let err = resolve_perf_review_range(None, Some("2025-03-31")).unwrap_err();
     assert!(err.to_string().contains("both be provided"));
+}
+
+#[test]
+fn test_standup_range_zero_equals_today() {
+    let (s0, e0) = standup_range(0);
+    let (st, et) = blackbox::query::today_range();
+    assert_eq!(s0, st, "standup_range(0) start should equal today_range start");
+    assert!((e0 - et).num_seconds().abs() < 2i64);
+}
+
+#[test]
+fn test_standup_range_one_starts_yesterday_midnight() {
+    let (start, end) = standup_range(1);
+    let local_today = chrono::Local::now().date_naive();
+    let yesterday = local_today - chrono::Duration::days(1);
+    let expected_start = chrono::Local
+        .from_local_datetime(&yesterday.and_hms_opt(0, 0, 0).unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(start, expected_start, "standup_range(1) should start at yesterday midnight local");
+    let now = chrono::Utc::now();
+    assert!((now - end).num_seconds().abs() < 2i64);
+}
+
+#[test]
+fn test_standup_range_three_starts_three_days_ago() {
+    let (start, _end) = standup_range(3);
+    let local_today = chrono::Local::now().date_naive();
+    let three_ago = local_today - chrono::Duration::days(3);
+    let expected = chrono::Local
+        .from_local_datetime(&three_ago.and_hms_opt(0, 0, 0).unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(start, expected);
 }
