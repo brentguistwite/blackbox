@@ -1461,3 +1461,45 @@ fn test_today_json_stdout_is_valid_json_no_hints() {
     // Hints go to stderr, never stdout — stdout must be pure JSON
     assert!(!stdout.contains("hint:"), "stdout must not contain hint text");
 }
+
+// --- --lookback flag on standup ---
+
+#[test]
+fn test_standup_lookback_flag() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["init", "--watch-dirs", "/tmp/repos", "--poll-interval", "300"])
+        .assert()
+        .success();
+
+    let db_dir = data_dir.join("blackbox");
+    fs::create_dir_all(&db_dir).unwrap();
+    let _conn = db::open_db(&db_dir.join("blackbox.db")).unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .args(["standup", "--lookback", "1"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "standup --lookback 1 should succeed");
+}
+
+#[test]
+fn test_standup_lookback_and_week_conflict() {
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .args(["standup", "--week", "--lookback", "1"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success(), "--week and --lookback should conflict");
+}
