@@ -450,7 +450,7 @@ fn main() -> anyhow::Result<()> {
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
         }
-        Commands::Standup { week, json, csv, summarize } => {
+        Commands::Standup { week, json, csv, summarize, lookback: _ } => {
             let label;
             let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
             if week {
