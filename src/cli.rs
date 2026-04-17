@@ -147,6 +147,9 @@ pub enum Commands {
         /// Summarize activity using LLM
         #[arg(long)]
         summarize: bool,
+        /// Number of prior days to include (0=today only, 1=yesterday+today). Overrides config standup_lookback_days.
+        #[arg(long, conflicts_with = "week")]
+        lookback: Option<u32>,
     },
     /// Send SIGHUP to running daemon to reload config
     Reload,

@@ -583,3 +583,41 @@ fn test_show_hints_roundtrip() {
     let deserialized: Config = toml::from_str(&serialized).unwrap();
     assert!(!deserialized.show_hints);
 }
+
+// --- standup_lookback_days ---
+
+#[test]
+fn test_default_config_standup_lookback_days() {
+    let cfg = Config::default();
+    assert_eq!(cfg.standup_lookback_days, 0);
+}
+
+#[test]
+fn test_parse_missing_standup_lookback_days_defaults_zero() {
+    let toml_str = r#"
+        watch_dirs = ["/tmp/code"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.standup_lookback_days, 0);
+}
+
+#[test]
+fn test_parse_standup_lookback_days_custom() {
+    let toml_str = r#"
+        watch_dirs = []
+        standup_lookback_days = 1
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.standup_lookback_days, 1);
+}
+
+#[test]
+fn test_standup_lookback_days_roundtrip() {
+    let cfg = Config {
+        standup_lookback_days: 3,
+        ..Config::default()
+    };
+    let serialized = toml::to_string_pretty(&cfg).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.standup_lookback_days, 3);
+}

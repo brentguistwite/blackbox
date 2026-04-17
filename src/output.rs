@@ -915,8 +915,11 @@ pub fn render_standup(summary: &ActivitySummary) -> String {
         let weekday = now.weekday().num_days_from_monday();
         let monday = now - Duration::days(weekday as i64);
         format!("**{} ({} - {})**", summary.period_label, monday.format("%b %-d"), now.format("%b %-d"))
-    } else {
+    } else if summary.period_label == "Today" {
         format!("**{} ({})**", summary.period_label, now.format("%b %-d"))
+    } else {
+        // Date range label from lookback (e.g. "Apr 16 – Apr 17")
+        format!("**{}**", summary.period_label)
     };
     lines.push(header);
     lines.push(String::new());
