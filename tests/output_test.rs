@@ -941,6 +941,35 @@ fn standup_week_header() {
     assert!(output.contains(" - "), "week header should have date range with dash");
 }
 
+#[test]
+fn standup_lookback_header_shows_date_range() {
+    let summary = ActivitySummary {
+        period_label: "Apr 16 – Apr 17".to_string(),
+        total_commits: 1,
+        total_reviews: 0,
+        total_repos: 1,
+        total_estimated_time: Duration::minutes(30),
+        total_ai_session_time: Duration::zero(),
+        streak_days: 0,
+        total_branch_switches: 0,
+        repos: vec![RepoSummary {
+            repo_name: "test-repo".to_string(),
+            repo_path: "/tmp/test-repo".to_string(),
+            commits: 1,
+            branches: vec!["main".to_string()],
+            estimated_time: Duration::minutes(30),
+            events: vec![],
+            pr_info: None,
+            reviews: vec![],
+            ai_sessions: vec![],
+            presence_intervals: vec![],
+            branch_switches: 0,
+        }],
+    };
+    let output = render_standup(&summary);
+    assert!(output.contains("**Apr 16 – Apr 17**"), "lookback header should show date range, got:\n{}", output);
+}
+
 // --- Focus report tests ---
 
 fn make_focus_summary(label: &str, switches: &[(&str, &str, usize)]) -> ActivitySummary {

@@ -450,23 +450,28 @@ fn main() -> anyhow::Result<()> {
         Commands::Churn { window, repo, format } => {
             blackbox::churn::run_churn(window, repo, format)?;
         }
-        Commands::Standup { week, json, csv, summarize } => {
-            let label;
-            let range_fn: fn() -> (DateTime<Utc>, DateTime<Utc>);
-            if week {
-                label = "This Week";
-                range_fn = blackbox::query::week_range;
-            } else {
-                label = "Today";
-                range_fn = blackbox::query::today_range;
-            }
+        Commands::Standup { week, json, csv, summarize, lookback } => {
             let fmt = blackbox::output::resolve_format(OutputFormat::Pretty, json, csv, blackbox::output::is_tty());
             let config = blackbox::config::load_config()?;
             let data_dir = blackbox::config::data_dir()?;
             let db_path = data_dir.join("blackbox.db");
             let conn = blackbox::db::open_db(&db_path)
                 .with_context(|| format!("Failed to open DB at {}", db_path.display()))?;
-            let (from, to) = range_fn();
+            let (from, to, label) = if week {
+                let (f, t) = blackbox::query::week_range();
+                (f, t, "This Week".to_string())
+            } else {
+                let days = lookback.unwrap_or(config.standup_lookback_days);
+                let (f, t) = blackbox::query::standup_range(days);
+                let label = if days == 0 {
+                    "Today".to_string()
+                } else {
+                    let start_date = chrono::Local::now().date_naive() - chrono::Duration::days(days as i64);
+                    let today = chrono::Local::now().date_naive();
+                    format!("{} – {}", start_date.format("%b %-d"), today.format("%b %-d"))
+                };
+                (f, t, label)
+            };
             let repos = blackbox::query::query_activity(
                 &conn, from, to, config.session_gap_minutes, config.first_commit_minutes,
             )?;
@@ -480,7 +485,7 @@ fn main() -> anyhow::Result<()> {
                 acc + r.ai_sessions.iter().fold(chrono::Duration::zero(), |a, s| a + s.duration)
             });
             let summary = ActivitySummary {
-                period_label: label.to_string(),
+                period_label: label,
                 total_commits,
                 total_reviews,
                 total_repos: repos.len(),
