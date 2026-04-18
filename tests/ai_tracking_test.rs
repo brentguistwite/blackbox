@@ -137,16 +137,19 @@ fn test_codex_detector_valid_session_inserts_row() {
     let sessions_dir = sessions_tmp.path().to_path_buf();
 
     let meta_line = serde_json::json!({
-        "cwd": "/tmp/test-repo",
-        "createdAt": "2024-03-15T10:00:00Z",
-        "updatedAt": "2024-03-15T10:05:00Z"
+        "timestamp": "2024-03-15T10:00:00Z",
+        "type": "session_meta",
+        "payload": {"cwd": "/tmp/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
     }).to_string();
+    let ev1 = serde_json::json!({"timestamp":"2024-03-15T10:03:00Z","type":"event_msg","payload":{"type":"task_started"}}).to_string();
+    let ev2 = serde_json::json!({"timestamp":"2024-03-15T10:04:00Z","type":"response_item","payload":{}}).to_string();
+    let ev3 = serde_json::json!({"timestamp":"2024-03-15T10:05:00Z","type":"event_msg","payload":{"type":"task_complete"}}).to_string();
 
     create_codex_session(
         &sessions_dir,
         ("2024", "03", "15"),
         "rollout-abc",
-        &[&meta_line, r#"{"type":"input"}"#, r#"{"type":"output"}"#, r#"{"type":"input"}"#],
+        &[&meta_line, &ev1, &ev2, &ev3],
     );
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
@@ -163,7 +166,7 @@ fn test_codex_detector_valid_session_inserts_row() {
     assert_eq!(tool, "codex");
     assert_eq!(repo, "/tmp/test-repo");
     assert!(sid.contains("2024-03-15") && sid.contains("rollout-abc"), "session_id={sid}");
-    assert_eq!(turns, 4); // 1 meta + 3 data lines
+    assert_eq!(turns, 4); // 1 meta + 3 event lines
 }
 
 #[test]
@@ -173,16 +176,17 @@ fn test_codex_detector_no_duplicate_on_second_poll() {
     let sessions_dir = sessions_tmp.path().to_path_buf();
 
     let meta_line = serde_json::json!({
-        "cwd": "/tmp/test-repo",
-        "createdAt": "2024-03-15T10:00:00Z",
-        "updatedAt": "2024-03-15T10:05:00Z"
+        "timestamp": "2024-03-15T10:00:00Z",
+        "type": "session_meta",
+        "payload": {"cwd": "/tmp/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
     }).to_string();
+    let ev = serde_json::json!({"timestamp":"2024-03-15T10:05:00Z","type":"event_msg","payload":{"type":"task_started"}}).to_string();
 
     create_codex_session(
         &sessions_dir,
         ("2024", "03", "15"),
         "rollout-dup",
-        &[&meta_line, r#"{"type":"input"}"#],
+        &[&meta_line, &ev],
     );
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
