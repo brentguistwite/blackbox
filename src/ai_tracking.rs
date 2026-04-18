@@ -76,12 +76,21 @@ impl CodexDetector {
     }
 }
 
+/// Codex JSONL event envelope. Every line has `timestamp` + `type` + `payload`.
+/// The first line has `type: "session_meta"` with cwd/id in payload.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CodexSessionMeta {
-    cwd: String,
-    created_at: String,
-    updated_at: String,
+struct CodexEventLine {
+    timestamp: String,
+    #[allow(dead_code)]
+    #[serde(rename = "type")]
+    event_type: Option<String>,
+    payload: Option<CodexSessionPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSessionPayload {
+    cwd: Option<String>,
+    timestamp: Option<String>,
 }
 
 /// Map a session's cwd to a watched repo path. Returns the repo path if cwd is
@@ -148,14 +157,24 @@ impl AiToolDetector for CodexDetector {
                     continue;
                 }
             };
-            let first_line = match content.lines().next() {
-                Some(l) if !l.trim().is_empty() => l,
-                _ => continue,
+            let mut lines = content.lines().filter(|l| !l.trim().is_empty());
+            let first_line = match lines.next() {
+                Some(l) => l,
+                None => continue,
             };
-            let meta: CodexSessionMeta = match serde_json::from_str(first_line) {
+            let meta: CodexEventLine = match serde_json::from_str(first_line) {
                 Ok(m) => m,
                 Err(_) => {
                     log::debug!("codex: malformed first line in {}", path.display());
+                    continue;
+                }
+            };
+
+            // Extract cwd from payload (required)
+            let cwd = match meta.payload.as_ref().and_then(|p| p.cwd.as_deref()) {
+                Some(c) => c.to_string(),
+                None => {
+                    log::debug!("codex: no cwd in session_meta for {}", path.display());
                     continue;
                 }
             };
@@ -165,15 +184,20 @@ impl AiToolDetector for CodexDetector {
                 None => continue,
             };
 
-            let repo_path = map_to_repo(&meta.cwd, watched_repos);
+            // created_at: prefer payload.timestamp, fall back to envelope timestamp
+            let created_at = meta.payload.as_ref()
+                .and_then(|p| p.timestamp.clone())
+                .unwrap_or(meta.timestamp);
 
-            match db::insert_ai_session(conn, "codex", &repo_path, &session_id, &meta.created_at) {
+            let repo_path = map_to_repo(&cwd, watched_repos);
+
+            match db::insert_ai_session(conn, "codex", &repo_path, &session_id, &created_at) {
                 Ok(true) => log::debug!("Recorded codex session: {}", session_id),
                 Ok(false) => {} // already exists
                 Err(e) => log::warn!("Failed to insert codex session {}: {}", session_id, e),
             }
 
-            // Update turns + last_active_at from updated_at
+            // Update turns + last_active_at from last line's timestamp
             let turns = count_lines(path);
             if let Some(t) = turns {
                 let _ = conn.execute(
@@ -181,17 +205,26 @@ impl AiToolDetector for CodexDetector {
                     rusqlite::params![t, session_id],
                 );
             }
-            let _ = db::update_session_last_active(conn, &session_id, &meta.updated_at);
+
+            // Get updated_at from the last line's envelope timestamp
+            let last_ts = content.lines()
+                .rev()
+                .find(|l| !l.trim().is_empty())
+                .and_then(|l| serde_json::from_str::<CodexEventLine>(l).ok())
+                .map(|e| e.timestamp)
+                .unwrap_or_else(|| created_at.clone());
+
+            let _ = db::update_session_last_active(conn, &session_id, &last_ts);
 
             // Check if session should be marked ended:
-            // codex process not running OR updated_at older than 5 minutes
+            // codex process not running OR last event older than 5 minutes
             let codex_running = is_any_process_running("codex");
-            let is_stale = chrono::DateTime::parse_from_rfc3339(&meta.updated_at)
+            let is_stale = chrono::DateTime::parse_from_rfc3339(&last_ts)
                 .map(|dt| Utc::now().signed_duration_since(dt) > chrono::Duration::minutes(5))
                 .unwrap_or(true);
 
             if !codex_running || is_stale {
-                let _ = db::update_session_ended(conn, &session_id, &meta.updated_at, turns);
+                let _ = db::update_session_ended(conn, &session_id, &last_ts, turns);
             }
         }
     }
