@@ -6,6 +6,7 @@ description = "Flight recorder for your dev day - passive git activity tracking"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/brentguistwite/blackbox"
+homepage = "https://github.com/brentguistwite/blackbox"
 keywords = ["git", "time-tracking", "developer-tools", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
 exclude = [".claude/", ".planning/", ".gitignore"]
@@ -51,3 +52,21 @@ assert_cmd = "2.0"
 predicates = "3.0"
 assert_fs = "1.1"
 tempfile = "3.0"
+
+# Config for the cargo-dist release tool
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.31.0"
+ci = "github"
+installers = ["shell", "homebrew"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+tap = "brentguistwite/homebrew-tap"
+publish-jobs = ["homebrew"]
