@@ -931,6 +931,7 @@ mod tests {
             last_active_at: None,
             duration: chrono::Duration::minutes(30),
             turns: None,
+            segments: Vec::new(),
         };
         assert_eq!(format_session_msg(&ses), "session (active)");
     }
@@ -945,6 +946,7 @@ mod tests {
             last_active_at: None,
             duration: chrono::Duration::minutes(45),
             turns: Some(10),
+            segments: Vec::new(),
         };
         assert_eq!(format_session_msg(&ses), "session (45m)");
     }

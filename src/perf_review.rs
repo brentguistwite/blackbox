@@ -443,6 +443,7 @@ mod tests {
             last_active_at: None,
             duration: Duration::hours(1),
             turns: Some(10),
+            segments: Vec::new(),
         }];
         let repo = RepoSummary {
             repo_path: "/home/dev/myproject".to_string(),

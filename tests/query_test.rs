@@ -3,6 +3,7 @@ use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
     query_branch_switches, query_presence, resolve_perf_review_range,
+    segments_from_timestamps,
     standup_range, today_range, week_range, month_range, quarter_range,
     ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
@@ -1143,4 +1144,131 @@ fn test_standup_range_three_starts_three_days_ago() {
         .unwrap()
         .with_timezone(&chrono::Utc);
     assert_eq!(start, expected);
+}
+
+// --- segments_from_timestamps ---
+
+#[test]
+fn test_segments_empty_input_returns_empty() {
+    let idle_cap = Duration::minutes(30);
+    let segments = segments_from_timestamps(&[], idle_cap);
+    assert!(segments.is_empty());
+}
+
+#[test]
+fn test_segments_single_burst_returns_one_segment() {
+    let idle_cap = Duration::minutes(30);
+    let timestamps = vec![ts(10, 0), ts(10, 5), ts(10, 15)];
+    let segments = segments_from_timestamps(&timestamps, idle_cap);
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].start, ts(10, 0));
+    assert_eq!(segments[0].end, ts(10, 15));
+}
+
+#[test]
+fn test_segments_gap_at_cap_splits_into_two() {
+    let idle_cap = Duration::minutes(30);
+    // 10:00, 10:05 | 11:00, 11:10 — gap of 55min between 10:05 and 11:00
+    let timestamps = vec![ts(10, 0), ts(10, 5), ts(11, 0), ts(11, 10)];
+    let segments = segments_from_timestamps(&timestamps, idle_cap);
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0].start, ts(10, 0));
+    assert_eq!(segments[0].end, ts(10, 5));
+    assert_eq!(segments[1].start, ts(11, 0));
+    assert_eq!(segments[1].end, ts(11, 10));
+}
+
+#[test]
+fn test_segments_gap_below_cap_stays_single() {
+    let idle_cap = Duration::minutes(30);
+    // 29min gap — below cap, should NOT split
+    let timestamps = vec![ts(10, 0), ts(10, 29)];
+    let segments = segments_from_timestamps(&timestamps, idle_cap);
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].start, ts(10, 0));
+    assert_eq!(segments[0].end, ts(10, 29));
+}
+
+#[test]
+fn test_segments_three_gaps_produce_four_segments() {
+    let idle_cap = Duration::minutes(30);
+    let timestamps = vec![
+        ts(9, 0), ts(9, 10),
+        ts(10, 0), ts(10, 15),
+        ts(12, 0), ts(12, 5),
+        ts(14, 30), ts(14, 45),
+    ];
+    let segments = segments_from_timestamps(&timestamps, idle_cap);
+    assert_eq!(segments.len(), 4);
+    assert_eq!(segments[0].end - segments[0].start, Duration::minutes(10));
+    assert_eq!(segments[1].end - segments[1].start, Duration::minutes(15));
+    assert_eq!(segments[2].end - segments[2].start, Duration::minutes(5));
+    assert_eq!(segments[3].end - segments[3].start, Duration::minutes(15));
+}
+
+// --- session_intervals (pure: session + turn timestamps → clipped segments) ---
+
+use blackbox::query::{session_intervals, AiSessionInfo};
+
+fn make_session(started_at: chrono::DateTime<Utc>, last_active: chrono::DateTime<Utc>) -> AiSessionInfo {
+    AiSessionInfo {
+        tool: "claude-code".into(),
+        session_id: "s".into(),
+        started_at,
+        ended_at: None,
+        last_active_at: Some(last_active),
+        duration: Duration::zero(),
+        turns: None,
+        segments: Vec::new(),
+    }
+}
+
+#[test]
+fn session_intervals_empty_timestamps_falls_back_to_effective_bounds() {
+    // When no JSONL is available, keep legacy behavior (single interval).
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+    let s = make_session(ts(10, 0), ts(10, 30));
+    let ivs = session_intervals(&s, &[], from, to, Duration::minutes(30));
+    assert_eq!(ivs.len(), 1);
+    assert_eq!(ivs[0].start, ts(10, 0));
+}
+
+#[test]
+fn session_intervals_with_timestamps_splits_on_gap() {
+    let from = ts(0, 0);
+    let to = ts(23, 59);
+    let s = make_session(ts(9, 0), ts(15, 0));
+    // Two bursts w/ 2h idle between — cap=30min splits
+    let turns = vec![ts(9, 0), ts(9, 10), ts(11, 30), ts(11, 45)];
+    let ivs = session_intervals(&s, &turns, from, to, Duration::minutes(30));
+    assert_eq!(ivs.len(), 2);
+    assert_eq!(ivs[0].end - ivs[0].start, Duration::minutes(10));
+    assert_eq!(ivs[1].end - ivs[1].start, Duration::minutes(15));
+}
+
+#[test]
+fn session_intervals_clipped_to_query_window() {
+    // Session spans full day; turns form one burst that straddles the window edge.
+    // cap=60min. Turns 10:30, 11:00 = one 30-min burst inside [10:00, 12:00].
+    // Turns at 8:30 and 13:00 form separate out-of-window bursts (dropped).
+    let from = ts(10, 0);
+    let to = ts(12, 0);
+    let s = make_session(ts(8, 0), ts(14, 0));
+    let turns = vec![ts(8, 30), ts(10, 30), ts(11, 0), ts(13, 0)];
+    let ivs = session_intervals(&s, &turns, from, to, Duration::minutes(60));
+    assert_eq!(ivs.len(), 1);
+    assert_eq!(ivs[0].start, ts(10, 30));
+    assert_eq!(ivs[0].end, ts(11, 0));
+}
+
+#[test]
+fn session_intervals_clips_eliminate_out_of_window_segments() {
+    let from = ts(12, 0);
+    let to = ts(13, 0);
+    let s = make_session(ts(8, 0), ts(15, 0));
+    // Burst 1: 9:00-9:05 (outside). Burst 2: 14:00-14:05 (outside). Cap=30min.
+    let turns = vec![ts(9, 0), ts(9, 5), ts(14, 0), ts(14, 5)];
+    let ivs = session_intervals(&s, &turns, from, to, Duration::minutes(30));
+    assert!(ivs.is_empty());
 }

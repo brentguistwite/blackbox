@@ -349,3 +349,75 @@ fn test_poll_without_jsonl_leaves_last_active_null() {
         .unwrap();
     assert!(last_active.is_none(), "last_active_at should be NULL without JSONL log");
 }
+
+// --- read_turn_timestamps ---
+
+#[test]
+fn test_claude_read_turn_timestamps_parses_jsonl() {
+    let tmp = TempDir::new().unwrap();
+    let projects = tmp.path().join("projects");
+    let project = projects.join("-tmp-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let session_id = "abc123";
+    let jsonl = project.join(format!("{}.jsonl", session_id));
+    std::fs::write(&jsonl, r#"{"type":"user","timestamp":"2026-04-21T10:00:00Z","text":"hi"}
+{"type":"assistant","timestamp":"2026-04-21T10:00:05Z","text":"hello"}
+{"type":"user","timestamp":"2026-04-21T10:05:00Z","text":"next"}
+"#).unwrap();
+
+    let ts_list = claude_tracking::read_turn_timestamps(&projects, session_id);
+
+    assert_eq!(ts_list.len(), 3);
+    assert_eq!(ts_list[0].to_rfc3339(), "2026-04-21T10:00:00+00:00");
+    assert_eq!(ts_list[1].to_rfc3339(), "2026-04-21T10:00:05+00:00");
+    assert_eq!(ts_list[2].to_rfc3339(), "2026-04-21T10:05:00+00:00");
+}
+
+#[test]
+fn test_claude_read_turn_timestamps_skips_malformed_lines() {
+    let tmp = TempDir::new().unwrap();
+    let projects = tmp.path().join("projects");
+    let project = projects.join("-tmp-repo");
+    std::fs::create_dir_all(&project).unwrap();
+    let jsonl = project.join("sess1.jsonl");
+    std::fs::write(&jsonl, r#"{"type":"user","timestamp":"2026-04-21T10:00:00Z"}
+not json at all
+{"type":"user","no_timestamp":true}
+{"type":"user","timestamp":"2026-04-21T10:05:00Z"}
+
+{"type":"user","timestamp":"not-a-date"}
+"#).unwrap();
+
+    let ts_list = claude_tracking::read_turn_timestamps(&projects, "sess1");
+    assert_eq!(ts_list.len(), 2);
+}
+
+#[test]
+fn test_claude_read_turn_timestamps_missing_file_returns_empty() {
+    let tmp = TempDir::new().unwrap();
+    let projects = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let ts_list = claude_tracking::read_turn_timestamps(&projects, "nonexistent");
+    assert!(ts_list.is_empty());
+}
+
+#[test]
+fn test_claude_read_turn_timestamps_scans_multiple_project_dirs() {
+    // Session could be under any project dir; caller doesn't know cwd.
+    let tmp = TempDir::new().unwrap();
+    let projects = tmp.path().join("projects");
+    let p1 = projects.join("-proj-a");
+    let p2 = projects.join("-proj-b");
+    std::fs::create_dir_all(&p1).unwrap();
+    std::fs::create_dir_all(&p2).unwrap();
+
+    // Session lives under proj-b
+    std::fs::write(p1.join("other.jsonl"), r#"{"timestamp":"2026-04-21T09:00:00Z"}"#).unwrap();
+    std::fs::write(p2.join("target.jsonl"), r#"{"timestamp":"2026-04-21T10:00:00Z"}
+{"timestamp":"2026-04-21T10:05:00Z"}
+"#).unwrap();
+
+    let ts_list = claude_tracking::read_turn_timestamps(&projects, "target");
+    assert_eq!(ts_list.len(), 2);
+    assert_eq!(ts_list[0].to_rfc3339(), "2026-04-21T10:00:00+00:00");
+}

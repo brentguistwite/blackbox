@@ -321,6 +321,7 @@ fn time_invested_with_ai_sessions() {
                 last_active_at: None,
                 duration: t2 - t1,
                 turns: Some(3),
+                segments: Vec::new(),
             },
         ],
     };

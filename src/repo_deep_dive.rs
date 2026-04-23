@@ -106,7 +106,7 @@ pub fn query_repo_all_time(conn: &Connection, repo_path: &str) -> anyhow::Result
             let last_active_at = last_active_str.as_deref()
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|dt| dt.with_timezone(&Utc));
-            let info = AiSessionInfo { tool, session_id, started_at, ended_at, last_active_at, duration: chrono::Duration::zero(), turns };
+            let info = AiSessionInfo { tool, session_id, started_at, ended_at, last_active_at, duration: chrono::Duration::zero(), turns, segments: Vec::new() };
             let duration = info.effective_end() - started_at;
             Some(AiSessionInfo { duration, ..info })
         })

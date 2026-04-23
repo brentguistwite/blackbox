@@ -187,3 +187,56 @@ fn codex_last_active_from_last_event_timestamp() {
         .unwrap();
     assert_eq!(last_active, "2024-08-10T09:45:00Z");
 }
+
+// --- read_turn_timestamps ---
+
+#[test]
+fn test_codex_read_turn_timestamps_parses_jsonl() {
+    let tmp = TempDir::new().unwrap();
+    let day_dir = tmp.path().join("2026").join("03").join("27");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let stem = "rollout-2026-03-27T14-09-50-019d307c-fa24-7eb0-91e1-a5a6de89a427";
+    let path = day_dir.join(format!("{}.jsonl", stem));
+    let session_id = format!("2026-03-27-{}", stem);
+
+    std::fs::write(&path, r#"{"timestamp":"2026-03-27T18:09:53.298Z","type":"session_meta","payload":{}}
+{"timestamp":"2026-03-27T18:10:05.100Z","type":"event_msg"}
+{"timestamp":"2026-03-27T18:10:30.500Z","type":"event_msg"}
+"#).unwrap();
+
+    let ts_list = blackbox::ai_tracking::codex_read_turn_timestamps(tmp.path(), &session_id);
+    assert_eq!(ts_list.len(), 3);
+}
+
+#[test]
+fn test_codex_read_turn_timestamps_missing_file_returns_empty() {
+    let tmp = TempDir::new().unwrap();
+    let ts_list = blackbox::ai_tracking::codex_read_turn_timestamps(tmp.path(), "2026-03-27-rollout-nope");
+    assert!(ts_list.is_empty());
+}
+
+#[test]
+fn test_codex_read_turn_timestamps_malformed_session_id_returns_empty() {
+    let tmp = TempDir::new().unwrap();
+    let ts_list = blackbox::ai_tracking::codex_read_turn_timestamps(tmp.path(), "garbage");
+    assert!(ts_list.is_empty());
+}
+
+#[test]
+fn test_codex_read_turn_timestamps_skips_malformed_lines() {
+    let tmp = TempDir::new().unwrap();
+    let day_dir = tmp.path().join("2026").join("03").join("27");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let stem = "rollout-test";
+    let path = day_dir.join(format!("{}.jsonl", stem));
+    let session_id = format!("2026-03-27-{}", stem);
+
+    std::fs::write(&path, r#"{"timestamp":"2026-03-27T10:00:00Z"}
+garbage line
+{"no_timestamp":true}
+{"timestamp":"2026-03-27T10:05:00Z"}
+"#).unwrap();
+
+    let ts_list = blackbox::ai_tracking::codex_read_turn_timestamps(tmp.path(), &session_id);
+    assert_eq!(ts_list.len(), 2);
+}

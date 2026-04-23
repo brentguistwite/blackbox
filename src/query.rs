@@ -14,6 +14,39 @@ pub struct TimeInterval {
     pub end: DateTime<Utc>,
 }
 
+/// Group sorted timestamps into activity segments, splitting on gaps >= `idle_cap`.
+///
+/// Each segment is a `TimeInterval` from the first to last timestamp within that
+/// contiguous burst. Gaps between timestamps that equal-or-exceed `idle_cap` start
+/// a new segment — the gap itself is NOT counted as active time.
+///
+/// Motivation: AI tool sessions often stay "open" for hours while idle. Single-turn
+/// timestamps (reads from tool log files) let us distinguish actual work bursts
+/// from dead time. See `query_ai_sessions` for the integration point.
+///
+/// Timestamps are assumed sorted ascending. Zero/one timestamp → empty (no interval
+/// has meaningful duration from a single instant).
+pub fn segments_from_timestamps(
+    timestamps: &[DateTime<Utc>],
+    idle_cap: Duration,
+) -> Vec<TimeInterval> {
+    if timestamps.is_empty() {
+        return Vec::new();
+    }
+    let mut segments = Vec::new();
+    let mut seg_start = timestamps[0];
+    let mut seg_end = timestamps[0];
+    for ts in &timestamps[1..] {
+        if *ts - seg_end >= idle_cap {
+            segments.push(TimeInterval { start: seg_start, end: seg_end });
+            seg_start = *ts;
+        }
+        seg_end = *ts;
+    }
+    segments.push(TimeInterval { start: seg_start, end: seg_end });
+    segments
+}
+
 /// Sort intervals by start, merge overlapping/adjacent, return merged list + total duration.
 pub fn merge_intervals(intervals: &mut [TimeInterval]) -> (Vec<TimeInterval>, Duration) {
     if intervals.is_empty() {
@@ -164,6 +197,39 @@ pub fn estimate_time_v2(
     (total, merged)
 }
 
+/// Compute window-clipped active intervals for a single AI session.
+///
+/// When `turn_timestamps` is non-empty, splits into segments via
+/// `segments_from_timestamps` and clips each to `[from, to]`. Empty or
+/// out-of-window segments are dropped.
+///
+/// When `turn_timestamps` is empty (tool log missing/unreadable/unsupported),
+/// falls back to legacy single-interval behavior using
+/// `effective_start` / `effective_end`. This preserves old duration for tools
+/// without turn-level data (Copilot, Cursor, Windsurf) while upgrading Claude
+/// + Codex to segmented accuracy.
+pub fn session_intervals(
+    session: &AiSessionInfo,
+    turn_timestamps: &[DateTime<Utc>],
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+    idle_cap: Duration,
+) -> Vec<TimeInterval> {
+    if turn_timestamps.is_empty() {
+        let s = session.effective_start(from);
+        let e = session.effective_end().min(to);
+        return if s < e { vec![TimeInterval { start: s, end: e }] } else { vec![] };
+    }
+    segments_from_timestamps(turn_timestamps, idle_cap)
+        .into_iter()
+        .filter_map(|iv| {
+            let s = iv.start.max(from);
+            let e = iv.end.min(to);
+            if s < e { Some(TimeInterval { start: s, end: e }) } else { None }
+        })
+        .collect()
+}
+
 /// Query directory_presence for a time range, grouped by repo_path.
 /// NULL left_at capped at entered_at + session_gap_minutes.
 /// Intervals clipped to [from, to].
@@ -253,8 +319,15 @@ pub struct AiSessionInfo {
     pub started_at: DateTime<Utc>,
     pub ended_at: Option<DateTime<Utc>>,
     pub last_active_at: Option<DateTime<Utc>>,
+    /// Sum of `segments` durations when populated; else window-clipped
+    /// `effective_end - effective_start` fallback.
     pub duration: Duration,
     pub turns: Option<i64>,
+    /// Window-clipped active intervals derived from tool log turn timestamps
+    /// (split by idle gap). Empty when tool has no turn-level log (Copilot,
+    /// Cursor, Windsurf) or when JSONL is missing — callers should fall back
+    /// to a single `[effective_start, effective_end]` interval in that case.
+    pub segments: Vec<TimeInterval>,
 }
 
 impl AiSessionInfo {
@@ -770,12 +843,13 @@ pub fn query_activity(
             .collect();
         branches.sort();
 
-        // Extract AI session time intervals, clip to [from, to]
-        let ai_intervals: Vec<TimeInterval> = ai_sessions.iter().filter_map(|s| {
-            let start = s.effective_start(from);
-            let end = s.effective_end().min(to);
-            if start < end { Some(TimeInterval { start, end }) } else { None }
-        }).collect();
+        // AI intervals = flattened per-session segments (already window-clipped
+        // by query_ai_sessions). Segments reflect actual turn-level activity
+        // bursts rather than full session lifetime.
+        let ai_intervals: Vec<TimeInterval> = ai_sessions
+            .iter()
+            .flat_map(|s| s.segments.iter().copied())
+            .collect();
 
         let presence: Vec<TimeInterval> = presence_map.get(&repo_path).cloned().unwrap_or_default();
 
@@ -814,11 +888,12 @@ pub fn global_estimated_time(
 ) -> Duration {
     let mut all_intervals: Vec<TimeInterval> = Vec::new();
     for repo in repos {
-        let ai_intervals: Vec<TimeInterval> = repo.ai_sessions.iter().filter_map(|s| {
-            let start = s.effective_start(from);
-            let end = s.effective_end().min(to);
-            if start < end { Some(TimeInterval { start, end }) } else { None }
-        }).collect();
+        let ai_intervals: Vec<TimeInterval> = repo
+            .ai_sessions
+            .iter()
+            .flat_map(|s| s.segments.iter().copied())
+            .collect();
+        let _ = from; let _ = to; // kept in sig for API stability; segments pre-clipped
         let (_, intervals) = estimate_time_v2(
             &repo.events, &ai_intervals, &repo.presence_intervals, session_gap_minutes, first_commit_minutes,
         );
@@ -951,18 +1026,27 @@ fn query_ai_sessions(
             .map(|s| DateTime::parse_from_rfc3339(s).map(|dt| dt.with_timezone(&Utc)))
             .transpose()?;
 
-        // Build struct, then derive duration from effective_end (handles idle cap)
+        // Build struct. Duration + segments derived from per-turn timestamps
+        // when available (Claude/Codex JSONL logs). Fallback: single interval
+        // clipped to [from, to] via effective_start/effective_end — preserves
+        // legacy behavior for tools without turn-level logs.
         let info = AiSessionInfo {
-            tool,
-            session_id,
+            tool: tool.clone(),
+            session_id: session_id.clone(),
             started_at,
             ended_at,
             last_active_at,
             duration: chrono::Duration::zero(),
             turns,
+            segments: Vec::new(),
         };
-        let duration = info.effective_end() - started_at;
-        map.entry(repo_path).or_default().push(AiSessionInfo { duration, ..info });
+        let idle_cap = chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
+        let turn_timestamps = crate::ai_tracking::session_turn_timestamps(&tool, &session_id);
+        let segments = session_intervals(&info, &turn_timestamps, from, to, idle_cap);
+        let duration = segments
+            .iter()
+            .fold(chrono::Duration::zero(), |acc, iv| acc + (iv.end - iv.start));
+        map.entry(repo_path).or_default().push(AiSessionInfo { duration, segments, ..info });
     }
 
     Ok(map)
@@ -1983,6 +2067,7 @@ mod tests {
             last_active_at: None,
             duration: chrono::Duration::hours(1),
             turns: None,
+            segments: Vec::new(),
         };
         assert_eq!(s.effective_end(), ended);
     }
@@ -1998,6 +2083,7 @@ mod tests {
             last_active_at: None,
             duration: chrono::Duration::hours(2),
             turns: None,
+            segments: Vec::new(),
         };
         // No heartbeat → legacy behavior (now)
         let end = s.effective_end();
@@ -2016,6 +2102,7 @@ mod tests {
             last_active_at: Some(last_active),
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let end = s.effective_end();
         let expected = last_active + chrono::Duration::minutes(AI_IDLE_CAP_MINUTES);
@@ -2038,6 +2125,7 @@ mod tests {
             last_active_at: Some(last_active),
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let end = s.effective_end();
         // last_active + 30min is in the future → capped at now
@@ -2060,6 +2148,7 @@ mod tests {
                 last_active_at: Some(last_active),
                 duration: chrono::Duration::zero(),
                 turns: None,
+                segments: Vec::new(),
             };
             let end = s.effective_end();
             if session_start < end {
@@ -2085,6 +2174,7 @@ mod tests {
             last_active_at: Some(now - chrono::Duration::minutes(5)),
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let window_start = now - chrono::Duration::hours(12); // midnight-ish
         // started_at is after window_start → use started_at
@@ -2103,6 +2193,7 @@ mod tests {
             last_active_at: Some(last_active),
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let window_start = now - chrono::Duration::hours(12);
         // started_at is before window → use last_active_at
@@ -2120,6 +2211,7 @@ mod tests {
             last_active_at: None,
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let window_start = now - chrono::Duration::hours(12);
         // No heartbeat, started before window → clamp to window_start
@@ -2141,6 +2233,7 @@ mod tests {
             last_active_at: Some(last_active),
             duration: chrono::Duration::zero(),
             turns: None,
+            segments: Vec::new(),
         };
         let window_start = now - chrono::Duration::hours(12);
         let start = s.effective_start(window_start);

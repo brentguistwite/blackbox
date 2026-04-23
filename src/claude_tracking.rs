@@ -68,6 +68,58 @@ fn count_turns(jsonl_path: &Path) -> Option<i64> {
     Some(content.lines().filter(|l| !l.trim().is_empty()).count() as i64)
 }
 
+/// Read per-turn timestamps from a session's JSONL conversation log.
+///
+/// Each JSONL line is one turn; if it contains a `"timestamp"` field that parses
+/// as RFC3339, include it. Malformed lines (bad JSON, missing timestamp,
+/// unparseable date) are skipped silently — real logs occasionally have noise.
+///
+/// Scans every project dir under `projects_dir` for `<session_id>.jsonl`, since
+/// we don't retain the session's original `cwd` in the DB. Returns sorted
+/// timestamps (ascending). Missing file → empty Vec (graceful degradation).
+pub fn read_turn_timestamps(
+    projects_dir: &Path,
+    session_id: &str,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let target_name = format!("{}.jsonl", session_id);
+    let project_entries = match std::fs::read_dir(projects_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut timestamps = Vec::new();
+    for entry in project_entries.flatten() {
+        let jsonl = entry.path().join(&target_name);
+        if !jsonl.is_file() {
+            continue;
+        }
+        let content = match std::fs::read_to_string(&jsonl) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ts_str = match value.get("timestamp").and_then(|v| v.as_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                timestamps.push(ts.with_timezone(&chrono::Utc));
+            }
+        }
+        break; // session_id is unique across project dirs
+    }
+    timestamps.sort();
+    timestamps
+}
+
 /// Find the JSONL conversation log for a session in the projects directory.
 fn find_session_log(projects_dir: &Path, session_cwd: &str, session_id: &str) -> Option<PathBuf> {
     let encoded = encode_project_path(session_cwd);

@@ -409,6 +409,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
                     last_active_at: None,
                     duration: ended - started,
                     turns: Some(15),
+                    segments: Vec::new(),
                 },
                 AiSessionInfo {
                     tool: "claude-code".to_string(),
@@ -418,6 +419,7 @@ fn make_summary_with_ai_sessions() -> ActivitySummary {
                     last_active_at: None,
                     duration: Duration::minutes(5),
                     turns: None,
+                    segments: Vec::new(),
                 },
             ],
             presence_intervals: vec![],
@@ -1102,6 +1104,7 @@ fn make_summary_with_multi_tool_sessions() -> ActivitySummary {
                     last_active_at: None,
                     duration: ended - started,
                     turns: Some(10),
+                    segments: Vec::new(),
                 },
                 AiSessionInfo {
                     tool: "cursor".to_string(),
@@ -1111,6 +1114,7 @@ fn make_summary_with_multi_tool_sessions() -> ActivitySummary {
                     last_active_at: None,
                     duration: Duration::minutes(30),
                     turns: None,
+                    segments: Vec::new(),
                 },
             ],
             presence_intervals: vec![],

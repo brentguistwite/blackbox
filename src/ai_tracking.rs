@@ -117,6 +117,81 @@ fn codex_session_id(path: &Path) -> Option<String> {
     Some(format!("{yyyy}-{mm}-{dd}-{stem}"))
 }
 
+/// Dispatcher: load per-turn timestamps for a session based on tool name.
+/// Returns empty Vec for tools without turn-level logs (Copilot, Cursor,
+/// Windsurf) — callers should treat that as a signal to fall back to legacy
+/// session-bound duration computation.
+pub fn session_turn_timestamps(
+    tool: &str,
+    session_id: &str,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    let home = match etcetera::home_dir() {
+        Ok(h) => h,
+        Err(_) => return Vec::new(),
+    };
+    match tool {
+        "claude-code" => {
+            let projects = home.join(".claude").join("projects");
+            crate::claude_tracking::read_turn_timestamps(&projects, session_id)
+        }
+        "codex" => {
+            let sessions = home.join(".codex").join("sessions");
+            codex_read_turn_timestamps(&sessions, session_id)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Read per-turn timestamps from a Codex session's rollout JSONL.
+///
+/// Codex session IDs encode `YYYY-MM-DD-<stem>` where `<stem>` is the file stem
+/// on disk. Path layout: `<sessions_dir>/YYYY/MM/DD/<stem>.jsonl`. Lines with a
+/// parseable `"timestamp"` RFC3339 field are collected; everything else skipped.
+/// Missing file / malformed session_id → empty Vec.
+pub fn codex_read_turn_timestamps(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Vec<chrono::DateTime<chrono::Utc>> {
+    // Session id format: "YYYY-MM-DD-<stem>" (stem may contain dashes)
+    if session_id.len() < 12 || session_id.as_bytes().get(10) != Some(&b'-') {
+        return Vec::new();
+    }
+    let yyyy = &session_id[0..4];
+    let mm = &session_id[5..7];
+    let dd = &session_id[8..10];
+    let stem = &session_id[11..];
+    if yyyy.parse::<u32>().is_err() || mm.parse::<u32>().is_err() || dd.parse::<u32>().is_err() {
+        return Vec::new();
+    }
+
+    let jsonl = sessions_dir.join(yyyy).join(mm).join(dd).join(format!("{}.jsonl", stem));
+    let content = match std::fs::read_to_string(&jsonl) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut timestamps = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let ts_str = match value.get("timestamp").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+            timestamps.push(ts.with_timezone(&chrono::Utc));
+        }
+    }
+    timestamps.sort();
+    timestamps
+}
+
 /// Count non-empty lines in a file.
 fn count_lines(path: &Path) -> Option<i64> {
     let content = std::fs::read_to_string(path).ok()?;
