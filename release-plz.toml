@@ -1,0 +1,21 @@
+# release-plz config — https://release-plz.dev/docs/config
+# Opens a "release PR" that bumps Cargo.toml + writes CHANGELOG.md based on
+# conventional commits since last tag. Merging that PR pushes a git tag,
+# which triggers .github/workflows/release.yml (cargo-dist) to build + ship
+# artifacts (binaries, brew formula, installer script).
+
+[workspace]
+# Don't publish to crates.io — crate is not registered there.
+publish = false
+# Create the GitHub release when the PR is merged. cargo-dist keys off this tag.
+git_release_enable = true
+# Conventional-commit-driven CHANGELOG.
+changelog_update = true
+
+[[package]]
+name = "blackbox-cli"
+# Semver bump policy:
+#   fix:       -> patch (0.1.0 -> 0.1.1)
+#   feat:      -> minor (0.1.0 -> 0.2.0)
+#   BREAKING:  -> major (0.1.0 -> 1.0.0)
+semver_check = false

@@ -1,0 +1,40 @@
+name: Release-plz
+
+permissions:
+  contents: write
+  pull-requests: write
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-plz:
+    name: Release-plz
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'brentguistwite' }}
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # PAT required so the tag push from release-plz triggers the
+          # cargo-dist release workflow. GITHUB_TOKEN-authored events do not
+          # trigger downstream workflows. Create a fine-grained PAT with
+          # contents:write + pull-requests:write, save as RELEASE_PLZ_TOKEN.
+          # If RELEASE_PLZ_TOKEN is absent, falls back to GITHUB_TOKEN —
+          # the release PR still opens but tag pushes won't trigger cargo-dist
+          # automatically (manual re-run required).
+          token: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        uses: MarcoIeni/release-plz-action@v0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
