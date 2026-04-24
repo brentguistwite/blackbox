@@ -48,7 +48,7 @@ blackbox today
 | `standup` | Slack/Teams-friendly activity summary (`--week`, `--json`, `--csv`, `--summarize`) |
 | `heatmap` | GitHub-style contribution heatmap (`--weeks N`, default 52) |
 | `live` | Interactive TUI dashboard |
-| `doctor` | Run health checks and report status |
+| `doctor` | Run health checks: config, DB, daemon, gh CLI, shell hook, LLM key format, desktop notifications, AI tool detectors. Required failures exit non-zero; optional failures render as warnings. |
 | `install` | Register as OS service (launchd on macOS, systemd on Linux) |
 | `uninstall` | Remove OS service registration |
 | `hook <shell>` | Print shell hook script for zsh, bash, or fish |
@@ -117,7 +117,7 @@ Today - 3 repos, 12 commits, 4h 30m estimated  12-day streak
 
 **Heatmap:** `blackbox heatmap` -- GitHub-style contribution grid in your terminal. Shows commit frequency across all tracked repos as color-intensity blocks. Use `--weeks N` (1-260) to control the range. Displays total commits, active days, and longest streak.
 
-The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM.
+The `--summarize` flag is available on `today`, `week`, `month`, and `standup` to generate a natural-language summary of your activity using an LLM. Set `llm_api_key` in `~/.config/blackbox/config.toml`, or export `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` as environment variables. Without a key, AI features (`insights`, `perf-review`, `--summarize`) are unavailable but core tracking (`today`, `heatmap`, `prs`, etc.) works fine.
 
 **Repo deep dive:** `blackbox repo <path>` -- onefetch-inspired single-repo analysis showing language breakdown (via git2 tree walk), most-changed files, all-time estimated time, branch activity, and PR history. Works on any git repo; repos not yet tracked by blackbox show git-derived data with an "untracked" indicator.
 

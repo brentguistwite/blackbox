@@ -158,6 +158,68 @@ fn test_doctor_db_tables_exist() {
 }
 
 #[test]
+fn test_doctor_output_includes_new_checks() {
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    let bb_config = config_dir.join("blackbox");
+    std::fs::create_dir_all(&bb_config).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+
+    std::fs::write(
+        bb_config.join("config.toml"),
+        "watch_dirs = []\npoll_interval_secs = 300\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("doctor")
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("LLM API key"), "doctor should check LLM key, got:\n{}", stdout);
+    assert!(stdout.contains("Notifications"), "doctor should check notifications, got:\n{}", stdout);
+    assert!(stdout.contains("AI tool:"), "doctor should enumerate AI tools, got:\n{}", stdout);
+}
+
+#[test]
+fn test_doctor_optional_failures_do_not_fail_exit() {
+    // Config/watch_dirs/db all satisfied. Any remaining fails are Optional
+    // (daemon/gh/shell_hook/llm/notifications/ai_tools). Exit must be 0.
+    let tmp = TempDir::new().unwrap();
+    let config_dir = tmp.path().join("config");
+    let data_dir = tmp.path().join("data");
+    let bb_config = config_dir.join("blackbox");
+    let bb_data = data_dir.join("blackbox");
+    std::fs::create_dir_all(&bb_config).unwrap();
+    std::fs::create_dir_all(&bb_data).unwrap();
+
+    let watch_dir = tmp.path().join("repos");
+    std::fs::create_dir_all(&watch_dir).unwrap();
+
+    std::fs::write(
+        bb_config.join("config.toml"),
+        format!("watch_dirs = [\"{}\"]\npoll_interval_secs = 300\n", watch_dir.display()),
+    )
+    .unwrap();
+
+    // Pre-create DB so Required db check passes.
+    blackbox::db::open_db(&bb_data.join("blackbox.db")).unwrap();
+
+    Command::cargo_bin("blackbox")
+        .unwrap()
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
+        .arg("doctor")
+        .assert()
+        .code(0);
+}
+
+#[test]
 fn test_doctor_check_count() {
     // With valid config + no watch dirs, we should see at least 5 checks:
     // config, database, daemon, gh, shell hook

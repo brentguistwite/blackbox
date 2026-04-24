@@ -14,6 +14,24 @@ use crate::db;
 pub trait AiToolDetector {
     fn tool_name(&self) -> &'static str;
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]);
+    /// Cheap, filesystem-only check: does this tool appear installed on the host?
+    /// Default returns false. Override per detector to probe config/session dirs.
+    /// Must not spawn subprocesses or do network I/O.
+    fn is_installed(&self) -> bool {
+        false
+    }
+}
+
+/// Return default-configured instances of every known AI tool detector.
+/// Used by `doctor` to surface which tools are installed.
+pub fn all_detectors() -> Vec<Box<dyn AiToolDetector>> {
+    vec![
+        Box::new(ClaudeDetector),
+        Box::<CodexDetector>::default(),
+        Box::<CopilotDetector>::default(),
+        Box::<CursorDetector>::default(),
+        Box::<WindsurfDetector>::default(),
+    ]
 }
 
 /// Wraps existing Claude Code session tracking logic.
@@ -27,6 +45,12 @@ impl AiToolDetector for ClaudeDetector {
 
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
         claude_tracking::poll_claude_sessions(conn, watched_repos);
+    }
+
+    fn is_installed(&self) -> bool {
+        etcetera::home_dir()
+            .map(|h| h.join(".claude").join("projects").exists() || h.join(".claude").join("sessions").exists())
+            .unwrap_or(false)
     }
 }
 
@@ -203,6 +227,10 @@ impl AiToolDetector for CodexDetector {
         "codex"
     }
 
+    fn is_installed(&self) -> bool {
+        self.resolve_sessions_dir().is_some_and(|d| d.exists())
+    }
+
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
         let sessions_dir = match self.resolve_sessions_dir() {
             Some(d) if d.exists() => d,
@@ -358,6 +386,10 @@ impl AiToolDetector for CopilotDetector {
         "copilot-cli"
     }
 
+    fn is_installed(&self) -> bool {
+        self.resolve_session_state_dir().is_some_and(|d| d.exists())
+    }
+
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
         let state_dir = match self.resolve_session_state_dir() {
             Some(d) if d.exists() => d,
@@ -483,6 +515,10 @@ impl CursorDetector {
 impl AiToolDetector for CursorDetector {
     fn tool_name(&self) -> &'static str {
         "cursor"
+    }
+
+    fn is_installed(&self) -> bool {
+        self.resolve_workspace_dir().is_some_and(|d| d.exists())
     }
 
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {
@@ -726,6 +762,10 @@ impl WindsurfDetector {
 impl AiToolDetector for WindsurfDetector {
     fn tool_name(&self) -> &'static str {
         "windsurf"
+    }
+
+    fn is_installed(&self) -> bool {
+        self.resolve_workspace_dir().is_some_and(|d| d.exists())
     }
 
     fn poll(&self, conn: &Connection, watched_repos: &[PathBuf]) {

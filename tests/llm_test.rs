@@ -4,11 +4,60 @@ use blackbox::llm;
 #[test]
 fn test_build_llm_config_no_key_errors() {
     let config = Config::default();
-    let result = llm::build_llm_config(&config);
+    // Use DI variant with empty env reader so host-set ANTHROPIC_API_KEY
+    // doesn't flake this test.
+    let result = llm::build_llm_config_with_env(&config, |_| None);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("No LLM API key configured"), "got: {}", err);
     assert!(err.contains("llm_api_key"), "should show config hint, got: {}", err);
+}
+
+#[test]
+fn test_build_llm_config_env_var_anthropic_fallback() {
+    let config = Config::default();
+    let result = llm::build_llm_config_with_env(&config, |k| {
+        (k == "ANTHROPIC_API_KEY").then(|| "sk-ant-env-key-xyz".to_string())
+    });
+    let cfg = result.expect("env var should satisfy key requirement");
+    assert_eq!(cfg.provider, "anthropic");
+    assert_eq!(cfg.api_key, "sk-ant-env-key-xyz");
+}
+
+#[test]
+fn test_build_llm_config_env_var_openai_fallback() {
+    let config = Config {
+        llm_provider: Some("openai".to_string()),
+        ..Config::default()
+    };
+    let result = llm::build_llm_config_with_env(&config, |k| {
+        (k == "OPENAI_API_KEY").then(|| "sk-openai-env-key".to_string())
+    });
+    let cfg = result.expect("OPENAI_API_KEY should satisfy openai provider");
+    assert_eq!(cfg.api_key, "sk-openai-env-key");
+}
+
+#[test]
+fn test_build_llm_config_config_key_wins_over_env() {
+    let config = Config {
+        llm_api_key: Some("from-config".to_string()),
+        ..Config::default()
+    };
+    let cfg = llm::build_llm_config_with_env(&config, |_| Some("from-env".to_string())).unwrap();
+    assert_eq!(cfg.api_key, "from-config", "config should take precedence over env");
+}
+
+#[test]
+fn test_build_llm_config_error_mentions_env_var() {
+    let config = Config::default();
+    let err = llm::build_llm_config_with_env(&config, |_| None)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("ANTHROPIC_API_KEY"),
+        "error should mention env var fallback, got: {}",
+        err
+    );
 }
 
 #[test]

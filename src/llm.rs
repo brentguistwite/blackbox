@@ -28,21 +28,43 @@ Do not use filler, generic advice, evaluative praise, or recommendation language
 Report observable patterns only.";
 
 /// Build LlmConfig from Config, returning helpful error if API key missing.
+/// Falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY env vars when config key absent.
 pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
-    let api_key = config.llm_api_key.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "No LLM API key configured. Add to ~/.config/blackbox/config.toml:\n\n\
-             llm_api_key = \"your-api-key\"\n\
-             llm_provider = \"anthropic\"  # or \"openai\"\n\
-             llm_model = \"claude-sonnet-4-20250514\"  # optional"
-        )
-    })?;
+    build_llm_config_with_env(config, |k| std::env::var(k).ok())
+}
 
+/// Testable variant: env reader injected so tests avoid mutating process env.
+pub fn build_llm_config_with_env<F>(config: &Config, env: F) -> anyhow::Result<LlmConfig>
+where
+    F: Fn(&str) -> Option<String>,
+{
     let provider = config
         .llm_provider
         .as_deref()
         .unwrap_or("anthropic")
         .to_string();
+
+    let env_var = match provider.as_str() {
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        _ => None,
+    };
+
+    let api_key = config
+        .llm_api_key
+        .clone()
+        .or_else(|| env_var.and_then(|name| env(name)))
+        .ok_or_else(|| {
+            let env_hint = env_var
+                .map(|n| format!("Set {n} env var, or a", ))
+                .unwrap_or_else(|| "A".to_string());
+            anyhow::anyhow!(
+                "No LLM API key configured. {env_hint}dd to ~/.config/blackbox/config.toml:\n\n\
+                 llm_api_key = \"your-api-key\"\n\
+                 llm_provider = \"anthropic\"  # or \"openai\"\n\
+                 llm_model = \"claude-sonnet-4-20250514\"  # optional"
+            )
+        })?;
 
     let model = config.llm_model.clone().unwrap_or_else(|| match provider.as_str() {
         "anthropic" => "claude-sonnet-4-20250514".to_string(),
@@ -51,7 +73,7 @@ pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
 
     Ok(LlmConfig {
         provider,
-        api_key: api_key.clone(),
+        api_key,
         model,
         base_url: config.llm_base_url.clone(),
     })
