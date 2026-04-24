@@ -7,8 +7,10 @@
 [workspace]
 # Don't publish to crates.io — crate is not registered there.
 publish = false
-# Create the GitHub release when the PR is merged. cargo-dist keys off this tag.
-git_release_enable = true
+# Let cargo-dist create the GitHub release — release-plz + cargo-dist both
+# trying to create one = "release already exists" conflict. Tag push alone
+# triggers cargo-dist, which creates the release with artifacts attached.
+git_release_enable = false
 # Conventional-commit-driven CHANGELOG.
 changelog_update = true
 
