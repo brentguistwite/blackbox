@@ -1,0 +1,206 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0](https://github.com/brentguistwite/blackbox/releases/tag/v0.1.0) - 2026-04-24
+
+### Added
+
+- cargo-dist releases + homebrew tap
+- *(output)* render_standup shows date range header for lookback
+- wire standup --lookback to config + standup_range
+- *(cli)* add --lookback flag to standup (conflicts with --week)
+- *(query)* add standup_range(lookback_days) fn
+- *(config)* add standup_lookback_days field (default 0)
+- US-016-08 integration tests — multi-week trend + JSON CLI validation
+- US-016-04/05/06 add commit-quality CLI with trend + revert correlation
+- US-016-03 add DB storage for commit quality scores
+- US-016-02 add vague commit message detection
+- US-016-01 add commit message scoring algorithm
+- US-007 integration tests — CLI JSON stdout clean + 20 unit tests verified
+- US-006 config opt-out show_hints field w/ serde default + run_query gate
+- US-005 non-TTY hint suppression w/ CLI tests + doc comment
+- US-004 wire suggestions into run_query w/ stderr hints + TTY gate
+- US-003 render_suggestions() dim+italic hint renderer w/ tests
+- US-002 per-command suggestion ruleset w/ priority + cap
+- US-001 SuggestionContext + generate_suggestions() stub w/ guards
+- US-5+US-7+US-8+US-9 digest json/csv, output-file, notify, integration tests
+- US-6 `blackbox digest` CLI command + dispatch
+- US-3+US-4 WeeklyDigest struct + pretty formatter
+- US-2 warn on invalid week_start_day config value
+- US-1 digest_week_range + config week_start_day
+- US-12 CLI integration tests for perf-review (assert_cmd)
+- US-10 perf-review-specific API key error via .context()
+- US-09 sparse activity handling — integration tests + wire LLM call
+- US-05 compile_pr_summary() — dedup reviews by (repo, pr_number), keep highest-priority action
+- US-04 extract_commit_themes() — stopword-filtered word frequency from commit msgs
+- US-07 build_perf_review_context() + stub theme/PR extractors
+- US-06 PERF_REVIEW_SYSTEM_PROMPT + generate_perf_review()
+- US-03 aggregate_perf_review() + perf_review_period_label()
+- US-02 perf-review --from/--to date flags + resolve_perf_review_range()
+- US-01 quarter_range() — Q1-Q4 date range helper in query.rs
+- US-012 msg length trend — Mon vs Fri >10ch diff annotates prompt with shorter/longer trend
+- US-018 test — missing API key with populated DB exits non-zero, stderr contains llm_api_key + config.toml example
+- US-015 test — INSIGHTS_SYSTEM_PROMPT asserts quantitative instruction, no filler strings, real length
+- US-011 PR merge time enrichment — PrInfo gains created_at/merged_at, aggregate_insights_data computes hours for merged PRs
+- US-008 token budget — 8000-char limit trims per_repo further when prompt too long
+- US-007 config — insights_max_tokens + insights_window optional fields
+- US-017 test — empty DB + no API key short-circuits with 'No activity', exits 0
+- US-016 CLI integration test — blackbox insights --format json exits 0, emits valid JSON, no LLM key needed
+- US-013 tests — tighten aggregate_insights_data assertions with precise DOW indices and msg lengths
+- US-006 tests — InsightsData JSON serialization verification
+- US-005 CLI command blackbox insights — week/month window, pretty/json format
+- US-004 generate_insights — streaming LLM call with 429 handling, 60s timeout
+- US-003 INSIGHTS_SYSTEM_PROMPT — behavioral pattern analysis directive for LLM
+- US-002 build_insights_prompt — compact text prompt from InsightsData
+- US-001 InsightsData aggregation — per-DOW/hour commit stats, bugfix classification, per-repo breakdown
+- US-016 integration test — blackbox today shows multi-tool AI sessions
+- US-015 tests for process detection helpers (processes_matching, is_any_process_running)
+- US-009 tool field in output — JSON, pretty, CSV show tool name per session
+- US-007 WindsurfDetector impl + tests for workspace & process-only modes
+- US-006 CursorDetector impl + tests for workspace.json parsing
+- US-013 tests for CopilotDetector parsing, cwd skip, turns=None
+- US-012 tests for CodexDetector parsing, dedup, error handling
+- US-011 tests for AiToolDetector trait + ClaudeDetector
+- US-008 get_active_sessions_by_tool + get_active_sessions_all
+- US-005 CopilotDetector impl + serde_yaml dep
+- US-004 CodexDetector impl + tests
+- US-003 add processes_matching + is_any_process_running helpers
+- US-002 add tool param to insert_ai_session
+- US-001 AiToolDetector trait + ClaudeDetector + poll_all_ai_sessions
+- US-006 add maybe_send_daily_notification() trigger in poller
+- US-005 add daily_summary_for_notification() to query.rs
+- US-004 add notification_log table, notification_was_sent/record_notification_sent helpers
+- US-003 add notifications.rs wrapper (is_available, send_notification)
+- US-002 add notification config fields (notifications_enabled, notification_time)
+- US-001 add notify-rust dependency
+- US-010 richer status command with integration tests
+- US-CS-09 update README.md and AGENTS.md for context-switch feature
+- US-CS-08 context-switch line in standup output
+- US-CS-07 standalone blackbox focus subcommand
+- US-CS-06 include branch-switch counts in JSON output
+- US-CS-05 display context-switch signal in pretty output
+- US-CS-04 per-repo and cross-repo branch_switches aggregation
+- US-CS-03 add filter_noise_switches() to suppress noise switches
+- US-CS-02 add query_branch_switches() and BranchSwitchEvent struct
+- US-CS-01 populate source_branch on branch_switch events
+- US-007 update README.md and CLAUDE.md for streak-ambient feature
+- US-006 integration tests — today command streak in JSON + pretty output
+- US-005 config round-trip tests for streak_exclude_weekends
+- US-004 streak_days field in JSON output — always present, never omitted
+- US-003 streak display in pretty output — N-day streak (dimmed) on Today summary line
+- US-002 ActivitySummary.streak_days + run_query() wiring
+- US-001 query_streak() — compute commit streak from DB
+- *(heatmap)* US-008 validate --weeks flag (1-260) + range unit test
+- *(heatmap)* US-011 update README + AGENTS.md with heatmap command docs
+- *(heatmap)* US-010 empty state shows 'No commits recorded' message
+- *(heatmap)* US-009 integration test with commit data + block char assertion
+- *(heatmap)* US-007 static ANSI render mode for stdout/pipe compat
+- *(heatmap)* US-006 add HeatmapStats struct + stats() method
+- *(heatmap)* US-005 wire up blackbox heatmap CLI command
+- *(heatmap)* US-004 add ratatui heatmap widget renderer
+- *(heatmap)* US-003 add heatmap_range date helper
+- *(heatmap)* US-002 add HeatmapData struct + intensity calculation
+- *(heatmap)* US-001 add query_daily_commit_counts to query.rs
+- v2 enhancements — setup UX, TUI fixes, worktree support, adaptive time estimation
+- [US-018d] - Watcher worktree support — HEAD-only watching + stale cleanup
+- [US-018c] - Poller worktree support — RepoState + poll_repo attribution
+- [US-015b] - Setup wizard rework — individual repo selection + scan_dirs config
+- [US-018b] - DB dedup migration + INSERT OR IGNORE
+- [US-018a] - resolve_main_repo function + worktree path resolution
+- [US-017] - Improve shell hook step in setup wizard
+- [US-016] - Remove poll interval from setup wizard
+- [US-015] - discover_repos fast path + WalkDir .git file detection
+- [US-014] - `blackbox live` TUI dashboard - data panels
+- [US-013] - `blackbox live` TUI dashboard - core framework
+- [US-012] - Event-driven repo watching with notify crate
+- [US-011] - LLM summary mode (--summarize flag)
+- [US-010] - Implement `blackbox standup` command
+- [US-009] - Claude Code session tracking - output integration
+- [US-008] - Claude Code session tracking - schema and data collection
+- [US-007] - Integrate review activity into query and output
+- [US-006] - Review activity data collection via gh CLI
+- [US-005] - Interactive setup wizard (`blackbox setup`)
+- [US-004] - First-run detection and redirect to setup wizard
+- [US-003] - Auto-scan common directories for git repos
+- [US-002] - Implement `blackbox doctor` diagnostic command
+- [US-001] - Shell completion generation subcommand
+- *(06-01)* README + publish dry-run verified
+- *(06-01)* crate metadata for crates.io + MIT license
+- *(05-02)* shell hook generation + _notify-dir command
+- *(05-02)* gh CLI PR enrichment with graceful degradation
+- *(05-01)* wire --format flag to today/week/month commands
+- *(05-01)* add OutputFormat enum, render_json, render_csv
+- *(04-01)* wire install/uninstall/run-foreground CLI commands
+- *(04-01)* add service.rs with plist/unit generation + install/uninstall
+- *(03-02)* wire today/week/month CLI commands to query+output
+- *(03-02)* implement output renderer with colored terminal output
+- *(03-01)* implement query data layer with session-gap time estimation
+- *(02-02)* implement daemon start/stop/status + poll loop
+- *(02-01)* implement git_ops poll_repo with commit/branch/merge detection
+- *(02-01)* implement repo scanner, insert_activity, source_branch migration
+- *(01-02)* implement blackbox init command
+- *(01-01)* implement db module with WAL mode and migrations
+- *(01-01)* implement config module with XDG paths, load, validate
+- *(01-01)* scaffold Rust project with CLI skeleton, error types, test stubs
+
+### Fixed
+
+- segment AI session time by JSONL turn gaps — kill 24h open-session inflation
+- use notify-rust default features for Linux D-Bus support
+- enable zbus feature for notify-rust on Linux
+- codex detector schema to match real JSONL envelope format
+- cap stale presence + AI session intervals — lazy-close inflation
+- encode_project_path must replace all non-alphanumeric chars, not just slashes
+- cap idle AI session time — use last_active_at heartbeat instead of wall-clock
+- use dynamic dates in churn tests — hardcoded 2026-03 dates fell outside sliding window
+- relax is_tty test assertion — value depends on test runner capture mode
+- add missing streak_days field to context-switch test structs
+- use unicode icons for review actions (✓ ✗ 💬)
+- dedup reviews by PR in pretty output + fix total_reviews count
+- filter commits by local git user identity
+- global time estimation merges cross-repo intervals to avoid double-counting
+
+### Other
+
+- add release-plz for automated version bumps
+- integration test for standup_lookback_days config
+- add digest to README, feature guide, plan AGENTS.md rename
+- US-016-09 add commit-quality to README + AGENTS.md
+- US-008 update README + AGENTS w/ hints feature, show_hints config, suggestions.rs in arch tree
+- US-008 update README + AGENTS w/ hints feature, show_hints config, suggestions.rs in arch tree
+- US-13 add perf-review to AGENTS.md architecture tree + test list
+- US-13 add perf-review to README commands + AGENTS architecture tree
+- US-019 — add insights command to README + CLAUDE.md architecture tree
+- US-018 update README + AGENTS.md for multi-AI tracking feature
+- US-018 update README + CLAUDE.md for multi-AI tracking feature
+- US-011 update README.md and AGENTS.md for os-notifications
+- US-010 add notification config round-trip integration test
+- US-009 add maybe_send_daily_notification() unit tests
+- US-008 add daily_summary_for_notification() unit tests
+- US-012 update README and AGENTS for richer status command
+- 05-code-churn-rate — code churn tracking and churn command
+- 04-pr-cycle-time — PR cycle time tracking and prs command
+- 11-json-tty-detection — --json/--csv flags, TTY auto-detection, BLACKBOX_FORMAT override
+- 17-streak-ambient — streak tracking in today output
+- 18-repo-deep-dive — single-repo deep dive command (fix estimate_time_v2 5-arg call)
+- 03-work-rhythm-insights — commit patterns, session stats, burst detection
+- 02-contribution-heatmap — terminal activity heatmap with streaks
+- cleanup docs
+- add agents.md file
+- *(06-01)* rename crate to blackbox-cli + update repo URL
+- *(03-02)* add failing tests for output renderer
+- *(03-01)* add failing tests for query data layer
+- *(02-02)* add e2e daemon records commit integration test
+- *(02-02)* add failing tests for daemon start/stop/status
+- *(02-01)* add failing tests for git_ops poll_repo
+- *(02-01)* add failing tests for repo scanner, insert_activity, source_branch migration
+- *(01-02)* add e2e smoke test for init -> config -> db pipeline
+- *(01-02)* add failing tests for blackbox init command
+- *(01-01)* add failing db tests (RED)
+- *(01-01)* add failing config tests (RED)
