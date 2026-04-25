@@ -213,8 +213,11 @@ fn test_doctor_check_count() {
         .unwrap();
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Count check lines (✓ or ✗)
-    let check_count = stdout.lines().filter(|l| l.contains('✓') || l.contains('✗')).count();
+    // Count check lines: ✓ pass, ✗ required-fail, ! optional-fail
+    let check_count = stdout
+        .lines()
+        .filter(|l| l.contains('✓') || l.contains('✗') || l.contains('!'))
+        .count();
     assert!(
         check_count >= 5,
         "should have at least 5 checks, got {}: {}",
