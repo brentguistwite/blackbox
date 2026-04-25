@@ -27,6 +27,14 @@ Do not use headers, sub-lists, or section breaks. \
 Do not use filler, generic advice, evaluative praise, or recommendation language. \
 Report observable patterns only.";
 
+/// Providers the runtime can actually talk to. Doctor and config validation
+/// share this list so a provider doctor greenlights won't fail at first API call.
+pub const SUPPORTED_PROVIDERS: &[&str] = &["anthropic", "openai"];
+
+pub fn is_supported_provider(provider: &str) -> bool {
+    SUPPORTED_PROVIDERS.contains(&provider)
+}
+
 /// Build LlmConfig from Config, returning helpful error if API key missing.
 /// Falls back to ANTHROPIC_API_KEY / OPENAI_API_KEY env vars when config key absent.
 pub fn build_llm_config(config: &Config) -> anyhow::Result<LlmConfig> {
@@ -38,11 +46,31 @@ pub fn build_llm_config_with_env<F>(config: &Config, env: F) -> anyhow::Result<L
 where
     F: Fn(&str) -> Option<String>,
 {
-    let provider = config
-        .llm_provider
-        .as_deref()
-        .unwrap_or("anthropic")
-        .to_string();
+    // Provider resolution:
+    //   1. If config.llm_provider is set explicitly, honor it (validated below).
+    //   2. Otherwise, auto-detect from whichever supported API-key env var is set.
+    //      Tie-breaker when both set: anthropic (matches existing default).
+    //   3. Fall back to "anthropic" when no signal at all — this path errors later
+    //      with a clear "no key configured" message.
+    let provider = match config.llm_provider.as_deref() {
+        Some(p) => p.to_string(),
+        None => {
+            if env("ANTHROPIC_API_KEY").is_some() {
+                "anthropic".to_string()
+            } else if env("OPENAI_API_KEY").is_some() {
+                "openai".to_string()
+            } else {
+                "anthropic".to_string()
+            }
+        }
+    };
+
+    if !is_supported_provider(&provider) {
+        bail!(
+            "Unsupported llm_provider '{provider}'. Supported: {}",
+            SUPPORTED_PROVIDERS.join(", ")
+        );
+    }
 
     let env_var = match provider.as_str() {
         "anthropic" => Some("ANTHROPIC_API_KEY"),

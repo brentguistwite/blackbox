@@ -48,6 +48,62 @@ fn test_build_llm_config_config_key_wins_over_env() {
 }
 
 #[test]
+fn test_build_llm_config_auto_detects_openai_from_env_when_provider_unset() {
+    // Codex finding: OPENAI_API_KEY alone, no llm_provider, must work end-to-end.
+    let config = Config::default(); // provider None, no api_key
+    let cfg = llm::build_llm_config_with_env(&config, |k| match k {
+        "OPENAI_API_KEY" => Some("sk-openai-only".to_string()),
+        _ => None,
+    })
+    .expect("OPENAI_API_KEY alone should be enough to configure LLM");
+    assert_eq!(cfg.provider, "openai", "should auto-detect openai provider");
+    assert_eq!(cfg.api_key, "sk-openai-only");
+}
+
+#[test]
+fn test_build_llm_config_auto_detects_anthropic_from_env_when_provider_unset() {
+    let config = Config::default();
+    let cfg = llm::build_llm_config_with_env(&config, |k| match k {
+        "ANTHROPIC_API_KEY" => Some("sk-ant-only".to_string()),
+        _ => None,
+    })
+    .expect("ANTHROPIC_API_KEY alone should configure LLM");
+    assert_eq!(cfg.provider, "anthropic");
+    assert_eq!(cfg.api_key, "sk-ant-only");
+}
+
+#[test]
+fn test_build_llm_config_auto_detect_both_set_prefers_anthropic() {
+    // Tie-breaker: anthropic is the default in existing config semantics.
+    let config = Config::default();
+    let cfg = llm::build_llm_config_with_env(&config, |k| match k {
+        "ANTHROPIC_API_KEY" => Some("sk-ant-both".to_string()),
+        "OPENAI_API_KEY" => Some("sk-openai-both".to_string()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(cfg.provider, "anthropic", "when both env vars set, prefer anthropic default");
+    assert_eq!(cfg.api_key, "sk-ant-both");
+}
+
+#[test]
+fn test_build_llm_config_explicit_provider_overrides_auto_detect() {
+    // If user explicitly set llm_provider = "openai", don't grab ANTHROPIC_API_KEY.
+    let config = Config {
+        llm_provider: Some("openai".to_string()),
+        ..Config::default()
+    };
+    let cfg = llm::build_llm_config_with_env(&config, |k| match k {
+        "ANTHROPIC_API_KEY" => Some("sk-ant-wrong".to_string()),
+        "OPENAI_API_KEY" => Some("sk-openai-right".to_string()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(cfg.provider, "openai");
+    assert_eq!(cfg.api_key, "sk-openai-right");
+}
+
+#[test]
 fn test_build_llm_config_error_mentions_env_var() {
     let config = Config::default();
     let err = llm::build_llm_config_with_env(&config, |_| None)
@@ -151,6 +207,32 @@ fn insights_system_prompt_under_200_words() {
 #[test]
 fn insights_system_prompt_distinct_from_summarize() {
     assert_ne!(llm::INSIGHTS_SYSTEM_PROMPT, llm::SYSTEM_PROMPT);
+}
+
+#[test]
+fn test_build_llm_config_rejects_unsupported_provider_early() {
+    // Regression: unsupported provider must fail at build time, not at
+    // call_llm_streaming. Otherwise doctor/runtime diverge.
+    let config = Config {
+        llm_api_key: Some("whatever-key".to_string()),
+        llm_provider: Some("gemini".to_string()),
+        ..Config::default()
+    };
+    let err = llm::build_llm_config_with_env(&config, |_| None)
+        .unwrap_err()
+        .to_string();
+    assert!(err.to_lowercase().contains("unsupported"));
+    assert!(err.contains("gemini"));
+    assert!(err.contains("anthropic") && err.contains("openai"),
+        "error should list supported providers, got: {}", err);
+}
+
+#[test]
+fn test_is_supported_provider_matches_runtime() {
+    assert!(llm::is_supported_provider("anthropic"));
+    assert!(llm::is_supported_provider("openai"));
+    assert!(!llm::is_supported_provider("gemini"));
+    assert!(!llm::is_supported_provider(""));
 }
 
 #[test]

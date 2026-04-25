@@ -184,7 +184,7 @@ pub fn check_daemon() -> CheckResult {
             return CheckResult {
                 name: "Daemon".into(),
                 passed: false,
-                severity: Severity::Optional,
+                severity: Severity::Required,
                 detail: format!("Cannot determine data dir: {e}"),
                 suggestion: None,
             };
@@ -195,7 +195,7 @@ pub fn check_daemon() -> CheckResult {
         Ok(Some(pid)) => CheckResult {
             name: "Daemon".into(),
             passed: true,
-            severity: Severity::Optional,
+            severity: Severity::Required,
             detail: format!("Running (PID {pid})"),
             suggestion: None,
         },
@@ -206,24 +206,26 @@ pub fn check_daemon() -> CheckResult {
                     return CheckResult {
                         name: "Daemon".into(),
                         passed: true,
-                        severity: Severity::Optional,
+                        severity: Severity::Required,
                         detail: format!("Running via launchd (PID {pid})"),
                         suggestion: None,
                     };
                 } else {
+                    // Loaded but no active PID → service registered but not polling.
+                    // No data is being collected. Fail so `doctor` surfaces it.
                     return CheckResult {
                         name: "Daemon".into(),
-                        passed: true,
-                        severity: Severity::Optional,
-                        detail: "Loaded in launchd (not yet started)".into(),
-                        suggestion: None,
+                        passed: false,
+                        severity: Severity::Required,
+                        detail: "Loaded in launchd but not running (no polling)".into(),
+                        suggestion: Some("Run `launchctl kickstart gui/$(id -u)/com.blackbox.agent` or `blackbox start`".into()),
                     };
                 }
             }
             CheckResult {
                 name: "Daemon".into(),
                 passed: false,
-                severity: Severity::Optional,
+                severity: Severity::Required,
                 detail: "Not running".into(),
                 suggestion: Some("Run `blackbox start` to start daemon".into()),
             }
@@ -231,7 +233,7 @@ pub fn check_daemon() -> CheckResult {
         Err(e) => CheckResult {
             name: "Daemon".into(),
             passed: false,
-            severity: Severity::Optional,
+            severity: Severity::Required,
             detail: format!("Error checking: {e}"),
             suggestion: Some("Check PID file permissions".into()),
         },
@@ -335,7 +337,22 @@ pub fn check_llm_with_env<F>(config: &crate::config::Config, env: F) -> CheckRes
 where
     F: Fn(&str) -> Option<String>,
 {
-    let provider = config.llm_provider.as_deref().unwrap_or("anthropic");
+    // Mirror build_llm_config: auto-detect provider from env vars when config.llm_provider is unset.
+    // Without this, `OPENAI_API_KEY` + no explicit provider would show "Configured (anthropic, ...)"
+    // and runtime would still try to auth anthropic with an openai key.
+    let provider_owned = match config.llm_provider.as_deref() {
+        Some(p) => p.to_string(),
+        None => {
+            if env("ANTHROPIC_API_KEY").is_some() {
+                "anthropic".to_string()
+            } else if env("OPENAI_API_KEY").is_some() {
+                "openai".to_string()
+            } else {
+                "anthropic".to_string()
+            }
+        }
+    };
+    let provider = provider_owned.as_str();
 
     // Precedence: config.llm_api_key > env var (ANTHROPIC_API_KEY / OPENAI_API_KEY).
     // Whitespace-only config key counts as "present but broken" — don't silently fall
@@ -365,18 +382,23 @@ where
         },
     };
 
+    if !crate::llm::is_supported_provider(provider) {
+        return CheckResult {
+            name: "LLM API key".into(),
+            passed: false,
+            severity: Severity::Optional,
+            detail: format!(
+                "Unsupported llm_provider '{provider}'. Supported: {}",
+                crate::llm::SUPPORTED_PROVIDERS.join(", ")
+            ),
+            suggestion: Some("Set llm_provider to 'anthropic' or 'openai' in config.toml".into()),
+        };
+    }
+
     let (expected_prefix, min_len) = match provider {
         "anthropic" => ("sk-ant-", 40),
         "openai" => ("sk-", 20),
-        _ => {
-            return CheckResult {
-                name: "LLM API key".into(),
-                passed: true,
-                severity: Severity::Optional,
-                detail: format!("Present ({provider}, {source}, {} chars — format unchecked)", key.len()),
-                suggestion: None,
-            };
-        }
+        _ => unreachable!("is_supported_provider guards this match"),
     };
 
     if !key.starts_with(expected_prefix) || key.len() < min_len {
@@ -652,11 +674,26 @@ mod tests {
     }
 
     #[test]
-    fn check_llm_unknown_provider_passes_with_warning() {
+    fn check_llm_unknown_provider_fails() {
+        // Regression: runtime call_llm_streaming rejects unknown providers.
+        // Doctor must fail early so it cannot greenlight a config the runtime
+        // will reject on first API call.
         let cfg = cfg_with_llm(Some("whatever-format-key-12345"), Some("weird-provider"));
         let r = check_llm(&cfg);
-        assert!(r.passed, "unknown provider should not fail format check");
+        assert!(!r.passed, "unknown provider must fail doctor check");
+        assert!(r.detail.to_lowercase().contains("unsupported"));
         assert!(r.detail.contains("weird-provider"));
+    }
+
+    #[test]
+    fn check_llm_shares_provider_list_with_runtime() {
+        // Every provider doctor accepts must be one runtime supports.
+        for p in crate::llm::SUPPORTED_PROVIDERS {
+            assert!(
+                crate::llm::is_supported_provider(p),
+                "SUPPORTED_PROVIDERS must all pass is_supported_provider"
+            );
+        }
     }
 
     #[test]
@@ -734,11 +771,37 @@ mod tests {
     }
 
     #[test]
+    fn check_llm_auto_detects_openai_from_env() {
+        // No explicit provider, only OPENAI_API_KEY set.
+        // Must not mis-report as anthropic.
+        let cfg = cfg_with_llm(None, None);
+        let env = |k: &str| {
+            (k == "OPENAI_API_KEY").then(|| "sk-proj-validkeylongenough12345".to_string())
+        };
+        let r = check_llm_with_env(&cfg, env);
+        assert!(r.passed, "OPENAI_API_KEY alone should pass, got: {}", r.detail);
+        assert!(r.detail.contains("openai"), "should detect openai provider, got: {}", r.detail);
+    }
+
+    #[test]
     fn check_llm_no_key_no_env_is_optional_pass() {
         let cfg = cfg_with_llm(None, Some("anthropic"));
         let r = check_llm_with_env(&cfg, |_| None);
         assert!(r.passed);
         assert_eq!(r.severity, Severity::Optional);
+    }
+
+    #[test]
+    fn check_daemon_is_required_severity() {
+        // Regression guard: daemon-down means silent data loss for a
+        // tracker that depends on background polling. Must stay Required
+        // so `doctor` surfaces it as a blocking failure.
+        let r = check_daemon();
+        assert_eq!(
+            r.severity,
+            Severity::Required,
+            "check_daemon severity must remain Required to catch stopped daemons"
+        );
     }
 
     #[test]
