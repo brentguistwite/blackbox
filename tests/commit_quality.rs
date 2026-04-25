@@ -432,18 +432,21 @@ fn cli_commit_quality_exits_0_empty_db() {
     let tmp = tempfile::tempdir().unwrap();
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::create_dir_all(&data_dir).unwrap();
+    let bb_config = config_dir.join("blackbox");
+    let bb_data = data_dir.join("blackbox");
+    std::fs::create_dir_all(&bb_config).unwrap();
+    std::fs::create_dir_all(&bb_data).unwrap();
     std::fs::write(
-        config_dir.join("config.toml"),
-        "watch_dirs = [\"/tmp\"]\npoll_interval = 30\n",
+        bb_config.join("config.toml"),
+        "watch_dirs = [\"/tmp\"]\npoll_interval_secs = 30\n",
     ).unwrap();
+    blackbox::db::open_db(&bb_data.join("blackbox.db")).unwrap();
 
     assert_cmd::Command::cargo_bin("blackbox")
         .unwrap()
         .arg("commit-quality")
-        .env("BLACKBOX_CONFIG_DIR", &config_dir)
-        .env("BLACKBOX_DATA_DIR", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
         .assert()
         .success();
 }
@@ -453,18 +456,21 @@ fn cli_commit_quality_json_format_valid() {
     let tmp = tempfile::tempdir().unwrap();
     let config_dir = tmp.path().join("config");
     let data_dir = tmp.path().join("data");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::create_dir_all(&data_dir).unwrap();
+    let bb_config = config_dir.join("blackbox");
+    let bb_data = data_dir.join("blackbox");
+    std::fs::create_dir_all(&bb_config).unwrap();
+    std::fs::create_dir_all(&bb_data).unwrap();
     std::fs::write(
-        config_dir.join("config.toml"),
-        "watch_dirs = [\"/tmp\"]\npoll_interval = 30\n",
+        bb_config.join("config.toml"),
+        "watch_dirs = [\"/tmp\"]\npoll_interval_secs = 30\n",
     ).unwrap();
+    blackbox::db::open_db(&bb_data.join("blackbox.db")).unwrap();
 
     let output = assert_cmd::Command::cargo_bin("blackbox")
         .unwrap()
         .args(["commit-quality", "--weeks", "4", "--format", "json"])
-        .env("BLACKBOX_CONFIG_DIR", &config_dir)
-        .env("BLACKBOX_DATA_DIR", &data_dir)
+        .env("XDG_CONFIG_HOME", &config_dir)
+        .env("XDG_DATA_HOME", &data_dir)
         .output()
         .unwrap();
 
