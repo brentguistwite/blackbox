@@ -35,20 +35,51 @@ fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoStat
     });
 }
 
-/// Poll all repos for git activity.
+/// Outcome of a single poll cycle. Used to write health metrics so `doctor`
+/// can detect silent data loss (every repo failing while daemon stays alive).
+#[derive(Debug, Default, Clone)]
+pub struct PollMetrics {
+    pub failed_paths: Vec<PathBuf>,
+}
+
+/// Maximum number of failed paths to persist as a sample. Bounds the
+/// daemon_state row size; the failed *count* is always exact.
+const FAILED_SAMPLE_LIMIT: usize = 5;
+
+/// Persist poll-cycle health metrics to daemon_state.
+/// Always writes both keys (count + sample) so a recovery clears stale failures.
+pub fn write_poll_metrics(conn: &Connection, metrics: &PollMetrics) -> anyhow::Result<()> {
+    let count = metrics.failed_paths.len();
+    db::set_daemon_state(conn, "last_poll_repos_failed", &count.to_string())?;
+    let sample = metrics
+        .failed_paths
+        .iter()
+        .take(FAILED_SAMPLE_LIMIT)
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    db::set_daemon_state(conn, "last_poll_failed_sample", &sample)?;
+    Ok(())
+}
+
+/// Poll all repos for git activity. Returns metrics so callers can write
+/// poll health to daemon_state.
 fn poll_all_repos(
     repos: &[PathBuf],
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
-) {
+) -> PollMetrics {
+    let mut failed_paths = Vec::new();
     for repo_path in repos {
         ensure_state(repo_path, repo_states);
         let state = repo_states.get_mut(repo_path).unwrap();
         let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
         if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn) {
             log::warn!("Error polling {}: {}", repo_path.display(), e);
+            failed_paths.push(repo_path.clone());
         }
     }
+    PollMetrics { failed_paths }
 }
 
 /// Remove stale worktree entries from repo_states.
@@ -88,7 +119,10 @@ fn full_scan(
     conn: &Connection,
 ) -> Vec<PathBuf> {
     let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
-    poll_all_repos(&repos, repo_states, conn);
+    let metrics = poll_all_repos(&repos, repo_states, conn);
+    if let Err(e) = write_poll_metrics(conn, &metrics) {
+        log::warn!("Failed to write poll metrics: {}", e);
+    }
     enrichment::collect_reviews(&repos, conn);
     enrichment::collect_pr_snapshots(&repos, conn);
     ai_tracking::poll_all_ai_sessions(conn, &repos);

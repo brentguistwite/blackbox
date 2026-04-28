@@ -475,6 +475,183 @@ pub fn check_ai_tools() -> Vec<CheckResult> {
         .collect()
 }
 
+/// Inputs required to judge poll health. Pulled out as a struct so
+/// `evaluate_poll_health` is pure (testable without DB / time mocking).
+pub struct PollHealthInput {
+    pub last_poll_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub repos_watched: usize,
+    /// `None` = daemon never wrote this metric (predates the metric).
+    /// `Some(0)` = daemon wrote it and reported zero failures.
+    /// Treating these the same hides "running daemon is too old to surface failures".
+    pub failed_count: Option<usize>,
+    pub failed_sample: Vec<String>,
+    pub poll_interval_secs: u64,
+    pub now: chrono::DateTime<chrono::Utc>,
+}
+
+/// "Stalled" threshold = 3× the configured poll interval. Gives one full poll
+/// cycle of grace plus buffer for a slow git repo or a launchd restart.
+const STALLED_INTERVAL_MULTIPLIER: i64 = 3;
+
+/// Decide poll health from raw inputs. Pure function — no DB or clock.
+pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
+    let last = match input.last_poll_at {
+        Some(t) => t,
+        None => {
+            return CheckResult {
+                name: "Poll health".into(),
+                passed: true,
+                severity: Severity::Optional,
+                detail: "No poll cycle completed yet — daemon may still be starting".into(),
+                suggestion: None,
+            };
+        }
+    };
+
+    // Stalled? Daemon process may be alive but its poll loop is not advancing
+    // (deadlock, hung syscall, etc.). Required because no data is being recorded.
+    let elapsed_secs = (input.now - last).num_seconds().max(0) as u64;
+    let stall_threshold_secs = input.poll_interval_secs.saturating_mul(STALLED_INTERVAL_MULTIPLIER as u64);
+    if elapsed_secs > stall_threshold_secs {
+        let elapsed_min = elapsed_secs / 60;
+        return CheckResult {
+            name: "Poll health".into(),
+            passed: false,
+            severity: Severity::Required,
+            detail: format!("Daemon poll loop stalled — last poll {elapsed_min}m ago (threshold {}m)",
+                stall_threshold_secs / 60),
+            suggestion: Some("Restart the daemon: `blackbox stop && blackbox start`".into()),
+        };
+    }
+
+    let elapsed_min = elapsed_secs / 60;
+
+    // Daemon ran a poll but did not write the failure metric → it's running an
+    // older binary that doesn't surface this signal. Treat as Optional pass with
+    // a "restart to enable" hint, NOT as healthy.
+    let failed = match input.failed_count {
+        Some(n) => n,
+        None => {
+            return CheckResult {
+                name: "Poll health".into(),
+                passed: true,
+                severity: Severity::Optional,
+                detail: format!(
+                    "Running daemon predates poll-failure metrics (last poll {elapsed_min}m ago)"
+                ),
+                suggestion: Some("Restart daemon to enable per-cycle failure reporting".into()),
+            };
+        }
+    };
+
+    // Every repo failing while daemon stays alive = silent data loss
+    // (this is exactly the TCC permission scenario).
+    let total = input.repos_watched.max(failed);
+    if failed > 0 && failed == total && total > 0 {
+        let sample = if input.failed_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" Sample: {}", input.failed_sample.join(", "))
+        };
+        return CheckResult {
+            name: "Poll health".into(),
+            passed: false,
+            severity: Severity::Required,
+            detail: format!("All {total} watched repos failed to poll on last cycle.{sample}"),
+            suggestion: Some(
+                "Check daemon log: `tail ~/.local/share/blackbox/blackbox.err.log`. \
+                 Common cause on macOS: TCC denying file access. Restart daemon to retry."
+                    .into(),
+            ),
+        };
+    }
+
+    if failed > 0 {
+        let sample = if input.failed_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", input.failed_sample.join(", "))
+        };
+        return CheckResult {
+            name: "Poll health".into(),
+            passed: false,
+            severity: Severity::Optional,
+            detail: format!("{failed} of {total} repos failing to poll{sample}"),
+            suggestion: Some("Check daemon log for per-repo errors.".into()),
+        };
+    }
+
+    CheckResult {
+        name: "Poll health".into(),
+        passed: true,
+        severity: Severity::Required,
+        detail: format!("All {total} repos polled successfully (last poll {elapsed_min}m ago)"),
+        suggestion: None,
+    }
+}
+
+/// Read poll metrics from the DB and evaluate health.
+pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
+    let dir = match crate::config::data_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return CheckResult {
+                name: "Poll health".into(),
+                passed: false,
+                severity: Severity::Optional,
+                detail: format!("Cannot determine data dir: {e}"),
+                suggestion: None,
+            };
+        }
+    };
+    let db_path = dir.join("blackbox.db");
+    let conn = match crate::db::open_db(&db_path) {
+        Ok(c) => c,
+        Err(_) => {
+            return CheckResult {
+                name: "Poll health".into(),
+                passed: true,
+                severity: Severity::Optional,
+                detail: "DB unavailable — skipping poll health check".into(),
+                suggestion: None,
+            };
+        }
+    };
+
+    let last_poll_at = crate::db::get_daemon_state(&conn, "last_poll_at")
+        .ok()
+        .flatten()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let repos_watched = crate::db::get_daemon_state(&conn, "repos_watched")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let failed_count = crate::db::get_daemon_state(&conn, "last_poll_repos_failed")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<usize>().ok());
+
+    let failed_sample: Vec<String> = crate::db::get_daemon_state(&conn, "last_poll_failed_sample")
+        .ok()
+        .flatten()
+        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+
+    let input = PollHealthInput {
+        last_poll_at,
+        repos_watched,
+        failed_count,
+        failed_sample,
+        poll_interval_secs: config.poll_interval_secs,
+        now: chrono::Utc::now(),
+    };
+    evaluate_poll_health(&input)
+}
+
 /// Parse launchctl list output to determine if service is loaded.
 /// Returns Some(pid) if running with a PID, Some(0) if loaded but no PID, None if not found.
 #[cfg(target_os = "macos")]
@@ -538,6 +715,9 @@ pub fn run_doctor() -> anyhow::Result<bool> {
 
     results.push(check_database());
     results.push(check_daemon());
+    if let Some(ref cfg) = loaded_config {
+        results.push(check_poll_health(cfg));
+    }
     results.push(check_gh_cli());
     results.push(check_shell_hook());
 
@@ -789,6 +969,132 @@ mod tests {
         let r = check_llm_with_env(&cfg, |_| None);
         assert!(r.passed);
         assert_eq!(r.severity, Severity::Optional);
+    }
+
+    fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+    }
+
+    #[test]
+    fn poll_health_no_poll_yet_passes_optional() {
+        let input = PollHealthInput {
+            last_poll_at: None,
+            repos_watched: 0,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(r.passed);
+        assert_eq!(r.severity, Severity::Optional);
+        let d = r.detail.to_lowercase();
+        assert!(d.contains("no poll") || d.contains("not yet") || d.contains("starting"),
+            "detail should signal pre-first-poll state, got: {}", r.detail);
+    }
+
+    #[test]
+    fn poll_health_stalled_is_required_fail() {
+        // last poll 2 hours ago, poll_interval = 30 min → 4× interval → stalled
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T13:00:00Z")),
+            repos_watched: 5,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Required);
+        assert!(r.detail.to_lowercase().contains("stalled"));
+    }
+
+    #[test]
+    fn poll_health_all_repos_failing_is_required_fail() {
+        // Daemon alive (recent poll) but every repo errored — silent data loss.
+        // This is the exact scenario the user hit (TCC denying file reads).
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:50:00Z")),
+            repos_watched: 22,
+            failed_count: Some(22),
+            failed_sample: vec!["/Users/me/code/a".into(), "/Users/me/code/b".into()],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Required);
+        assert!(r.detail.contains("22"));
+        assert!(r.suggestion.is_some());
+    }
+
+    #[test]
+    fn poll_health_partial_failures_is_optional_warn() {
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:50:00Z")),
+            repos_watched: 22,
+            failed_count: Some(3),
+            failed_sample: vec!["/repo/a".into(), "/repo/b".into(), "/repo/c".into()],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Optional);
+        assert!(r.detail.contains("3"));
+        assert!(r.detail.contains("22"));
+    }
+
+    #[test]
+    fn poll_health_all_passing_is_pass() {
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 5,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(r.passed);
+        assert_eq!(r.severity, Severity::Required);
+        assert!(r.detail.contains("5"));
+    }
+
+    #[test]
+    fn poll_health_legacy_daemon_without_metrics_is_optional_pass() {
+        // Daemon ran a poll but never wrote the failed-count key (predates this PR).
+        // Must NOT show as healthy — that would silently mask the bug we just fixed.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 22,
+            failed_count: None,
+            failed_sample: vec![],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(r.passed, "absent metric should not block exit");
+        assert_eq!(r.severity, Severity::Optional, "should be Optional, not Required green");
+        assert!(r.detail.to_lowercase().contains("predates")
+            || r.detail.to_lowercase().contains("older"));
+        assert!(r.suggestion.is_some(), "should suggest a restart");
+    }
+
+    #[test]
+    fn poll_health_sample_paths_appear_in_suggestion() {
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 4,
+            failed_count: Some(4),
+            failed_sample: vec!["/repo/alpha".into()],
+            poll_interval_secs: 1800,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        let blob = format!("{} {}", r.detail, r.suggestion.unwrap_or_default());
+        assert!(blob.contains("/repo/alpha"), "sample paths should surface to user");
     }
 
     #[test]

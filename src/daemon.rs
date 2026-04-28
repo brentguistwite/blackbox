@@ -18,6 +18,8 @@ pub struct DaemonStatus {
     pub uptime_secs: Option<u64>,
     pub last_poll_at: Option<chrono::DateTime<chrono::Utc>>,
     pub repos_watched: Option<u64>,
+    pub repos_failed_last_poll: Option<u64>,
+    pub failed_sample: Vec<String>,
     pub db_size_bytes: Option<u64>,
     pub events_today: Option<u64>,
     pub health: HealthIndicator,
@@ -160,28 +162,43 @@ pub fn get_daemon_status(data_dir: &Path) -> anyhow::Result<DaemonStatus> {
     let db_path = data_dir.join("blackbox.db");
     let db_size_bytes = std::fs::metadata(&db_path).ok().map(|m| m.len());
 
-    let (last_poll_at, repos_watched, events_today) = if db_path.exists() {
-        match crate::db::open_db(&db_path) {
-            Ok(conn) => {
-                let lp = crate::db::get_daemon_state(&conn, "last_poll_at")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
-                    .map(|dt| dt.with_timezone(&chrono::Utc));
-                let rw = crate::db::get_daemon_state(&conn, "repos_watched")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse::<u64>().ok());
-                let et = crate::db::count_events_today(&conn).ok();
-                (lp, rw, et)
+    let (last_poll_at, repos_watched, repos_failed_last_poll, failed_sample, events_today) =
+        if db_path.exists() {
+            match crate::db::open_db(&db_path) {
+                Ok(conn) => {
+                    let lp = crate::db::get_daemon_state(&conn, "last_poll_at")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                        .map(|dt| dt.with_timezone(&chrono::Utc));
+                    let rw = crate::db::get_daemon_state(&conn, "repos_watched")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let rf = crate::db::get_daemon_state(&conn, "last_poll_repos_failed")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<u64>().ok());
+                    let fs: Vec<String> = crate::db::get_daemon_state(&conn, "last_poll_failed_sample")
+                        .ok()
+                        .flatten()
+                        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+                        .unwrap_or_default();
+                    let et = crate::db::count_events_today(&conn).ok();
+                    (lp, rw, rf, fs, et)
+                }
+                Err(_) => (None, None, None, Vec::new(), None),
             }
-            Err(_) => (None, None, None),
-        }
-    } else {
-        (None, None, None)
-    };
+        } else {
+            (None, None, None, Vec::new(), None)
+        };
 
-    let health = compute_health(running, last_poll_at);
+    let health = compute_health(
+        running,
+        last_poll_at,
+        repos_watched.unwrap_or(0),
+        repos_failed_last_poll.unwrap_or(0),
+    );
 
     Ok(DaemonStatus {
         running,
@@ -189,6 +206,8 @@ pub fn get_daemon_status(data_dir: &Path) -> anyhow::Result<DaemonStatus> {
         uptime_secs,
         last_poll_at,
         repos_watched,
+        repos_failed_last_poll,
+        failed_sample,
         db_size_bytes,
         events_today,
         health,
@@ -198,11 +217,18 @@ pub fn get_daemon_status(data_dir: &Path) -> anyhow::Result<DaemonStatus> {
 fn compute_health(
     running: bool,
     last_poll_at: Option<chrono::DateTime<chrono::Utc>>,
+    repos_watched: u64,
+    repos_failed: u64,
 ) -> HealthIndicator {
     if !running {
         return HealthIndicator::Red;
     }
-    match last_poll_at {
+    // Process is alive AND polling, but every repo errored — that is silent
+    // data loss. Status must not show green. Same severity as not running.
+    if repos_watched > 0 && repos_failed >= repos_watched {
+        return HealthIndicator::Red;
+    }
+    let base = match last_poll_at {
         None => HealthIndicator::Yellow,
         Some(t) => {
             let age = chrono::Utc::now().signed_duration_since(t);
@@ -214,7 +240,12 @@ fn compute_health(
                 HealthIndicator::Red
             }
         }
+    };
+    // Partial poll failures degrade Green to Yellow.
+    if repos_failed > 0 && matches!(base, HealthIndicator::Green) {
+        return HealthIndicator::Yellow;
     }
+    base
 }
 
 fn render_status_pretty(status: &DaemonStatus) {
@@ -243,6 +274,18 @@ fn render_status_pretty(status: &DaemonStatus) {
     match status.repos_watched {
         Some(n) => println!("  Repos watched: {}", n),
         None => println!("  Repos watched: unknown"),
+    }
+    if let Some(failed) = status.repos_failed_last_poll {
+        if failed > 0 {
+            let total = status.repos_watched.unwrap_or(0).max(failed);
+            let suffix = if status.failed_sample.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", status.failed_sample.join(", "))
+            };
+            let line = format!("  Poll failures: {failed} of {total}{suffix}");
+            println!("{}", line.yellow());
+        }
     }
     match status.db_size_bytes {
         Some(b) => println!("  DB size:       {:.1} KB", b as f64 / 1024.0),
@@ -290,6 +333,33 @@ pub fn daemon_status(data_dir: &Path, format: OutputFormat) -> anyhow::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compute_health_red_when_all_repos_failing() {
+        // Daemon alive + recent poll, but every repo errored on the last cycle.
+        // Status must not show green — that's silent data loss.
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, 5);
+        assert!(matches!(h, HealthIndicator::Red), "expected Red, got {:?}", h);
+    }
+
+    #[test]
+    fn compute_health_yellow_on_partial_failures() {
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, 2);
+        assert!(matches!(h, HealthIndicator::Yellow), "expected Yellow, got {:?}", h);
+    }
+
+    #[test]
+    fn compute_health_green_when_no_failures_and_recent_poll() {
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, 0);
+        assert!(matches!(h, HealthIndicator::Green), "expected Green, got {:?}", h);
+    }
+
+    #[test]
+    fn compute_health_red_when_not_running_regardless_of_failures() {
+        // Daemon dead trumps everything else.
+        let h = compute_health(false, Some(chrono::Utc::now()), 5, 0);
+        assert!(matches!(h, HealthIndicator::Red));
+    }
 
     #[test]
     fn pid_guard_writes_pid_file_on_creation() {
