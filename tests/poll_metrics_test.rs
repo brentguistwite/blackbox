@@ -1,5 +1,8 @@
 use blackbox::db;
-use blackbox::poller::{record_repo_outcome, write_poll_metrics, PollMetrics};
+use blackbox::poller::{
+    probe_watch_dirs, record_repo_outcome, write_discovery_metrics, write_poll_metrics,
+    DiscoveryMetrics, PollMetrics,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -93,6 +96,85 @@ fn record_repo_outcome_idempotent_on_repeated_failure() {
     record_repo_outcome(&mut set, &path, true);
     record_repo_outcome(&mut set, &path, true);
     assert_eq!(set.len(), 1);
+}
+
+#[test]
+fn probe_watch_dirs_empty_list_returns_no_errors() {
+    let errors = probe_watch_dirs(&[]);
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn probe_watch_dirs_existing_dir_passes() {
+    let tmp = TempDir::new().unwrap();
+    let errors = probe_watch_dirs(&[tmp.path().to_path_buf()]);
+    assert!(errors.is_empty(), "readable dir should not error");
+}
+
+#[test]
+fn probe_watch_dirs_nonexistent_path_is_error() {
+    let path = PathBuf::from("/nonexistent_blackbox_test_path_xyz_12345");
+    let errors = probe_watch_dirs(&[path.clone()]);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, path);
+    assert!(!errors[0].1.is_empty(), "error message should not be empty");
+}
+
+#[test]
+fn probe_watch_dirs_returns_only_failing_entries() {
+    let tmp = TempDir::new().unwrap();
+    let bad = PathBuf::from("/nonexistent_blackbox_test_path_xyz_67890");
+    let errors = probe_watch_dirs(&[tmp.path().to_path_buf(), bad.clone()]);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].0, bad);
+}
+
+#[test]
+fn write_discovery_metrics_persists_count_and_sample() {
+    let tmp = TempDir::new().unwrap();
+    let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
+
+    let metrics = DiscoveryMetrics {
+        failures: vec![
+            (PathBuf::from("/Users/me/Documents/flosports"), "Operation not permitted".into()),
+            (PathBuf::from("/Users/me/Documents/personal"), "Operation not permitted".into()),
+        ],
+    };
+    write_discovery_metrics(&conn, &metrics).unwrap();
+
+    let count = db::get_daemon_state(&conn, "last_poll_discovery_failed")
+        .unwrap()
+        .unwrap();
+    assert_eq!(count, "2");
+
+    let sample = db::get_daemon_state(&conn, "last_poll_discovery_failed_sample")
+        .unwrap()
+        .unwrap();
+    assert!(sample.contains("flosports"));
+    assert!(sample.contains("personal"));
+}
+
+#[test]
+fn write_discovery_metrics_zero_clears_previous_state() {
+    // Recovery: a previous run had failures, this run is clean → metric must
+    // reset to 0 so doctor stops alarming.
+    let tmp = TempDir::new().unwrap();
+    let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
+
+    let with_errs = DiscoveryMetrics {
+        failures: vec![(PathBuf::from("/x"), "denied".into())],
+    };
+    write_discovery_metrics(&conn, &with_errs).unwrap();
+
+    let clean = DiscoveryMetrics { failures: vec![] };
+    write_discovery_metrics(&conn, &clean).unwrap();
+
+    let count = db::get_daemon_state(&conn, "last_poll_discovery_failed").unwrap().unwrap();
+    assert_eq!(count, "0");
+    let sample = db::get_daemon_state(&conn, "last_poll_discovery_failed_sample")
+        .unwrap()
+        .unwrap_or_default();
+    assert!(sample.trim().is_empty());
 }
 
 #[test]

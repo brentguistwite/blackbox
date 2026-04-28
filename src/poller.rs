@@ -15,7 +15,7 @@ use crate::repo_scanner;
 use crate::watcher::RepoWatcher;
 
 /// Full-scan interval when watcher is active (30 min).
-const FULL_SCAN_SECS: u64 = 30 * 60;
+pub const FULL_SCAN_SECS: u64 = 30 * 60;
 
 /// Ensure a RepoState entry exists for a repo path, resolving worktrees.
 /// For worktrees, main_repo_path = resolved main repo root.
@@ -61,6 +61,49 @@ pub fn metrics_from_set(failed: &std::collections::HashSet<PathBuf>) -> PollMetr
     let mut paths: Vec<PathBuf> = failed.iter().cloned().collect();
     paths.sort();
     PollMetrics { failed_paths: paths }
+}
+
+/// Outcome of probing the configured watch_dirs for read access. A watch_dir
+/// that's unreadable means repos under it never reach `poll_one`, so
+/// per-repo failure metrics would silently report "0 failed" — exactly the
+/// blind spot Codex flagged. Tracked separately and surfaced as a Required
+/// failure in `doctor`.
+#[derive(Debug, Default, Clone)]
+pub struct DiscoveryMetrics {
+    pub failures: Vec<(PathBuf, String)>,
+}
+
+/// Verify each configured watch_dir can be opened for directory read.
+/// Returns the subset of paths that errored, with the OS error message.
+/// Does not mutate the filesystem; safe to call from any context.
+pub fn probe_watch_dirs(watch_dirs: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    watch_dirs
+        .iter()
+        .filter_map(|d| match std::fs::read_dir(d) {
+            Ok(_) => None,
+            Err(e) => Some((d.clone(), e.to_string())),
+        })
+        .collect()
+}
+
+/// Persist discovery health to daemon_state. Always writes both keys so a
+/// recovery (errors → no errors) clears stale state — same contract as
+/// `write_poll_metrics`.
+pub fn write_discovery_metrics(
+    conn: &Connection,
+    metrics: &DiscoveryMetrics,
+) -> anyhow::Result<()> {
+    let count = metrics.failures.len();
+    db::set_daemon_state(conn, "last_poll_discovery_failed", &count.to_string())?;
+    let sample = metrics
+        .failures
+        .iter()
+        .take(FAILED_SAMPLE_LIMIT)
+        .map(|(p, _)| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    db::set_daemon_state(conn, "last_poll_discovery_failed_sample", &sample)?;
+    Ok(())
 }
 
 /// Maximum number of failed paths to persist as a sample. Bounds the
@@ -155,6 +198,17 @@ fn full_scan(
     conn: &Connection,
     failed_set: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
+    // Probe top-level watch_dirs for read access BEFORE discovery so a TCC
+    // denial there can't silently shrink the discovered repo set to 0.
+    let discovery_failures = probe_watch_dirs(&config.watch_dirs);
+    for (path, err) in &discovery_failures {
+        log::warn!("Cannot read watch_dir {}: {}", path.display(), err);
+    }
+    let discovery_metrics = DiscoveryMetrics { failures: discovery_failures };
+    if let Err(e) = write_discovery_metrics(conn, &discovery_metrics) {
+        log::warn!("Failed to write discovery metrics: {}", e);
+    }
+
     let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
     poll_all_repos(&repos, repo_states, conn, failed_set);
     if let Err(e) = write_poll_metrics(conn, &metrics_from_set(failed_set)) {
@@ -333,6 +387,9 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 if let Err(e) = write_poll_metrics(&conn, &metrics_from_set(&failed_set)) {
                     log::warn!("Failed to write poll metrics (watcher path): {}", e);
                 }
+                // Bump heartbeat so doctor sees this as proof of liveness, not
+                // as a stalled idle-watcher between full scans.
+                write_heartbeat(&conn, repos.len());
             }
 
             // Periodic full scan for missed events + new repos

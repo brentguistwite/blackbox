@@ -485,13 +485,18 @@ pub struct PollHealthInput {
     /// Treating these the same hides "running daemon is too old to surface failures".
     pub failed_count: Option<usize>,
     pub failed_sample: Vec<String>,
-    pub poll_interval_secs: u64,
+    /// Number of watch dirs that couldn't be read (TCC denial, permission
+    /// errors, missing path). `None` = legacy daemon that didn't write the
+    /// metric. `Some(0)` = clean discovery.
+    pub discovery_failed_count: Option<usize>,
+    pub discovery_failed_sample: Vec<String>,
+    /// Longest expected gap between heartbeat updates. In watcher mode the
+    /// daemon may sit idle between full scans for FULL_SCAN_SECS, so the
+    /// stall threshold has to accommodate that — using `poll_interval_secs`
+    /// alone would false-flag healthy idle watchers.
+    pub max_expected_gap_secs: u64,
     pub now: chrono::DateTime<chrono::Utc>,
 }
-
-/// "Stalled" threshold = 3× the configured poll interval. Gives one full poll
-/// cycle of grace plus buffer for a slow git repo or a launchd restart.
-const STALLED_INTERVAL_MULTIPLIER: i64 = 3;
 
 /// Decide poll health from raw inputs. Pure function — no DB or clock.
 pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
@@ -511,20 +516,45 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
     // Stalled? Daemon process may be alive but its poll loop is not advancing
     // (deadlock, hung syscall, etc.). Required because no data is being recorded.
     let elapsed_secs = (input.now - last).num_seconds().max(0) as u64;
-    let stall_threshold_secs = input.poll_interval_secs.saturating_mul(STALLED_INTERVAL_MULTIPLIER as u64);
-    if elapsed_secs > stall_threshold_secs {
+    if elapsed_secs > input.max_expected_gap_secs {
         let elapsed_min = elapsed_secs / 60;
         return CheckResult {
             name: "Poll health".into(),
             passed: false,
             severity: Severity::Required,
             detail: format!("Daemon poll loop stalled — last poll {elapsed_min}m ago (threshold {}m)",
-                stall_threshold_secs / 60),
+                input.max_expected_gap_secs / 60),
             suggestion: Some("Restart the daemon: `blackbox stop && blackbox start`".into()),
         };
     }
 
     let elapsed_min = elapsed_secs / 60;
+
+    // Discovery failure = a configured watch_dir is unreadable. Means we never
+    // even try to poll those repos, so per-repo failure metrics would silently
+    // hide the problem. Required severity.
+    if let Some(discovery_failed) = input.discovery_failed_count {
+        if discovery_failed > 0 {
+            let sample = if input.discovery_failed_sample.is_empty() {
+                String::new()
+            } else {
+                format!(" Sample: {}", input.discovery_failed_sample.join(", "))
+            };
+            return CheckResult {
+                name: "Poll health".into(),
+                passed: false,
+                severity: Severity::Required,
+                detail: format!(
+                    "Cannot read {discovery_failed} configured watch dir(s) — repos there are not being discovered.{sample}"
+                ),
+                suggestion: Some(
+                    "Grant the daemon read access (macOS: System Settings → Privacy → Files & Folders) \
+                     or remove the entries from watch_dirs in config.toml. Restart daemon afterwards."
+                        .into(),
+                ),
+            };
+        }
+    }
 
     // Daemon ran a poll but did not write the failure metric → it's running an
     // older binary that doesn't surface this signal. We can't know whether
@@ -642,12 +672,36 @@ pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
         .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
         .unwrap_or_default();
 
+    let discovery_failed_count = crate::db::get_daemon_state(&conn, "last_poll_discovery_failed")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<usize>().ok());
+
+    let discovery_failed_sample: Vec<String> = crate::db::get_daemon_state(&conn, "last_poll_discovery_failed_sample")
+        .ok()
+        .flatten()
+        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+        .unwrap_or_default();
+
+    // Stall threshold needs to allow for watcher-mode idle gaps. last_poll_at
+    // is bumped on every full_scan and on every watcher event batch, but when
+    // the user is away from the keyboard for an hour the watcher loop sits
+    // idle until the next FULL_SCAN_SECS-driven scan. Using poll_interval_secs
+    // alone (commonly 300s in setup) would false-flag this idle daemon as
+    // stalled. Take the max of both bounds.
+    let max_expected_gap_secs = std::cmp::max(
+        config.poll_interval_secs.saturating_mul(3),
+        crate::poller::FULL_SCAN_SECS.saturating_mul(2),
+    );
+
     let input = PollHealthInput {
         last_poll_at,
         repos_watched,
         failed_count,
         failed_sample,
-        poll_interval_secs: config.poll_interval_secs,
+        discovery_failed_count,
+        discovery_failed_sample,
+        max_expected_gap_secs,
         now: chrono::Utc::now(),
     };
     evaluate_poll_health(&input)
@@ -983,7 +1037,7 @@ mod tests {
             repos_watched: 0,
             failed_count: Some(0),
             failed_sample: vec![],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1002,7 +1056,7 @@ mod tests {
             repos_watched: 5,
             failed_count: Some(0),
             failed_sample: vec![],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1020,7 +1074,7 @@ mod tests {
             repos_watched: 22,
             failed_count: Some(22),
             failed_sample: vec!["/Users/me/code/a".into(), "/Users/me/code/b".into()],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1037,7 +1091,7 @@ mod tests {
             repos_watched: 22,
             failed_count: Some(3),
             failed_sample: vec!["/repo/a".into(), "/repo/b".into(), "/repo/c".into()],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1054,7 +1108,7 @@ mod tests {
             repos_watched: 5,
             failed_count: Some(0),
             failed_sample: vec![],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1075,7 +1129,7 @@ mod tests {
             repos_watched: 22,
             failed_count: None,
             failed_sample: vec![],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
@@ -1089,13 +1143,99 @@ mod tests {
     }
 
     #[test]
+    fn poll_health_watcher_mode_idle_at_25_min_not_stalled() {
+        // Codex round 2 [high]: watcher mode bumps last_poll_at on full_scan
+        // (every 30 min) plus events. With poll_interval_secs=300 a 25-minute
+        // gap was being flagged as Required stalled, which would block doctor
+        // on healthy idle daemons. Stall threshold must use FULL_SCAN_SECS.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:35:00Z")), // 25m ago
+            repos_watched: 5,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            discovery_failed_count: Some(0),
+            discovery_failed_sample: vec![],
+            // Caller picks max(3*300, 2*1800) = 3600
+            max_expected_gap_secs: 3600,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(r.passed, "25min idle in watcher mode must not be stalled, got: {}", r.detail);
+    }
+
+    #[test]
+    fn poll_health_actually_stalled_past_threshold() {
+        // Beyond the 1-hour watcher-mode threshold → still Required fail.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T13:30:00Z")), // 90 min ago
+            repos_watched: 5,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            discovery_failed_count: Some(0),
+            discovery_failed_sample: vec![],
+            max_expected_gap_secs: 3600,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Required);
+        assert!(r.detail.to_lowercase().contains("stalled"));
+    }
+
+    #[test]
+    fn poll_health_discovery_errors_are_required_fail() {
+        // Codex round 2 [high]: full_scan can erase failures when
+        // discover_repos silently drops unreadable watch_dirs. doctor must
+        // surface "couldn't read N watch dirs" as Required, otherwise the
+        // exact permission scenario this PR exists to catch slips through.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 0, // discovery returned nothing!
+            failed_count: Some(0), // and "0 failed" looks healthy
+            failed_sample: vec![],
+            discovery_failed_count: Some(2),
+            discovery_failed_sample: vec![
+                "/Users/me/Documents/flosports".into(),
+                "/Users/me/Documents/personal".into(),
+            ],
+            max_expected_gap_secs: 3600,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed, "discovery errors must NOT show as healthy green");
+        assert_eq!(r.severity, Severity::Required);
+        assert!(r.detail.to_lowercase().contains("watch dir"));
+        assert!(r.detail.contains("/Users/me/Documents/flosports"));
+    }
+
+    #[test]
+    fn poll_health_legacy_daemon_no_discovery_metric_falls_through() {
+        // Daemon predates discovery metric (None) → should flow to legacy
+        // failed_count handling, not block exit.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 5,
+            failed_count: None,
+            failed_sample: vec![],
+            discovery_failed_count: None,
+            discovery_failed_sample: vec![],
+            max_expected_gap_secs: 3600,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        // Legacy state: warning, not Required.
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Optional);
+    }
+
+    #[test]
     fn poll_health_sample_paths_appear_in_suggestion() {
         let input = PollHealthInput {
             last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
             repos_watched: 4,
             failed_count: Some(4),
             failed_sample: vec!["/repo/alpha".into()],
-            poll_interval_secs: 1800,
+            max_expected_gap_secs: 3600, discovery_failed_count: Some(0), discovery_failed_sample: vec![],
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
