@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,13 +20,12 @@ const FULL_SCAN_SECS: u64 = 30 * 60;
 /// Ensure a RepoState entry exists for a repo path, resolving worktrees.
 /// For worktrees, main_repo_path = resolved main repo root.
 /// For regular repos, main_repo_path = repo_path.
-#[allow(clippy::ptr_arg)]
-fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoState>) {
-    repo_states.entry(repo_path.clone()).or_insert_with(|| {
+fn ensure_state(repo_path: &Path, repo_states: &mut HashMap<PathBuf, RepoState>) {
+    repo_states.entry(repo_path.to_path_buf()).or_insert_with(|| {
         let main_repo_path = if repo_scanner::is_worktree(repo_path).is_some() {
-            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.clone())
+            repo_scanner::resolve_main_repo(repo_path).unwrap_or_else(|_| repo_path.to_path_buf())
         } else {
-            repo_path.clone()
+            repo_path.to_path_buf()
         };
         RepoState {
             main_repo_path,
@@ -40,6 +39,28 @@ fn ensure_state(repo_path: &PathBuf, repo_states: &mut HashMap<PathBuf, RepoStat
 #[derive(Debug, Default, Clone)]
 pub struct PollMetrics {
     pub failed_paths: Vec<PathBuf>,
+}
+
+/// Update the running set of repos in a failure state.
+/// Pure function — separated from I/O so it's trivially testable and
+/// reusable across the full-scan and watcher poll paths.
+pub fn record_repo_outcome(
+    failed: &mut std::collections::HashSet<PathBuf>,
+    repo_path: &std::path::Path,
+    was_error: bool,
+) {
+    if was_error {
+        failed.insert(repo_path.to_path_buf());
+    } else {
+        failed.remove(repo_path);
+    }
+}
+
+/// Convenience: build PollMetrics from the current failure set.
+pub fn metrics_from_set(failed: &std::collections::HashSet<PathBuf>) -> PollMetrics {
+    let mut paths: Vec<PathBuf> = failed.iter().cloned().collect();
+    paths.sort();
+    PollMetrics { failed_paths: paths }
 }
 
 /// Maximum number of failed paths to persist as a sample. Bounds the
@@ -62,24 +83,39 @@ pub fn write_poll_metrics(conn: &Connection, metrics: &PollMetrics) -> anyhow::R
     Ok(())
 }
 
-/// Poll all repos for git activity. Returns metrics so callers can write
-/// poll health to daemon_state.
+/// Poll all repos for git activity. Replaces the failure set with this cycle's
+/// outcomes — full_scan covers every watched repo so it is authoritative.
 fn poll_all_repos(
     repos: &[PathBuf],
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
-) -> PollMetrics {
-    let mut failed_paths = Vec::new();
+    failed_set: &mut std::collections::HashSet<PathBuf>,
+) {
+    failed_set.clear();
     for repo_path in repos {
-        ensure_state(repo_path, repo_states);
-        let state = repo_states.get_mut(repo_path).unwrap();
-        let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-        if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, conn) {
+        let was_error = poll_one(repo_path, repo_states, conn);
+        record_repo_outcome(failed_set, repo_path, was_error);
+    }
+}
+
+/// Poll a single repo. Returns true on error (caller decides what to log/track).
+/// Used by both full_scan and the watcher event path so failure tracking stays
+/// consistent across entry points.
+pub fn poll_one(
+    repo_path: &Path,
+    repo_states: &mut HashMap<PathBuf, RepoState>,
+    conn: &Connection,
+) -> bool {
+    ensure_state(repo_path, repo_states);
+    let state = repo_states.get_mut(repo_path).unwrap();
+    let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
+    match git_ops::poll_repo(repo_path, &db_repo_path, state, conn) {
+        Ok(()) => false,
+        Err(e) => {
             log::warn!("Error polling {}: {}", repo_path.display(), e);
-            failed_paths.push(repo_path.clone());
+            true
         }
     }
-    PollMetrics { failed_paths }
 }
 
 /// Remove stale worktree entries from repo_states.
@@ -117,10 +153,11 @@ fn full_scan(
     config: &Config,
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
+    failed_set: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
     let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
-    let metrics = poll_all_repos(&repos, repo_states, conn);
-    if let Err(e) = write_poll_metrics(conn, &metrics) {
+    poll_all_repos(&repos, repo_states, conn, failed_set);
+    if let Err(e) = write_poll_metrics(conn, &metrics_from_set(failed_set)) {
         log::warn!("Failed to write poll metrics: {}", e);
     }
     enrichment::collect_reviews(&repos, conn);
@@ -218,8 +255,12 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     let conn = db::open_db(&db_path)?;
     let mut repo_states: HashMap<PathBuf, RepoState> = HashMap::new();
     let mut debounce_map: HashMap<PathBuf, Instant> = HashMap::new();
+    // Track per-repo failure state across full_scan and watcher events so
+    // a watcher-driven recovery clears stale failures and a watcher-driven
+    // failure shows up in `doctor` immediately, not 30 minutes later.
+    let mut failed_set: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // Initial full scan
-    let mut repos = full_scan(&config, &mut repo_states, &conn);
+    let mut repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
     write_heartbeat(&conn, repos.len());
     maybe_send_daily_notification(&config, &conn);
 
@@ -248,7 +289,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                     config = new_cfg;
                     log::info!("Config reloaded successfully");
                     // Re-discover repos and recreate watcher with new config
-                    repos = full_scan(&config, &mut repo_states, &conn);
+                    repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
                     write_heartbeat(&conn, repos.len());
                     maybe_send_daily_notification(&config, &conn);
                     watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -262,35 +303,41 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
         if let Some(ref mut watcher) = watcher_opt {
             // Hybrid mode: block until event or 1s timeout
             let events = watcher.recv_events(&mut debounce_map, Duration::from_secs(1));
+            let mut metrics_dirty = false;
 
             for repo_path in &events.changed_repos {
                 log::info!("Detected change in {}", repo_path.display());
-                ensure_state(repo_path, &mut repo_states);
-                let state = repo_states.get_mut(repo_path).unwrap();
-                let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(repo_path, &db_repo_path, state, &conn) {
-                    log::warn!("Error polling {}: {}", repo_path.display(), e);
-                }
+                let was_error = poll_one(repo_path, &mut repo_states, &conn);
+                record_repo_outcome(&mut failed_set, repo_path, was_error);
+                metrics_dirty = true;
             }
 
             // Handle newly-discovered worktrees
             for wt_path in &events.new_worktrees {
                 log::info!("New worktree detected: {}", wt_path.display());
-                ensure_state(wt_path, &mut repo_states);
-                let state = repo_states.get_mut(wt_path).unwrap();
-                let db_repo_path = state.main_repo_path.to_string_lossy().to_string();
-                if let Err(e) = git_ops::poll_repo(wt_path, &db_repo_path, state, &conn) {
-                    log::warn!("Error polling new worktree {}: {}", wt_path.display(), e);
-                }
+                let was_error = poll_one(wt_path, &mut repo_states, &conn);
+                record_repo_outcome(&mut failed_set, wt_path, was_error);
                 watcher.watch_repo(wt_path);
+                metrics_dirty = true;
             }
 
             // Clean up stale worktrees
-            remove_stale_worktrees(&mut repo_states);
+            let stale = remove_stale_worktrees(&mut repo_states);
+            for path in &stale {
+                if failed_set.remove(path) {
+                    metrics_dirty = true;
+                }
+            }
+
+            if metrics_dirty {
+                if let Err(e) = write_poll_metrics(&conn, &metrics_from_set(&failed_set)) {
+                    log::warn!("Failed to write poll metrics (watcher path): {}", e);
+                }
+            }
 
             // Periodic full scan for missed events + new repos
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
-                repos = full_scan(&config, &mut repo_states, &conn);
+                repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
                 write_heartbeat(&conn, repos.len());
                 maybe_send_daily_notification(&config, &conn);
 
@@ -305,7 +352,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
         } else {
             // Pure polling fallback (original behavior)
             std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
-            repos = full_scan(&config, &mut repo_states, &conn);
+            repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
             write_heartbeat(&conn, repos.len());
             maybe_send_daily_notification(&config, &conn);
 

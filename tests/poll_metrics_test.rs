@@ -1,5 +1,6 @@
 use blackbox::db;
-use blackbox::poller::{write_poll_metrics, PollMetrics};
+use blackbox::poller::{record_repo_outcome, write_poll_metrics, PollMetrics};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -63,6 +64,44 @@ fn write_poll_metrics_caps_sample_at_five_paths() {
         .unwrap()
         .unwrap();
     assert_eq!(failed, "10");
+}
+
+#[test]
+fn record_repo_outcome_adds_failure() {
+    let mut set: HashSet<PathBuf> = HashSet::new();
+    let path = PathBuf::from("/repo/a");
+    record_repo_outcome(&mut set, &path, true);
+    assert!(set.contains(&path));
+}
+
+#[test]
+fn record_repo_outcome_clears_failure_on_subsequent_success() {
+    // The watcher-path bug Codex flagged: a repo that failed in full_scan
+    // should drop out of the failure set as soon as a watcher-driven poll
+    // succeeds — otherwise doctor reports stale failures forever.
+    let mut set: HashSet<PathBuf> = HashSet::new();
+    let path = PathBuf::from("/repo/a");
+    record_repo_outcome(&mut set, &path, true);
+    record_repo_outcome(&mut set, &path, false);
+    assert!(!set.contains(&path), "success after failure should clear the entry");
+}
+
+#[test]
+fn record_repo_outcome_idempotent_on_repeated_failure() {
+    let mut set: HashSet<PathBuf> = HashSet::new();
+    let path = PathBuf::from("/repo/a");
+    record_repo_outcome(&mut set, &path, true);
+    record_repo_outcome(&mut set, &path, true);
+    assert_eq!(set.len(), 1);
+}
+
+#[test]
+fn record_repo_outcome_independent_paths() {
+    let mut set: HashSet<PathBuf> = HashSet::new();
+    record_repo_outcome(&mut set, &PathBuf::from("/repo/a"), true);
+    record_repo_outcome(&mut set, &PathBuf::from("/repo/b"), false);
+    assert!(set.contains(&PathBuf::from("/repo/a")));
+    assert!(!set.contains(&PathBuf::from("/repo/b")));
 }
 
 #[test]

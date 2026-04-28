@@ -527,17 +527,18 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
     let elapsed_min = elapsed_secs / 60;
 
     // Daemon ran a poll but did not write the failure metric → it's running an
-    // older binary that doesn't surface this signal. Treat as Optional pass with
-    // a "restart to enable" hint, NOT as healthy.
+    // older binary that doesn't surface this signal. We can't know whether
+    // polling is healthy. Render as Optional warning (not green pass) so users
+    // see "unknown" instead of a misleading checkmark.
     let failed = match input.failed_count {
         Some(n) => n,
         None => {
             return CheckResult {
                 name: "Poll health".into(),
-                passed: true,
+                passed: false,
                 severity: Severity::Optional,
                 detail: format!(
-                    "Running daemon predates poll-failure metrics (last poll {elapsed_min}m ago)"
+                    "Running daemon predates poll-failure metrics — health unknown (last poll {elapsed_min}m ago)"
                 ),
                 suggestion: Some("Restart daemon to enable per-cycle failure reporting".into()),
             };
@@ -1063,9 +1064,12 @@ mod tests {
     }
 
     #[test]
-    fn poll_health_legacy_daemon_without_metrics_is_optional_pass() {
-        // Daemon ran a poll but never wrote the failed-count key (predates this PR).
-        // Must NOT show as healthy — that would silently mask the bug we just fixed.
+    fn poll_health_legacy_daemon_without_metrics_renders_as_warning() {
+        // Codex finding [high]: do NOT render legacy daemon as a green pass.
+        // Pre-fix, run_doctor renders every passed:true with a green checkmark
+        // and excludes it from the optional-fail tally. That defeats the
+        // safety check this PR is adding. The legacy state must render as a
+        // yellow warning (passed:false + Severity::Optional).
         let input = PollHealthInput {
             last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
             repos_watched: 22,
@@ -1075,10 +1079,12 @@ mod tests {
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
-        assert!(r.passed, "absent metric should not block exit");
-        assert_eq!(r.severity, Severity::Optional, "should be Optional, not Required green");
-        assert!(r.detail.to_lowercase().contains("predates")
-            || r.detail.to_lowercase().contains("older"));
+        assert!(!r.passed, "legacy/unknown state must NOT render as green pass");
+        assert_eq!(r.severity, Severity::Optional,
+            "must be Optional so exit code is unaffected, not Required (red)");
+        let d = r.detail.to_lowercase();
+        assert!(d.contains("unknown") || d.contains("predates"),
+            "detail should signal unknown health, got: {}", r.detail);
         assert!(r.suggestion.is_some(), "should suggest a restart");
     }
 

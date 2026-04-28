@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::output::OutputFormat;
 use crate::poller;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub enum HealthIndicator {
     Green,
     Yellow,
@@ -197,7 +197,7 @@ pub fn get_daemon_status(data_dir: &Path) -> anyhow::Result<DaemonStatus> {
         running,
         last_poll_at,
         repos_watched.unwrap_or(0),
-        repos_failed_last_poll.unwrap_or(0),
+        repos_failed_last_poll,
     );
 
     Ok(DaemonStatus {
@@ -218,14 +218,9 @@ fn compute_health(
     running: bool,
     last_poll_at: Option<chrono::DateTime<chrono::Utc>>,
     repos_watched: u64,
-    repos_failed: u64,
+    repos_failed: Option<u64>,
 ) -> HealthIndicator {
     if !running {
-        return HealthIndicator::Red;
-    }
-    // Process is alive AND polling, but every repo errored — that is silent
-    // data loss. Status must not show green. Same severity as not running.
-    if repos_watched > 0 && repos_failed >= repos_watched {
         return HealthIndicator::Red;
     }
     let base = match last_poll_at {
@@ -241,8 +236,24 @@ fn compute_health(
             }
         }
     };
+    // Daemon predates the failure metric — we cannot say it's healthy. Cap at
+    // Yellow so users see "unknown" rather than a misleading green.
+    let failed = match repos_failed {
+        None => {
+            // Cap Green at Yellow when we don't have a failure metric to trust.
+            return match base {
+                HealthIndicator::Green => HealthIndicator::Yellow,
+                other => other,
+            };
+        }
+        Some(n) => n,
+    };
+    // Process alive + polling, but every repo errored — silent data loss.
+    if repos_watched > 0 && failed >= repos_watched {
+        return HealthIndicator::Red;
+    }
     // Partial poll failures degrade Green to Yellow.
-    if repos_failed > 0 && matches!(base, HealthIndicator::Green) {
+    if failed > 0 && base == HealthIndicator::Green {
         return HealthIndicator::Yellow;
     }
     base
@@ -253,9 +264,31 @@ fn render_status_pretty(status: &DaemonStatus) {
     let (icon, label) = match status.health {
         HealthIndicator::Green => ("\u{2713}".green().bold(), "Running".green().bold()),
         HealthIndicator::Yellow => {
-            ("\u{26a0}".yellow().bold(), "Running (stale)".yellow().bold())
+            // Distinguish "stale poll", "missing metric", "all-running-fine-but-failures"
+            // so users know which corrective action applies.
+            let text = if !status.running {
+                "Stopped"
+            } else if status.repos_failed_last_poll.is_none() {
+                "Running (metrics unknown — restart daemon to enable)"
+            } else if status.repos_failed_last_poll.unwrap_or(0) > 0 {
+                "Running (poll failures)"
+            } else {
+                "Running (stale)"
+            };
+            ("\u{26a0}".yellow().bold(), text.yellow().bold())
         }
-        HealthIndicator::Red => ("\u{2717}".red().bold(), "Stopped".red().bold()),
+        HealthIndicator::Red => {
+            let text = if !status.running {
+                "Stopped"
+            } else if status.repos_watched.unwrap_or(0) > 0
+                && status.repos_failed_last_poll.unwrap_or(0) >= status.repos_watched.unwrap_or(0)
+            {
+                "Running (all polls failing)"
+            } else {
+                "Stopped"
+            };
+            ("\u{2717}".red().bold(), text.red().bold())
+        }
     };
     println!("{} {}", icon, label);
     if let Some(pid) = status.pid {
@@ -338,27 +371,47 @@ mod tests {
     fn compute_health_red_when_all_repos_failing() {
         // Daemon alive + recent poll, but every repo errored on the last cycle.
         // Status must not show green — that's silent data loss.
-        let h = compute_health(true, Some(chrono::Utc::now()), 5, 5);
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, Some(5));
         assert!(matches!(h, HealthIndicator::Red), "expected Red, got {:?}", h);
     }
 
     #[test]
     fn compute_health_yellow_on_partial_failures() {
-        let h = compute_health(true, Some(chrono::Utc::now()), 5, 2);
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, Some(2));
         assert!(matches!(h, HealthIndicator::Yellow), "expected Yellow, got {:?}", h);
     }
 
     #[test]
     fn compute_health_green_when_no_failures_and_recent_poll() {
-        let h = compute_health(true, Some(chrono::Utc::now()), 5, 0);
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, Some(0));
         assert!(matches!(h, HealthIndicator::Green), "expected Green, got {:?}", h);
     }
 
     #[test]
     fn compute_health_red_when_not_running_regardless_of_failures() {
         // Daemon dead trumps everything else.
-        let h = compute_health(false, Some(chrono::Utc::now()), 5, 0);
+        let h = compute_health(false, Some(chrono::Utc::now()), 5, Some(0));
         assert!(matches!(h, HealthIndicator::Red));
+    }
+
+    #[test]
+    fn compute_health_legacy_daemon_recent_poll_caps_at_yellow() {
+        // Codex regression: missing failure metric must NOT silently render
+        // as Green. Pre-fix, compute_health collapsed None → 0 and returned
+        // Green for a recent poll. Now it must stay Yellow ("unknown") so
+        // users in the rollout window see "needs daemon restart".
+        let h = compute_health(true, Some(chrono::Utc::now()), 5, None);
+        assert_eq!(h, HealthIndicator::Yellow,
+            "missing failure metric should cap health at Yellow, got {:?}", h);
+    }
+
+    #[test]
+    fn compute_health_legacy_daemon_old_poll_stays_red() {
+        // If the legacy daemon's last poll is also stale, severity should not
+        // be downgraded — old poll Red trumps the unknown-metric Yellow cap.
+        let stale = chrono::Utc::now() - chrono::Duration::hours(2);
+        let h = compute_health(true, Some(stale), 5, None);
+        assert_eq!(h, HealthIndicator::Red);
     }
 
     #[test]
