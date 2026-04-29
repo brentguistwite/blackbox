@@ -490,6 +490,18 @@ mod tests {
     }
 
     #[test]
+    fn compute_health_at_exact_threshold_is_red_matching_doctor() {
+        // Locks in the boundary-agreement contract: at exactly max_expected_gap
+        // both compute_health and evaluate_poll_health must report Red /
+        // stalled. If anyone changes one operator without the other, this
+        // test breaks.
+        let exactly_threshold_ago = chrono::Utc::now() - chrono::Duration::seconds(3600);
+        let h = compute_health(true, Some(exactly_threshold_ago), 5, Some(0), Some(0), 3600);
+        assert_eq!(h, HealthIndicator::Red,
+            "exact-threshold age must be Red, agreeing with doctor's `>=` stall check");
+    }
+
+    #[test]
     fn compute_health_red_for_running_stalled_daemon_renders_running_label() {
         // Render-side regression: a running but stalled daemon goes Red. The
         // pretty-print branch used to print "Stopped" for any Red+running case

@@ -311,7 +311,19 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Status { format } => {
             let data_dir = blackbox::config::data_dir()?;
-            let config = blackbox::config::load_config().unwrap_or_default();
+            // Status is read-only — don't hard-fail on a malformed config so a
+            // user can still inspect the daemon. But surface the parse error
+            // so they can fix it; the stall-threshold computation depends on
+            // poll_interval_secs and silently using Default would lie.
+            let config = match blackbox::config::load_config() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(
+                        "warning: failed to load config ({e}); using defaults for status"
+                    );
+                    blackbox::config::Config::default()
+                }
+            };
             blackbox::daemon::daemon_status(&data_dir, &config, format)?;
         }
         Commands::Reload => {
