@@ -121,17 +121,11 @@ pub fn find_worktree_parent_dirs(repos: &[PathBuf], worktree_dir_name: &str) -> 
 #[derive(Debug, Default, Clone)]
 pub struct DiscoveredRepos {
     pub repos: Vec<PathBuf>,
-    /// Errors that actually block discovery of additional repo roots — the
-    /// watch_dir tree itself, paths NOT under any discovered repo, or paths
-    /// under a worktree-parent dir (worktrees ARE discoverable repos).
-    /// doctor escalates these to Required.
+    /// Walk errors from recursive discovery. doctor escalates these to
+    /// Required so a chmod-000 / TCC-denied subtree can't silently hide
+    /// repos. False positives on truly-not-load-bearing artifact dirs are
+    /// the safe failure mode — the user can chmod or add to SKIP_DIRS.
     pub traversal_errors: Vec<(PathBuf, String)>,
-    /// Errors deep inside a discovered repo's tree (artifact dirs, generated
-    /// caches, restricted private subtrees). These are NOT discovery failures
-    /// — the repo polled fine — but kept for diagnostics. doctor / status do
-    /// not promote them to Required. Codex round 9 [medium]: a chmod-000
-    /// artifact dir inside a healthy repo was flipping daemon Required/Red.
-    pub inside_repo_advisories: Vec<(PathBuf, String)>,
 }
 
 pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -> Vec<PathBuf> {
@@ -219,11 +213,7 @@ pub fn discover_repos_with_errors(
     // failure mode here — silent loss is not. Round 9's split was wrong;
     // round 8's "surface everything" was correct. (Codex 6/7/8/9/10 have
     // oscillated on this; we're locking in round 10's recommendation.)
-    DiscoveredRepos {
-        repos,
-        traversal_errors: errors,
-        inside_repo_advisories: Vec::new(),
-    }
+    DiscoveredRepos { repos, traversal_errors: errors }
 }
 
 /// Scan well-known dev directories + HOME children for git repos.
