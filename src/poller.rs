@@ -128,6 +128,13 @@ pub struct HealthSnapshot {
     /// re-tries `RepoWatcher::new` every cycle and self-heals.
     pub poll_mode: String,
     pub repos_watched: usize,
+    /// The poll interval the daemon is actually using this cycle. Persisted
+    /// so `doctor` and `status` derive stall thresholds from the daemon's
+    /// real config even when the user's config.toml fails to parse on the
+    /// reader side. Codex round 5 [medium]: status had been substituting
+    /// `Config::default().poll_interval_secs = 1800` on parse failure,
+    /// misclassifying health for any daemon running a non-default interval.
+    pub effective_poll_interval_secs: u64,
     pub poll_metrics: PollMetrics,
     pub discovery_metrics: DiscoveryMetrics,
 }
@@ -164,6 +171,11 @@ pub fn write_health_snapshot(
     db::set_daemon_state(&tx, "last_poll_at", &now)?;
     db::set_daemon_state(&tx, "last_poll_mode", &snap.poll_mode)?;
     db::set_daemon_state(&tx, "repos_watched", &snap.repos_watched.to_string())?;
+    db::set_daemon_state(
+        &tx,
+        "effective_poll_interval_secs",
+        &snap.effective_poll_interval_secs.to_string(),
+    )?;
     db::set_daemon_state(&tx, "last_poll_repos_failed", &failed_count.to_string())?;
     db::set_daemon_state(&tx, "last_poll_failed_sample", &failed_sample)?;
     db::set_daemon_state(&tx, "last_poll_discovery_failed", &disc_count.to_string())?;
@@ -225,22 +237,40 @@ pub fn poll_one(
     }
 }
 
-/// Drop entries in `repo_states` whose key is not in `current`. Returns
-/// evicted paths so callers can clear matching entries from `failed_set`.
+/// Drop entries in `repo_states` whose key is not in `current`, skipping any
+/// path under an `unreliable_root` (a watch_dir whose probe or recursive walk
+/// errored this cycle). Returns evicted paths so callers can clear matching
+/// entries from `failed_set`.
 ///
-/// Pure (modulo `&mut`). Without this, `repo_states` accumulates dead entries
-/// after a config reload removes a watch_dir or a tracked repo is deleted from
+/// `unreliable_root` skip is the load-bearing piece: a transient TCC flap or
+/// network-mount blip that makes one watch_dir unreadable for a single cycle
+/// would otherwise evict every repo under it. The next successful discovery
+/// recreates `RepoState` from scratch, and `git_ops::poll_repo` treats a
+/// fresh state as a first-poll — only seeding HEAD plus today's first 50
+/// commits. Activity that happened during the blackout is irrecoverable.
+/// Keeping state through transient failures means the next clean cycle
+/// resumes from the prior cursor and reconstructs missed events.
+///
+/// Without pruning altogether, `repo_states` accumulates dead entries after
+/// a config reload removes a watch_dir or a tracked repo is deleted from
 /// disk. The "all polls failing" Required check is gated by
 /// `failed_count == repos_watched`; an inflated denominator silently masks
-/// every-active-repo failure as a partial warning.
+/// every-active-repo failure as a partial warning. So we still prune — just
+/// only for paths whose discovery this cycle was reliable.
 pub fn prune_repo_states(
     repo_states: &mut HashMap<PathBuf, RepoState>,
     current: &[PathBuf],
+    unreliable_roots: &[PathBuf],
 ) -> Vec<PathBuf> {
     let keep: std::collections::HashSet<&PathBuf> = current.iter().collect();
+    let is_under_unreliable = |p: &Path| -> bool {
+        unreliable_roots
+            .iter()
+            .any(|root| p == root.as_path() || p.starts_with(root))
+    };
     let evicted: Vec<PathBuf> = repo_states
         .keys()
-        .filter(|p| !keep.contains(p))
+        .filter(|p| !keep.contains(p) && !is_under_unreliable(p))
         .cloned()
         .collect();
     for p in &evicted {
@@ -277,6 +307,7 @@ fn write_snapshot(
     conn: &Connection,
     watcher_opt: &Option<RepoWatcher>,
     repos_watched: usize,
+    effective_poll_interval_secs: u64,
     failed_set: &std::collections::HashSet<PathBuf>,
     discovery: &DiscoveryMetrics,
 ) {
@@ -284,6 +315,7 @@ fn write_snapshot(
         last_poll_at: chrono::Utc::now(),
         poll_mode: if watcher_opt.is_some() { "watcher" } else { "polling" }.into(),
         repos_watched,
+        effective_poll_interval_secs,
         poll_metrics: metrics_from_set(failed_set),
         discovery_metrics: discovery.clone(),
     };
@@ -321,7 +353,13 @@ fn full_scan(
     // safe — but if we pruned AFTER, evicted entries still in `repo_states`
     // from prior cycles would hang around forever and inflate the
     // `repos_watched` denominator that gates the "all polls failing" check.
-    let evicted = prune_repo_states(repo_states, &repos);
+    //
+    // Skip eviction for repos under any watch_dir / subtree that errored
+    // discovery this cycle. A transient failure must not drop activity-state
+    // — see `prune_repo_states` doc.
+    let unreliable_roots: Vec<PathBuf> =
+        discovery_failures.iter().map(|(p, _)| p.clone()).collect();
+    let evicted = prune_repo_states(repo_states, &repos, &unreliable_roots);
     for path in &evicted {
         failed_set.remove(path);
     }
@@ -441,7 +479,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     // watcher_opt state. Doing this after init keeps the "mode key derived
     // every snapshot from watcher_opt.is_some()" invariant tested by
     // write_health_snapshot_mode_transitions_from_polling_to_watcher.
-    write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+    write_snapshot(&conn, &watcher_opt, repos.len(), config.poll_interval_secs, &failed_set, &last_discovery);
     maybe_send_daily_notification(&config, &conn);
 
     let mut last_full_scan = Instant::now();
@@ -466,7 +504,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                     last_discovery = new_disc;
                     watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
                     // Snapshot AFTER watcher recreate so mode reflects new state.
-                    write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+                    write_snapshot(&conn, &watcher_opt, repos.len(), config.poll_interval_secs, &failed_set, &last_discovery);
                     maybe_send_daily_notification(&config, &conn);
                     last_full_scan = Instant::now();
                     debounce_map.clear();
@@ -496,12 +534,19 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 metrics_dirty = true;
             }
 
-            // Clean up stale worktrees
+            // Clean up stale worktrees. Any removal shrinks repo_states.len()
+            // → repos_watched changes → snapshot must rewrite. A previously
+            // healthy stale worktree wouldn't be in failed_set, so gating
+            // metrics_dirty on `failed_set.remove(path)` returning true would
+            // leave the persisted denominator stale. Codex round 5 [high]:
+            // live state 2/2 kept reading as 2/3 until next unrelated event,
+            // hiding the all-failing condition this PR exists to surface.
             let stale = remove_stale_worktrees(&mut repo_states);
+            if !stale.is_empty() {
+                metrics_dirty = true;
+            }
             for path in &stale {
-                if failed_set.remove(path) {
-                    metrics_dirty = true;
-                }
+                failed_set.remove(path);
             }
 
             if metrics_dirty {
@@ -512,7 +557,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 // last full_scan are reflected there but not in `repos`.
                 // last_discovery is unchanged since the last full_scan
                 // (probe_watch_dirs runs only there).
-                write_snapshot(&conn, &watcher_opt, repo_states.len(), &failed_set, &last_discovery);
+                write_snapshot(&conn, &watcher_opt, repo_states.len(), config.poll_interval_secs, &failed_set, &last_discovery);
             }
 
             // Periodic full scan for missed events + new repos
@@ -526,7 +571,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 if let Some(ref _w) = watcher_opt {
                     log::info!("Watching {} repos for changes", repos.len());
                 }
-                write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+                write_snapshot(&conn, &watcher_opt, repos.len(), config.poll_interval_secs, &failed_set, &last_discovery);
                 maybe_send_daily_notification(&config, &conn);
                 last_full_scan = Instant::now();
                 debounce_map.clear();
@@ -550,7 +595,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             // Snapshot after watcher retry so mode flips to "watcher" the
             // moment the watcher self-heals — without this delay, doctor
             // would keep using the more lenient polling-mode threshold.
-            write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+            write_snapshot(&conn, &watcher_opt, repos.len(), config.poll_interval_secs, &failed_set, &last_discovery);
             maybe_send_daily_notification(&config, &conn);
         }
     }
@@ -616,7 +661,7 @@ mod tests {
         states.insert(PathBuf::from("/b"), rs());
         states.insert(PathBuf::from("/c"), rs());
         let current = [PathBuf::from("/a"), PathBuf::from("/c")];
-        let evicted = prune_repo_states(&mut states, &current);
+        let evicted = prune_repo_states(&mut states, &current, &[]);
         assert_eq!(evicted, vec![PathBuf::from("/b")]);
         assert_eq!(states.len(), 2);
         assert!(states.contains_key(Path::new("/a")));
@@ -629,7 +674,7 @@ mod tests {
         let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
         states.insert(PathBuf::from("/a"), rs());
         let current = [PathBuf::from("/a")];
-        let evicted = prune_repo_states(&mut states, &current);
+        let evicted = prune_repo_states(&mut states, &current, &[]);
         assert!(evicted.is_empty());
         assert_eq!(states.len(), 1);
     }
@@ -639,7 +684,7 @@ mod tests {
         let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
         states.insert(PathBuf::from("/a"), rs());
         states.insert(PathBuf::from("/b"), rs());
-        let evicted = prune_repo_states(&mut states, &[]);
+        let evicted = prune_repo_states(&mut states, &[], &[]);
         assert_eq!(evicted.len(), 2);
         assert!(states.is_empty());
     }
@@ -656,7 +701,7 @@ mod tests {
         failed_set.insert(PathBuf::from("/gone"));
         failed_set.insert(PathBuf::from("/here"));
 
-        let evicted = prune_repo_states(&mut states, &[PathBuf::from("/here")]);
+        let evicted = prune_repo_states(&mut states, &[PathBuf::from("/here")], &[]);
         for p in &evicted {
             failed_set.remove(p);
         }
@@ -664,6 +709,44 @@ mod tests {
         assert_eq!(failed_set.len(), 1);
         assert!(failed_set.contains(Path::new("/here")));
         assert!(!failed_set.contains(Path::new("/gone")));
+    }
+
+    #[test]
+    fn prune_skips_repos_under_unreliable_root() {
+        // Codex round 5 finding: a transient TCC denial or network-mount blip
+        // can make a watch_dir unreadable for one cycle. discover_repos won't
+        // return its descendants. Without this guard, prune evicts them, and
+        // git_ops::poll_repo treats the next successful poll as a first-poll
+        // (HEAD seed + today's first 50 commits only) — losing every commit
+        // that happened during the blackout.
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/work/repo-a"), rs());
+        states.insert(PathBuf::from("/work/repo-b"), rs());
+        states.insert(PathBuf::from("/personal/old"), rs());
+
+        // /work errored discovery this cycle. Keep its descendants.
+        let unreliable = vec![PathBuf::from("/work")];
+        // /personal probed clean but /personal/old isn't in current → real removal.
+        let current: Vec<PathBuf> = vec![];
+
+        let evicted = prune_repo_states(&mut states, &current, &unreliable);
+        assert_eq!(evicted, vec![PathBuf::from("/personal/old")]);
+        assert!(states.contains_key(Path::new("/work/repo-a")));
+        assert!(states.contains_key(Path::new("/work/repo-b")));
+        assert!(!states.contains_key(Path::new("/personal/old")));
+    }
+
+    #[test]
+    fn prune_unreliable_root_exact_match_kept() {
+        // The watch_dir itself is also a valid repo path (some users add a
+        // repo as a watch_dir directly). Exact-match against the unreliable
+        // root must also be skipped.
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/work"), rs());
+        let unreliable = vec![PathBuf::from("/work")];
+        let evicted = prune_repo_states(&mut states, &[], &unreliable);
+        assert!(evicted.is_empty());
+        assert!(states.contains_key(Path::new("/work")));
     }
 
     #[test]

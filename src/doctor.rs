@@ -736,8 +736,17 @@ pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
     let poll_mode = crate::db::get_daemon_state(&conn, "last_poll_mode")
         .ok()
         .flatten();
+    // Prefer the daemon's own persisted poll_interval over the reader's
+    // config. If the user's config.toml is mid-edit / malformed when status
+    // or doctor runs, computing thresholds from a default-fallback misclassifies
+    // health for any daemon running a non-default interval.
+    let effective_interval = crate::db::get_daemon_state(&conn, "effective_poll_interval_secs")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(config.poll_interval_secs);
     let max_expected_gap_secs =
-        stall_threshold_for_mode(poll_mode.as_deref(), config.poll_interval_secs);
+        stall_threshold_for_mode(poll_mode.as_deref(), effective_interval);
 
     let input = PollHealthInput {
         last_poll_at,

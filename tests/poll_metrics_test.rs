@@ -218,6 +218,7 @@ fn make_snap(mode: &str) -> HealthSnapshot {
         last_poll_at: chrono::Utc::now(),
         poll_mode: mode.into(),
         repos_watched: 3,
+        effective_poll_interval_secs: 600,
         poll_metrics: PollMetrics {
             failed_paths: vec![PathBuf::from("/repo/x")],
         },
@@ -239,6 +240,7 @@ fn write_health_snapshot_writes_all_seven_keys() {
         "last_poll_at",
         "last_poll_mode",
         "repos_watched",
+        "effective_poll_interval_secs",
         "last_poll_repos_failed",
         "last_poll_failed_sample",
         "last_poll_discovery_failed",
@@ -249,6 +251,7 @@ fn write_health_snapshot_writes_all_seven_keys() {
     }
     assert_eq!(db::get_daemon_state(&conn, "last_poll_mode").unwrap().unwrap(), "watcher");
     assert_eq!(db::get_daemon_state(&conn, "repos_watched").unwrap().unwrap(), "3");
+    assert_eq!(db::get_daemon_state(&conn, "effective_poll_interval_secs").unwrap().unwrap(), "600");
     assert_eq!(db::get_daemon_state(&conn, "last_poll_repos_failed").unwrap().unwrap(), "1");
     assert_eq!(db::get_daemon_state(&conn, "last_poll_discovery_failed").unwrap().unwrap(), "1");
 }
@@ -283,6 +286,7 @@ fn write_health_snapshot_rollback_preserves_prior_values() {
         ("last_poll_at", "2026-04-01T00:00:00+00:00"),
         ("last_poll_mode", "polling"),
         ("repos_watched", "99"),
+        ("effective_poll_interval_secs", "300"),
         ("last_poll_repos_failed", "3"),
         ("last_poll_failed_sample", "/old/a\n/old/b"),
         ("last_poll_discovery_failed", "2"),
@@ -304,6 +308,7 @@ fn write_health_snapshot_rollback_preserves_prior_values() {
         last_poll_at: chrono::Utc::now(),
         poll_mode: "watcher".into(),
         repos_watched: 999,
+        effective_poll_interval_secs: 7200,
         poll_metrics: PollMetrics { failed_paths: vec![PathBuf::from("/new")] },
         discovery_metrics: DiscoveryMetrics { failures: vec![] },
     };

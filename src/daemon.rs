@@ -173,6 +173,7 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
         discovery_failed_sample: Vec<String>,
         events_today: Option<u64>,
         poll_mode: Option<String>,
+        effective_poll_interval_secs: Option<u64>,
     }
     let probed = if db_path.exists() {
         match crate::db::open_db(&db_path) {
@@ -200,13 +201,14 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
                     poll_mode: crate::db::get_daemon_state(&conn, "last_poll_mode")
                         .ok()
                         .flatten(),
+                    effective_poll_interval_secs: parse_u64("effective_poll_interval_secs"),
                 }
             }
             Err(_) => Probed {
                 last_poll_at: None, repos_watched: None, repos_failed: None,
                 failed_sample: Vec::new(), discovery_failed: None,
                 discovery_failed_sample: Vec::new(), events_today: None,
-                poll_mode: None,
+                poll_mode: None, effective_poll_interval_secs: None,
             },
         }
     } else {
@@ -214,16 +216,22 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
             last_poll_at: None, repos_watched: None, repos_failed: None,
             failed_sample: Vec::new(), discovery_failed: None,
             discovery_failed_sample: Vec::new(), events_today: None,
-            poll_mode: None,
+            poll_mode: None, effective_poll_interval_secs: None,
         }
     };
 
     // Mirror check_poll_health exactly so doctor and status never disagree.
     // Watcher mode → 2*FULL_SCAN_SECS only; polling mode → 3*poll_interval
-    // floored at 120s; missing key → legacy max-of-both.
+    // floored at 120s; missing key → legacy max-of-both. Pull poll_interval
+    // from the daemon's persisted value so a malformed reader-side config
+    // (status's load_config-fail fallback to Config::default()) doesn't
+    // misclassify health for daemons running a non-default interval.
+    let effective_interval = probed
+        .effective_poll_interval_secs
+        .unwrap_or(config.poll_interval_secs);
     let max_expected_gap_secs = crate::doctor::stall_threshold_for_mode(
         probed.poll_mode.as_deref(),
-        config.poll_interval_secs,
+        effective_interval,
     );
     let health = compute_health(
         running,
