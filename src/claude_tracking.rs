@@ -197,10 +197,10 @@ pub fn poll_claude_sessions_with_paths(
 
     // Phase 1b: Update last_active_at from JSONL conversation log mtime
     for session in &session_files {
-        if let Some(log_path) = find_session_log(projects_path, &session.cwd, &session.session_id) {
-            if let Some(mtime) = mtime_rfc3339(&log_path) {
-                let _ = db::update_session_last_active(conn, &session.session_id, &mtime);
-            }
+        if let Some(log_path) = find_session_log(projects_path, &session.cwd, &session.session_id)
+            && let Some(mtime) = mtime_rfc3339(&log_path)
+        {
+            let _ = db::update_session_last_active(conn, &session.session_id, &mtime);
         }
     }
 

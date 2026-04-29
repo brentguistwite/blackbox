@@ -378,28 +378,28 @@ fn render_status_pretty(status: &DaemonStatus) {
         Some(n) => println!("  Repos watched: {}", n),
         None => println!("  Repos watched: unknown"),
     }
-    if let Some(failed) = status.repos_failed_last_poll {
-        if failed > 0 {
-            let total = status.repos_watched.unwrap_or(0).max(failed);
-            let suffix = if status.failed_sample.is_empty() {
-                String::new()
-            } else {
-                format!(" — {}", status.failed_sample.join(", "))
-            };
-            let line = format!("  Poll failures: {failed} of {total}{suffix}");
-            println!("{}", line.yellow());
-        }
+    if let Some(failed) = status.repos_failed_last_poll
+        && failed > 0
+    {
+        let total = status.repos_watched.unwrap_or(0).max(failed);
+        let suffix = if status.failed_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", status.failed_sample.join(", "))
+        };
+        let line = format!("  Poll failures: {failed} of {total}{suffix}");
+        println!("{}", line.yellow());
     }
-    if let Some(disc) = status.discovery_failed_last_poll {
-        if disc > 0 {
-            let suffix = if status.discovery_failed_sample.is_empty() {
-                String::new()
-            } else {
-                format!(" — {}", status.discovery_failed_sample.join(", "))
-            };
-            let line = format!("  Discovery failures: {disc} watch_dir(s){suffix}");
-            println!("{}", line.red());
-        }
+    if let Some(disc) = status.discovery_failed_last_poll
+        && disc > 0
+    {
+        let suffix = if status.discovery_failed_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", status.discovery_failed_sample.join(", "))
+        };
+        let line = format!("  Discovery failures: {disc} watch_dir(s){suffix}");
+        println!("{}", line.red());
     }
     match status.db_size_bytes {
         Some(b) => println!("  DB size:       {:.1} KB", b as f64 / 1024.0),
