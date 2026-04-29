@@ -115,6 +115,63 @@ pub fn write_discovery_metrics(
     Ok(())
 }
 
+/// Atomic per-cycle health snapshot. Combines heartbeat + poll metrics +
+/// discovery metrics under one transaction so a partial write can never leave
+/// `last_poll_at` advanced past stale failure counts. Doctor reads all 7 keys
+/// to grade health; observing a fresh timestamp paired with a stale "0 failed"
+/// from a prior cycle was the silent-data-loss failure mode.
+#[derive(Debug, Clone)]
+pub struct HealthSnapshot {
+    pub last_poll_at: chrono::DateTime<chrono::Utc>,
+    /// "watcher" or "polling". Derived from the LIVE state of `watcher_opt`
+    /// at write time, NOT cached at daemon init — pure-polling fallback
+    /// re-tries `RepoWatcher::new` every cycle and self-heals.
+    pub poll_mode: String,
+    pub repos_watched: usize,
+    pub poll_metrics: PollMetrics,
+    pub discovery_metrics: DiscoveryMetrics,
+}
+
+/// Write all 7 daemon_state keys for one cycle in a single transaction.
+/// Replaces the prior split between `write_heartbeat` / `write_poll_metrics` /
+/// `write_discovery_metrics` so any individual key failing rolls back the
+/// whole snapshot rather than leaving a torn read for doctor.
+pub fn write_health_snapshot(
+    conn: &Connection,
+    snap: &HealthSnapshot,
+) -> anyhow::Result<()> {
+    let now = snap.last_poll_at.to_rfc3339();
+    let failed_count = snap.poll_metrics.failed_paths.len();
+    let failed_sample = snap
+        .poll_metrics
+        .failed_paths
+        .iter()
+        .take(FAILED_SAMPLE_LIMIT)
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let disc_count = snap.discovery_metrics.failures.len();
+    let disc_sample = snap
+        .discovery_metrics
+        .failures
+        .iter()
+        .take(FAILED_SAMPLE_LIMIT)
+        .map(|(p, _)| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let tx = conn.unchecked_transaction()?;
+    db::set_daemon_state(&tx, "last_poll_at", &now)?;
+    db::set_daemon_state(&tx, "last_poll_mode", &snap.poll_mode)?;
+    db::set_daemon_state(&tx, "repos_watched", &snap.repos_watched.to_string())?;
+    db::set_daemon_state(&tx, "last_poll_repos_failed", &failed_count.to_string())?;
+    db::set_daemon_state(&tx, "last_poll_failed_sample", &failed_sample)?;
+    db::set_daemon_state(&tx, "last_poll_discovery_failed", &disc_count.to_string())?;
+    db::set_daemon_state(&tx, "last_poll_discovery_failed_sample", &disc_sample)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Persist poll-cycle health metrics atomically. See `write_discovery_metrics`
 /// for the transaction rationale.
 pub fn write_poll_metrics(conn: &Connection, metrics: &PollMetrics) -> anyhow::Result<()> {
@@ -211,35 +268,42 @@ pub fn remove_stale_worktrees(repo_states: &mut HashMap<PathBuf, RepoState>) -> 
     stale
 }
 
-/// Write heartbeat data to daemon_state. Wrapped in a transaction so a
-/// reader can't observe last_poll_at updated without the matching
-/// repos_watched (or vice versa) — those two are read together by doctor /
-/// status to compute per-cycle health.
-fn write_heartbeat(conn: &Connection, repo_count: usize) {
-    let now = chrono::Utc::now().to_rfc3339();
-    let result = (|| -> anyhow::Result<()> {
-        let tx = conn.unchecked_transaction()?;
-        db::set_daemon_state(&tx, "last_poll_at", &now)?;
-        db::set_daemon_state(&tx, "repos_watched", &repo_count.to_string())?;
-        tx.commit()?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        log::warn!("Failed to write heartbeat: {}", e);
+/// Build and persist a HealthSnapshot from the current loop state. Mode is
+/// derived live from `watcher_opt` so a self-healed pure-polling daemon
+/// (watcher recovers on retry) starts reporting "watcher" the very next
+/// snapshot — without this, doctor would keep using the more lenient
+/// polling-mode threshold long after recovery.
+fn write_snapshot(
+    conn: &Connection,
+    watcher_opt: &Option<RepoWatcher>,
+    repos_watched: usize,
+    failed_set: &std::collections::HashSet<PathBuf>,
+    discovery: &DiscoveryMetrics,
+) {
+    let snap = HealthSnapshot {
+        last_poll_at: chrono::Utc::now(),
+        poll_mode: if watcher_opt.is_some() { "watcher" } else { "polling" }.into(),
+        repos_watched,
+        poll_metrics: metrics_from_set(failed_set),
+        discovery_metrics: discovery.clone(),
+    };
+    if let Err(e) = write_health_snapshot(conn, &snap) {
+        log::warn!("Failed to write health snapshot: {}", e);
     }
 }
 
 /// Full scan: re-discover repos, poll all, collect reviews, track sessions.
-/// Discovery errors at any depth (top-level read_dir + recursive WalkDir)
-/// are folded into a single DiscoveryMetrics write so doctor sees both
-/// "watch_dir unreadable" and "subtree under watch_dir unreadable" as
-/// Required failures.
+/// Returns repos plus the DiscoveryMetrics so the caller can write a single
+/// atomic HealthSnapshot covering heartbeat, poll metrics, discovery metrics,
+/// and live mode. The caller stamps the snapshot timestamp + mode at write
+/// time so mode reflects watcher_opt as of the write, not as of full_scan
+/// entry (matters in the pure-polling fallback that retries the watcher).
 fn full_scan(
     config: &Config,
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
     failed_set: &mut std::collections::HashSet<PathBuf>,
-) -> Vec<PathBuf> {
+) -> (Vec<PathBuf>, DiscoveryMetrics) {
     let mut discovery_failures = probe_watch_dirs(&config.watch_dirs);
     for (path, err) in &discovery_failures {
         log::warn!("Cannot read watch_dir {}: {}", path.display(), err);
@@ -252,11 +316,6 @@ fn full_scan(
     }
     discovery_failures.extend(traversal_errors);
 
-    let discovery_metrics = DiscoveryMetrics { failures: discovery_failures };
-    if let Err(e) = write_discovery_metrics(conn, &discovery_metrics) {
-        log::warn!("Failed to write discovery metrics: {}", e);
-    }
-
     // Prune BEFORE polling. poll_all_repos calls ensure_state for every entry
     // in `repos`, which would re-insert pruned-but-still-discovered entries —
     // safe — but if we pruned AFTER, evicted entries still in `repo_states`
@@ -268,13 +327,10 @@ fn full_scan(
     }
 
     poll_all_repos(&repos, repo_states, conn, failed_set);
-    if let Err(e) = write_poll_metrics(conn, &metrics_from_set(failed_set)) {
-        log::warn!("Failed to write poll metrics: {}", e);
-    }
     enrichment::collect_reviews(&repos, conn);
     enrichment::collect_pr_snapshots(&repos, conn);
     ai_tracking::poll_all_ai_sessions(conn, &repos);
-    repos
+    (repos, DiscoveryMetrics { failures: discovery_failures })
 }
 
 fn maybe_send_daily_notification(config: &Config, conn: &Connection) {
@@ -371,9 +427,7 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     // failure shows up in `doctor` immediately, not 30 minutes later.
     let mut failed_set: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     // Initial full scan
-    let mut repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
-    write_heartbeat(&conn, repos.len());
-    maybe_send_daily_notification(&config, &conn);
+    let (mut repos, mut last_discovery) = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
 
     // Try to set up filesystem watcher
     let mut watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -382,6 +436,13 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
     } else {
         log::warn!("File watcher unavailable, falling back to polling");
     }
+
+    // Atomic snapshot AFTER watcher init so poll_mode reflects the live
+    // watcher_opt state. Doing this after init keeps the "mode key derived
+    // every snapshot from watcher_opt.is_some()" invariant tested by
+    // write_health_snapshot_mode_transitions_from_polling_to_watcher.
+    write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+    maybe_send_daily_notification(&config, &conn);
 
     let mut last_full_scan = Instant::now();
 
@@ -400,10 +461,13 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                     config = new_cfg;
                     log::info!("Config reloaded successfully");
                     // Re-discover repos and recreate watcher with new config
-                    repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
-                    write_heartbeat(&conn, repos.len());
-                    maybe_send_daily_notification(&config, &conn);
+                    let (new_repos, new_disc) = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
+                    repos = new_repos;
+                    last_discovery = new_disc;
                     watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
+                    // Snapshot AFTER watcher recreate so mode reflects new state.
+                    write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+                    maybe_send_daily_notification(&config, &conn);
                     last_full_scan = Instant::now();
                     debounce_map.clear();
                 }
@@ -441,42 +505,38 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
             }
 
             if metrics_dirty {
-                if let Err(e) = write_poll_metrics(&conn, &metrics_from_set(&failed_set)) {
-                    log::warn!("Failed to write poll metrics (watcher path): {}", e);
-                }
-                // Bump heartbeat so doctor sees this as proof of liveness, not
-                // as a stalled idle-watcher between full scans.
-                //
-                // Use repo_states.len() (the authoritative in-memory set), not
-                // the stale `repos` vec that's only refreshed on full_scan.
-                // If a new_worktree was just added or a stale one removed,
-                // `repos` is wrong; using it would make compute_health compare
-                // a fresh failure count against a stale denominator and could
-                // fabricate "all polls failing" alarms during normal worktree
-                // creation.
-                write_heartbeat(&conn, repo_states.len());
+                // Atomic snapshot: heartbeat + per-cycle metrics + (cached)
+                // discovery state under one transaction. repos_watched uses
+                // repo_states.len() — the authoritative in-memory set —
+                // because new_worktrees added or stale ones removed since the
+                // last full_scan are reflected there but not in `repos`.
+                // last_discovery is unchanged since the last full_scan
+                // (probe_watch_dirs runs only there).
+                write_snapshot(&conn, &watcher_opt, repo_states.len(), &failed_set, &last_discovery);
             }
 
             // Periodic full scan for missed events + new repos
             if last_full_scan.elapsed() >= Duration::from_secs(FULL_SCAN_SECS) {
-                repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
-                write_heartbeat(&conn, repos.len());
-                maybe_send_daily_notification(&config, &conn);
+                let (new_repos, new_disc) = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
+                repos = new_repos;
+                last_discovery = new_disc;
 
                 // Recreate watcher with updated repo list
                 watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
                 if let Some(ref _w) = watcher_opt {
                     log::info!("Watching {} repos for changes", repos.len());
                 }
+                write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+                maybe_send_daily_notification(&config, &conn);
                 last_full_scan = Instant::now();
                 debounce_map.clear();
             }
         } else {
             // Pure polling fallback (original behavior)
             std::thread::sleep(Duration::from_secs(config.poll_interval_secs));
-            repos = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
-            write_heartbeat(&conn, repos.len());
-            maybe_send_daily_notification(&config, &conn);
+            let (new_repos, new_disc) = full_scan(&config, &mut repo_states, &conn, &mut failed_set);
+            repos = new_repos;
+            last_discovery = new_disc;
 
             // Retry watcher setup on each full scan
             watcher_opt = RepoWatcher::new(&repos, config.worktree_dir_name.as_deref()).ok();
@@ -487,6 +547,11 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 );
                 last_full_scan = Instant::now();
             }
+            // Snapshot after watcher retry so mode flips to "watcher" the
+            // moment the watcher self-heals — without this delay, doctor
+            // would keep using the more lenient polling-mode threshold.
+            write_snapshot(&conn, &watcher_opt, repos.len(), &failed_set, &last_discovery);
+            maybe_send_daily_notification(&config, &conn);
         }
     }
 }

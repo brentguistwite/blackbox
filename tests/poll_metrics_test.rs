@@ -1,7 +1,7 @@
 use blackbox::db;
 use blackbox::poller::{
-    probe_watch_dirs, record_repo_outcome, write_discovery_metrics, write_poll_metrics,
-    DiscoveryMetrics, PollMetrics,
+    probe_watch_dirs, record_repo_outcome, write_discovery_metrics, write_health_snapshot,
+    write_poll_metrics, DiscoveryMetrics, HealthSnapshot, PollMetrics,
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -211,6 +211,115 @@ fn record_repo_outcome_independent_paths() {
     record_repo_outcome(&mut set, &PathBuf::from("/repo/b"), false);
     assert!(set.contains(&PathBuf::from("/repo/a")));
     assert!(!set.contains(&PathBuf::from("/repo/b")));
+}
+
+fn make_snap(mode: &str) -> HealthSnapshot {
+    HealthSnapshot {
+        last_poll_at: chrono::Utc::now(),
+        poll_mode: mode.into(),
+        repos_watched: 3,
+        poll_metrics: PollMetrics {
+            failed_paths: vec![PathBuf::from("/repo/x")],
+        },
+        discovery_metrics: DiscoveryMetrics {
+            failures: vec![(PathBuf::from("/watch/a"), "denied".into())],
+        },
+    }
+}
+
+#[test]
+fn write_health_snapshot_writes_all_seven_keys() {
+    let tmp = TempDir::new().unwrap();
+    let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
+    let snap = make_snap("watcher");
+
+    write_health_snapshot(&conn, &snap).unwrap();
+
+    for key in &[
+        "last_poll_at",
+        "last_poll_mode",
+        "repos_watched",
+        "last_poll_repos_failed",
+        "last_poll_failed_sample",
+        "last_poll_discovery_failed",
+        "last_poll_discovery_failed_sample",
+    ] {
+        let v = db::get_daemon_state(&conn, key).unwrap();
+        assert!(v.is_some(), "key '{key}' must be set after snapshot write");
+    }
+    assert_eq!(db::get_daemon_state(&conn, "last_poll_mode").unwrap().unwrap(), "watcher");
+    assert_eq!(db::get_daemon_state(&conn, "repos_watched").unwrap().unwrap(), "3");
+    assert_eq!(db::get_daemon_state(&conn, "last_poll_repos_failed").unwrap().unwrap(), "1");
+    assert_eq!(db::get_daemon_state(&conn, "last_poll_discovery_failed").unwrap().unwrap(), "1");
+}
+
+#[test]
+fn write_health_snapshot_mode_transitions_from_polling_to_watcher() {
+    // Locks in the "mode derived live every snapshot" contract. An
+    // implementer who hoists mode out of the loop would silently break
+    // recovery from polling-fallback → watcher.
+    let tmp = TempDir::new().unwrap();
+    let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
+
+    write_health_snapshot(&conn, &make_snap("polling")).unwrap();
+    assert_eq!(db::get_daemon_state(&conn, "last_poll_mode").unwrap().unwrap(), "polling");
+
+    write_health_snapshot(&conn, &make_snap("watcher")).unwrap();
+    assert_eq!(db::get_daemon_state(&conn, "last_poll_mode").unwrap().unwrap(), "watcher");
+}
+
+#[test]
+fn write_health_snapshot_rollback_preserves_prior_values() {
+    // Pre-seed all 7 keys with known old values, then force write_health_snapshot
+    // to fail by holding BEGIN EXCLUSIVE on a second connection. With a
+    // tightened busy_timeout the call returns Err quickly. Assert NO key
+    // advanced — the whole snapshot rolls back as a unit, preserving the
+    // paired-keys invariant doctor depends on.
+    let tmp = TempDir::new().unwrap();
+    let db_path = tmp.path().join("test.db");
+    let conn = db::open_db(&db_path).unwrap();
+
+    let originals = [
+        ("last_poll_at", "2026-04-01T00:00:00+00:00"),
+        ("last_poll_mode", "polling"),
+        ("repos_watched", "99"),
+        ("last_poll_repos_failed", "3"),
+        ("last_poll_failed_sample", "/old/a\n/old/b"),
+        ("last_poll_discovery_failed", "2"),
+        ("last_poll_discovery_failed_sample", "/old/watch"),
+    ];
+    for (k, v) in &originals {
+        db::set_daemon_state(&conn, k, v).unwrap();
+    }
+
+    // Tighten primary conn's busy_timeout so the failure is fast (~50ms).
+    conn.pragma_update(None, "busy_timeout", 10).unwrap();
+
+    // Hold an exclusive write transaction on a second connection.
+    let blocker = rusqlite::Connection::open(&db_path).unwrap();
+    blocker.pragma_update(None, "busy_timeout", 10).unwrap();
+    blocker.execute("BEGIN EXCLUSIVE", []).unwrap();
+
+    let snap = HealthSnapshot {
+        last_poll_at: chrono::Utc::now(),
+        poll_mode: "watcher".into(),
+        repos_watched: 999,
+        poll_metrics: PollMetrics { failed_paths: vec![PathBuf::from("/new")] },
+        discovery_metrics: DiscoveryMetrics { failures: vec![] },
+    };
+    let result = write_health_snapshot(&conn, &snap);
+    assert!(result.is_err(), "snapshot write should fail under exclusive lock");
+
+    drop(blocker);
+
+    // Every key must still hold its ORIGINAL pre-seeded value — no partial advance.
+    for (k, expected) in &originals {
+        let actual = db::get_daemon_state(&conn, k).unwrap().unwrap();
+        assert_eq!(
+            &actual, expected,
+            "key '{k}' must roll back to original on snapshot failure"
+        );
+    }
 }
 
 #[test]
