@@ -93,7 +93,17 @@ pub fn find_worktree_parent_dirs(repos: &[PathBuf], worktree_dir_name: &str) -> 
 #[derive(Debug, Default, Clone)]
 pub struct DiscoveredRepos {
     pub repos: Vec<PathBuf>,
+    /// Errors that actually block discovery of additional repo roots — the
+    /// watch_dir tree itself, paths NOT under any discovered repo, or paths
+    /// under a worktree-parent dir (worktrees ARE discoverable repos).
+    /// doctor escalates these to Required.
     pub traversal_errors: Vec<(PathBuf, String)>,
+    /// Errors deep inside a discovered repo's tree (artifact dirs, generated
+    /// caches, restricted private subtrees). These are NOT discovery failures
+    /// — the repo polled fine — but kept for diagnostics. doctor / status do
+    /// not promote them to Required. Codex round 9 [medium]: a chmod-000
+    /// artifact dir inside a healthy repo was flipping daemon Required/Red.
+    pub inside_repo_advisories: Vec<(PathBuf, String)>,
 }
 
 pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -> Vec<PathBuf> {
@@ -110,6 +120,7 @@ pub fn discover_repos_with_errors(
 ) -> DiscoveredRepos {
     let mut repos = Vec::new();
     let mut errors: Vec<(PathBuf, String)> = Vec::new();
+    let mut worktree_parents: Vec<PathBuf> = Vec::new();
     for dir in watch_dirs {
         // Fast path: dir is itself a repo root
         let git_path = dir.join(".git");
@@ -119,6 +130,7 @@ pub fn discover_repos_with_errors(
             if let Some(wt_name) = worktree_dir_name {
                 let wt_dir = dir.join(wt_name);
                 if wt_dir.is_dir() {
+                    worktree_parents.push(wt_dir.clone());
                     scan_repos_walkdir(&wt_dir, Some(2), &mut repos, &mut errors);
                 }
             }
@@ -133,15 +145,30 @@ pub fn discover_repos_with_errors(
     }
     repos.sort();
     repos.dedup();
-    // Note: do NOT filter errors based on "inside a discovered repo".
-    // scan_repos_walkdir descends recursively, so a nested .git under a
-    // restricted subtree of an already-discovered repo would also be hidden
-    // if we suppressed those errors (Codex round 8 [high]). Surfacing every
-    // walk error means a chmod-000 artifact dir inside an otherwise-healthy
-    // repo will fire a Required warning — the user can chmod it or skip
-    // it via SKIP_DIRS. False positive is the right error mode here;
-    // silent-loss is not.
-    DiscoveredRepos { repos, traversal_errors: errors }
+
+    // Split errors into blocking (Required) and advisory (informational).
+    // An error blocks discovery iff it isn't strictly inside an already-
+    // discovered repo's tree, OR it's under a configured worktree-parent
+    // (worktrees DO live there — Codex round 7 [high]). Errors deep inside
+    // a discovered repo (artifact / cache / restricted subtrees) are
+    // advisory: the repo polled fine, no nested repo was hidden in the
+    // load-bearing sense, and Required-flagging them creates Codex round 9
+    // [medium]'s false-alarm path that masks real breakage.
+    let mut traversal_errors: Vec<(PathBuf, String)> = Vec::new();
+    let mut inside_repo_advisories: Vec<(PathBuf, String)> = Vec::new();
+    for (path, msg) in errors {
+        let under_worktree_parent = worktree_parents
+            .iter()
+            .any(|wp| path == wp.as_path() || path.starts_with(wp));
+        let inside_repo = repos.iter().any(|r| path.starts_with(r));
+        if under_worktree_parent || !inside_repo {
+            traversal_errors.push((path, msg));
+        } else {
+            inside_repo_advisories.push((path, msg));
+        }
+    }
+
+    DiscoveredRepos { repos, traversal_errors, inside_repo_advisories }
 }
 
 /// Scan well-known dev directories + HOME children for git repos.

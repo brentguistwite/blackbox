@@ -279,15 +279,32 @@ pub fn prune_repo_states(
     evicted
 }
 
-/// Remove stale worktree entries from repo_states.
-/// A worktree is stale if is_worktree() returns None (deleted .git file) or
-/// the resolved gitdir HEAD no longer exists.
+/// Returns true only if a worktree path is CONFIRMED gone — the worktree
+/// directory or its .git pointer is reliably absent (Ok(false) from
+/// try_exists). Permission/IO errors on either probe return false so a
+/// transient TCC denial or network blip does not evict the cursor.
+///
+/// Codex round 9 [high]: the prior `is_worktree(path).is_none()` check
+/// returned None for any read failure — including transient ones — and
+/// dropped RepoState. The next successful poll then re-seeded as a first
+/// poll (HEAD + today's first 50 commits), losing every commit during the
+/// outage.
+fn is_definitely_stale_worktree(path: &Path) -> bool {
+    if matches!(path.try_exists(), Ok(false)) {
+        return true;
+    }
+    let git = path.join(".git");
+    matches!(git.try_exists(), Ok(false))
+}
+
+/// Remove stale worktree entries from repo_states. Only evicts on confirmed
+/// deletion — transient permission / IO errors keep state across the blip.
 pub fn remove_stale_worktrees(repo_states: &mut HashMap<PathBuf, RepoState>) -> Vec<PathBuf> {
     let stale: Vec<PathBuf> = repo_states
         .iter()
         .filter(|(path, state)| {
             // Only check worktrees (main_repo_path != scanned path)
-            state.main_repo_path != **path && repo_scanner::is_worktree(path).is_none()
+            state.main_repo_path != **path && is_definitely_stale_worktree(path)
         })
         .map(|(path, _)| path.clone())
         .collect();
@@ -341,10 +358,17 @@ fn full_scan(
         log::warn!("Cannot read watch_dir {}: {}", path.display(), err);
     }
 
-    let DiscoveredRepos { repos, traversal_errors } =
+    let DiscoveredRepos { repos, traversal_errors, inside_repo_advisories } =
         repo_scanner::discover_repos_with_errors(&config.watch_dirs, config.worktree_dir_name.as_deref());
     for (path, err) in &traversal_errors {
         log::warn!("Discovery walk error at {}: {}", path.display(), err);
+    }
+    for (path, err) in &inside_repo_advisories {
+        // Advisory only — do NOT promote to DiscoveryMetrics (Required). A
+        // chmod-000 artifact dir inside a healthy repo is annoying but not
+        // discovery loss. Logged so users can find it without flipping
+        // daemon Red.
+        log::info!("Advisory walk error inside discovered repo {}: {}", path.display(), err);
     }
     discovery_failures.extend(traversal_errors);
 
@@ -747,6 +771,60 @@ mod tests {
         let evicted = prune_repo_states(&mut states, &[], &unreliable);
         assert!(evicted.is_empty());
         assert!(states.contains_key(Path::new("/work")));
+    }
+
+    #[test]
+    fn is_definitely_stale_worktree_path_missing_returns_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("never_existed");
+        assert!(is_definitely_stale_worktree(&missing));
+    }
+
+    #[test]
+    fn is_definitely_stale_worktree_dot_git_missing_returns_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wt");
+        std::fs::create_dir(&dir).unwrap();
+        // Path exists, .git is absent → confirmed stale.
+        assert!(is_definitely_stale_worktree(&dir));
+    }
+
+    #[test]
+    fn is_definitely_stale_worktree_dot_git_present_returns_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wt");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join(".git"), "gitdir: /some/path").unwrap();
+        // Even with garbage gitdir contents, the .git file is present →
+        // not definitely stale (could be transient resolve failure).
+        assert!(!is_definitely_stale_worktree(&dir));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_definitely_stale_worktree_permission_denied_returns_false() {
+        // Codex round 9 [high]: a transient TCC / chmod 000 on the worktree
+        // dir must NOT evict state. try_exists() on an unreadable parent dir
+        // returns Err(PermissionDenied), not Ok(false). The probe must treat
+        // that as "keep state" so the next clean cycle resumes from cursor.
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("locked");
+        std::fs::create_dir(&parent).unwrap();
+        let wt = parent.join("wt");
+        std::fs::create_dir(&wt).unwrap();
+        std::fs::write(wt.join(".git"), "gitdir: /x").unwrap();
+        // Strip parent perms so try_exists on `wt/.git` errors with EACCES.
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = is_definitely_stale_worktree(&wt);
+
+        // Restore before assertions so a panic doesn't leak.
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            !result,
+            "permission-denied probe must keep worktree state, not evict it"
+        );
     }
 
     #[test]

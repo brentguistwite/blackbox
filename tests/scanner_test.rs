@@ -584,12 +584,12 @@ fn discover_repos_with_errors_captures_unreadable_subdir() {
 
 #[cfg(unix)]
 #[test]
-fn discover_errors_inside_a_repo_surface_for_safety() {
-    // Codex round 8 [high]: an unreadable subtree inside a discovered repo
-    // could hide a nested .git that scan_repos_walkdir would otherwise find.
-    // Suppressing the error to keep "chmod 000 artifact dir" quiet creates a
-    // silent-loss path. Surface the error instead — false-positive is the
-    // safe failure mode; the user can chmod or add to SKIP_DIRS.
+fn discover_errors_inside_a_repo_route_to_advisories() {
+    // Codex round 9 [medium]: errors inside an otherwise-healthy repo's tree
+    // (artifact / cache / private subtree) are kept as advisory diagnostics,
+    // NOT promoted to traversal_errors. Doctor escalates traversal_errors
+    // to Required; false-flagging chmod-000 artifact dirs as discovery
+    // failures was hiding real breakage behind noise.
     use std::os::unix::fs::PermissionsExt;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path().join("myrepo");
@@ -606,15 +606,24 @@ fn discover_errors_inside_a_repo_surface_for_safety() {
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(result.repos.iter().any(|p| p == &repo), "repo should still be discovered");
-    let surfaced = result
+    let blocking_under_repo: Vec<_> = result
         .traversal_errors
+        .iter()
+        .filter(|(p, _)| p.starts_with(&repo))
+        .collect();
+    assert!(
+        blocking_under_repo.is_empty(),
+        "errors inside a discovered repo must NOT be Required, got: {:?}",
+        blocking_under_repo
+    );
+    let advisory = result
+        .inside_repo_advisories
         .iter()
         .any(|(p, _)| p.starts_with(&repo));
     assert!(
-        surfaced,
-        "errors inside a discovered repo must surface so a hidden nested .git \
-         can't disappear silently, got: {:?}",
-        result.traversal_errors
+        advisory,
+        "errors inside a discovered repo must surface as advisory, got: {:?}",
+        result.inside_repo_advisories
     );
 }
 
