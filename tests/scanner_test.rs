@@ -621,6 +621,40 @@ fn discover_errors_inside_a_repo_are_filtered_out() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn discover_unreadable_worktrees_dir_under_repo_is_surfaced() {
+    // Codex round 7 [high]: when a watch_dir is itself a repo and worktrees
+    // live under <repo>/<worktree_dir_name>, an unreadable .worktrees/
+    // subtree was being filtered out by the "inside discovered repo"
+    // suppression. That left silent worktree tracking loss with no doctor
+    // signal. Worktree-parent dirs must be exempt from the filter.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+
+    let wt_parent = repo.join(".worktrees");
+    std::fs::create_dir(&wt_parent).unwrap();
+    std::fs::set_permissions(&wt_parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[repo.clone()], Some(".worktrees"));
+
+    // Restore perms before assertions.
+    std::fs::set_permissions(&wt_parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.repos.iter().any(|p| p == &repo), "main repo still discovered");
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &wt_parent || p.starts_with(&wt_parent));
+    assert!(
+        surfaced,
+        "unreadable .worktrees/ under a repo must surface as discovery error, got: {:?}",
+        result.traversal_errors
+    );
+}
+
 #[test]
 fn discover_repos_returns_same_repos_as_with_errors() {
     // Backwards-compat contract: discover_repos must return the same set

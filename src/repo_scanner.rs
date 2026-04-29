@@ -110,6 +110,11 @@ pub fn discover_repos_with_errors(
 ) -> DiscoveredRepos {
     let mut repos = Vec::new();
     let mut errors: Vec<(PathBuf, String)> = Vec::new();
+    // Subtrees that ARE expected to contain additional repo roots (worktrees
+    // under a discovered repo). Errors inside these must NOT be filtered as
+    // "inside an already-discovered repo" — that's the worktree silent-loss
+    // path Codex round 7 [high] flagged.
+    let mut worktree_parents: Vec<PathBuf> = Vec::new();
     for dir in watch_dirs {
         // Fast path: dir is itself a repo root
         let git_path = dir.join(".git");
@@ -119,6 +124,7 @@ pub fn discover_repos_with_errors(
             if let Some(wt_name) = worktree_dir_name {
                 let wt_dir = dir.join(wt_name);
                 if wt_dir.is_dir() {
+                    worktree_parents.push(wt_dir.clone());
                     scan_repos_walkdir(&wt_dir, Some(2), &mut repos, &mut errors);
                 }
             }
@@ -140,7 +146,20 @@ pub fn discover_repos_with_errors(
     // discovery failure even though `poll_repo` for that repo still works.
     // Codex round 6 [high]: only surface errors that block discovery of
     // additional repo roots.
-    errors.retain(|(err_path, _)| !repos.iter().any(|repo| err_path.starts_with(repo)));
+    //
+    // Worktree-parent dirs are exempt — they DO contain additional repo
+    // roots (worktrees), so a TCC/permission error there blocks discovery.
+    // Codex round 7 [high]: dropping these errors gave nested worktrees a
+    // silent-failure path with no doctor/status signal.
+    errors.retain(|(err_path, _)| {
+        if worktree_parents
+            .iter()
+            .any(|wp| err_path == wp.as_path() || err_path.starts_with(wp))
+        {
+            return true;
+        }
+        !repos.iter().any(|repo| err_path.starts_with(repo))
+    });
 
     DiscoveredRepos { repos, traversal_errors: errors }
 }
