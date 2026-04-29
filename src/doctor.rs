@@ -475,6 +475,34 @@ pub fn check_ai_tools() -> Vec<CheckResult> {
         .collect()
 }
 
+/// Stall threshold for a daemon running in watcher mode. Liveness is proven
+/// only by full_scan (every FULL_SCAN_SECS) or watcher events; the user's
+/// `poll_interval_secs` is irrelevant in this mode and would falsely widen
+/// the threshold for users who set it large.
+pub fn watcher_stall_threshold_secs() -> u64 {
+    crate::poller::FULL_SCAN_SECS.saturating_mul(2)
+}
+
+/// Stall threshold for the pure-polling fallback mode. Floored at 120s so a
+/// misconfigured `poll_interval_secs = 1` doesn't make stall fire instantly.
+pub fn polling_stall_threshold_secs(poll_interval_secs: u64) -> u64 {
+    std::cmp::max(poll_interval_secs.saturating_mul(3), 120)
+}
+
+/// Pick the stall threshold based on the mode the daemon last reported.
+/// `None` (or unrecognized value) keeps backward-compat for daemons that
+/// predate the `last_poll_mode` key.
+pub fn stall_threshold_for_mode(mode: Option<&str>, poll_interval_secs: u64) -> u64 {
+    match mode {
+        Some("watcher") => watcher_stall_threshold_secs(),
+        Some("polling") => polling_stall_threshold_secs(poll_interval_secs),
+        _ => std::cmp::max(
+            poll_interval_secs.saturating_mul(3),
+            crate::poller::FULL_SCAN_SECS.saturating_mul(2),
+        ),
+    }
+}
+
 /// Inputs required to judge poll health. Pulled out as a struct so
 /// `evaluate_poll_health` is pure (testable without DB / time mocking).
 pub struct PollHealthInput {
@@ -699,16 +727,17 @@ pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
         .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
         .unwrap_or_default();
 
-    // Stall threshold needs to allow for watcher-mode idle gaps. last_poll_at
-    // is bumped on every full_scan and on every watcher event batch, but when
-    // the user is away from the keyboard for an hour the watcher loop sits
-    // idle until the next FULL_SCAN_SECS-driven scan. Using poll_interval_secs
-    // alone (commonly 300s in setup) would false-flag this idle daemon as
-    // stalled. Take the max of both bounds.
-    let max_expected_gap_secs = std::cmp::max(
-        config.poll_interval_secs.saturating_mul(3),
-        crate::poller::FULL_SCAN_SECS.saturating_mul(2),
-    );
+    // Stall threshold derived from the mode the daemon last reported. Watcher
+    // mode proves liveness only via full_scan (FULL_SCAN_SECS) or events;
+    // poll_interval_secs is unused there and folding it into the threshold
+    // lets a user with poll_interval_secs=7200 mask a 4hr stall behind a 6hr
+    // budget. Polling-mode daemons keep the legacy 3× interval bound.
+    // Missing mode key (legacy daemon) → backward-compat max-of-both.
+    let poll_mode = crate::db::get_daemon_state(&conn, "last_poll_mode")
+        .ok()
+        .flatten();
+    let max_expected_gap_secs =
+        stall_threshold_for_mode(poll_mode.as_deref(), config.poll_interval_secs);
 
     let input = PollHealthInput {
         last_poll_at,
@@ -1287,6 +1316,53 @@ mod tests {
         // Legacy state: warning, not Required.
         assert!(!r.passed);
         assert_eq!(r.severity, Severity::Optional);
+    }
+
+    #[test]
+    fn watcher_threshold_is_two_full_scans() {
+        assert_eq!(watcher_stall_threshold_secs(), crate::poller::FULL_SCAN_SECS * 2);
+    }
+
+    #[test]
+    fn polling_threshold_is_3x_interval() {
+        assert_eq!(polling_stall_threshold_secs(300), 900);
+    }
+
+    #[test]
+    fn polling_threshold_floors_at_120s() {
+        // Misconfigured 1s interval must not let stall fire instantly.
+        assert_eq!(polling_stall_threshold_secs(1), 120);
+        assert_eq!(polling_stall_threshold_secs(40), 120);
+    }
+
+    #[test]
+    fn stall_threshold_watcher_mode_ignores_large_poll_interval() {
+        // Watcher daemon, user has poll_interval_secs=7200 (2hr). Threshold
+        // must still be 2*FULL_SCAN_SECS = 1hr, NOT 6hr.
+        let t = stall_threshold_for_mode(Some("watcher"), 7200);
+        assert_eq!(t, watcher_stall_threshold_secs());
+    }
+
+    #[test]
+    fn stall_threshold_polling_mode_uses_interval() {
+        let t = stall_threshold_for_mode(Some("polling"), 600);
+        assert_eq!(t, 1800);
+    }
+
+    #[test]
+    fn stall_threshold_missing_mode_is_backward_compat_max() {
+        // Legacy daemon predating last_poll_mode: keep current behavior so the
+        // existing watcher-idle leniency isn't lost during rollout.
+        let t = stall_threshold_for_mode(None, 300);
+        let expected = std::cmp::max(900, crate::poller::FULL_SCAN_SECS * 2);
+        assert_eq!(t, expected);
+    }
+
+    #[test]
+    fn stall_threshold_unrecognized_mode_falls_back() {
+        let t = stall_threshold_for_mode(Some("garbage"), 300);
+        let expected = std::cmp::max(900, crate::poller::FULL_SCAN_SECS * 2);
+        assert_eq!(t, expected);
     }
 
     #[test]

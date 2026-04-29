@@ -172,6 +172,7 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
         discovery_failed: Option<u64>,
         discovery_failed_sample: Vec<String>,
         events_today: Option<u64>,
+        poll_mode: Option<String>,
     }
     let probed = if db_path.exists() {
         match crate::db::open_db(&db_path) {
@@ -196,12 +197,16 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
                     discovery_failed: parse_u64("last_poll_discovery_failed"),
                     discovery_failed_sample: parse_lines_key("last_poll_discovery_failed_sample"),
                     events_today: crate::db::count_events_today(&conn).ok(),
+                    poll_mode: crate::db::get_daemon_state(&conn, "last_poll_mode")
+                        .ok()
+                        .flatten(),
                 }
             }
             Err(_) => Probed {
                 last_poll_at: None, repos_watched: None, repos_failed: None,
                 failed_sample: Vec::new(), discovery_failed: None,
                 discovery_failed_sample: Vec::new(), events_today: None,
+                poll_mode: None,
             },
         }
     } else {
@@ -209,15 +214,16 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
             last_poll_at: None, repos_watched: None, repos_failed: None,
             failed_sample: Vec::new(), discovery_failed: None,
             discovery_failed_sample: Vec::new(), events_today: None,
+            poll_mode: None,
         }
     };
 
-    // max_expected_gap_secs mirrors check_poll_health: max(3*poll_interval, 2*FULL_SCAN_SECS).
-    // Without this, status would mark a healthy idle watcher daemon Yellow while doctor calls
-    // it Green — same bug Codex flagged for the doctor side, mirrored here.
-    let max_expected_gap_secs = std::cmp::max(
-        config.poll_interval_secs.saturating_mul(3),
-        crate::poller::FULL_SCAN_SECS.saturating_mul(2),
+    // Mirror check_poll_health exactly so doctor and status never disagree.
+    // Watcher mode → 2*FULL_SCAN_SECS only; polling mode → 3*poll_interval
+    // floored at 120s; missing key → legacy max-of-both.
+    let max_expected_gap_secs = crate::doctor::stall_threshold_for_mode(
+        probed.poll_mode.as_deref(),
+        config.poll_interval_secs,
     );
     let health = compute_health(
         running,
@@ -510,6 +516,34 @@ mod tests {
         let stale = chrono::Utc::now() - chrono::Duration::hours(2);
         let h = compute_health(true, Some(stale), 5, Some(0), Some(0), 3600);
         assert_eq!(h, HealthIndicator::Red);
+    }
+
+    #[test]
+    fn compute_health_watcher_mode_2hr_poll_interval_does_not_widen_threshold() {
+        // User has poll_interval_secs=7200, daemon last polled 90min ago in
+        // watcher mode. Caller resolves threshold via stall_threshold_for_mode
+        // → 2*FULL_SCAN_SECS = 3600s. Status must be Red (stalled), not Green.
+        let ninety_min_ago = chrono::Utc::now() - chrono::Duration::minutes(90);
+        let threshold = crate::doctor::stall_threshold_for_mode(Some("watcher"), 7200);
+        let h = compute_health(true, Some(ninety_min_ago), 5, Some(0), Some(0), threshold);
+        assert_eq!(
+            h,
+            HealthIndicator::Red,
+            "watcher-mode threshold must ignore poll_interval_secs; got {:?}",
+            h
+        );
+    }
+
+    #[test]
+    fn compute_health_polling_mode_uses_poll_interval() {
+        // Polling mode honors the user's interval. last_poll 25min ago,
+        // interval=600 → threshold 1800s. age 1500s < 1800s → not Red. age in
+        // yellow window (>900) → Yellow.
+        let twenty_five_min_ago = chrono::Utc::now() - chrono::Duration::minutes(25);
+        let threshold = crate::doctor::stall_threshold_for_mode(Some("polling"), 600);
+        assert_eq!(threshold, 1800);
+        let h = compute_health(true, Some(twenty_five_min_ago), 5, Some(0), Some(0), threshold);
+        assert_eq!(h, HealthIndicator::Yellow);
     }
 
     #[test]
