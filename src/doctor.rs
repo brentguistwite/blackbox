@@ -693,39 +693,33 @@ pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
         }
     };
 
-    let last_poll_at = crate::db::get_daemon_state(&conn, "last_poll_at")
-        .ok()
-        .flatten()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+    // Atomic snapshot read — all keys in one SQL statement. Without this,
+    // doctor could combine a fresh `last_poll_at` from a just-committed
+    // snapshot with stale failure metrics from the prior commit and report a
+    // torn green/red. Codex round 8 [high].
+    let snap = crate::db::get_daemon_state_all(&conn).unwrap_or_default();
+    let parse_lines = |k: &str| -> Vec<String> {
+        snap.get(k)
+            .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+            .unwrap_or_default()
+    };
+
+    let last_poll_at = snap
+        .get("last_poll_at")
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
 
-    let repos_watched = crate::db::get_daemon_state(&conn, "repos_watched")
-        .ok()
-        .flatten()
+    let repos_watched = snap
+        .get("repos_watched")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let failed_count = crate::db::get_daemon_state(&conn, "last_poll_repos_failed")
-        .ok()
-        .flatten()
+    let failed_count = snap.get("last_poll_repos_failed").and_then(|s| s.parse::<usize>().ok());
+    let failed_sample = parse_lines("last_poll_failed_sample");
+    let discovery_failed_count = snap
+        .get("last_poll_discovery_failed")
         .and_then(|s| s.parse::<usize>().ok());
-
-    let failed_sample: Vec<String> = crate::db::get_daemon_state(&conn, "last_poll_failed_sample")
-        .ok()
-        .flatten()
-        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
-        .unwrap_or_default();
-
-    let discovery_failed_count = crate::db::get_daemon_state(&conn, "last_poll_discovery_failed")
-        .ok()
-        .flatten()
-        .and_then(|s| s.parse::<usize>().ok());
-
-    let discovery_failed_sample: Vec<String> = crate::db::get_daemon_state(&conn, "last_poll_discovery_failed_sample")
-        .ok()
-        .flatten()
-        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
-        .unwrap_or_default();
+    let discovery_failed_sample = parse_lines("last_poll_discovery_failed_sample");
 
     // Stall threshold derived from the mode the daemon last reported. Watcher
     // mode proves liveness only via full_scan (FULL_SCAN_SECS) or events;
@@ -733,16 +727,13 @@ pub fn check_poll_health(config: &crate::config::Config) -> CheckResult {
     // lets a user with poll_interval_secs=7200 mask a 4hr stall behind a 6hr
     // budget. Polling-mode daemons keep the legacy 3× interval bound.
     // Missing mode key (legacy daemon) → backward-compat max-of-both.
-    let poll_mode = crate::db::get_daemon_state(&conn, "last_poll_mode")
-        .ok()
-        .flatten();
+    let poll_mode = snap.get("last_poll_mode").cloned();
     // Prefer the daemon's own persisted poll_interval over the reader's
     // config. If the user's config.toml is mid-edit / malformed when status
     // or doctor runs, computing thresholds from a default-fallback misclassifies
     // health for any daemon running a non-default interval.
-    let effective_interval = crate::db::get_daemon_state(&conn, "effective_poll_interval_secs")
-        .ok()
-        .flatten()
+    let effective_interval = snap
+        .get("effective_poll_interval_secs")
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(config.poll_interval_secs);
     let max_expected_gap_secs =

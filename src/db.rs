@@ -485,6 +485,25 @@ pub fn get_daemon_state(conn: &Connection, key: &str) -> anyhow::Result<Option<S
     }
 }
 
+/// Read every key-value pair from daemon_state in a single SQL statement.
+/// SQLite makes single statements atomic with respect to concurrent writers,
+/// so the returned map represents one consistent point-in-time snapshot —
+/// avoiding the torn-read window where doctor / status could otherwise
+/// combine a fresh `last_poll_at` with stale failure metrics from a prior
+/// commit. Codex round 8 [high].
+pub fn get_daemon_state_all(
+    conn: &Connection,
+) -> anyhow::Result<std::collections::HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM daemon_state")?;
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut map = std::collections::HashMap::new();
+    for r in rows {
+        let (k, v) = r?;
+        map.insert(k, v);
+    }
+    Ok(map)
+}
+
 /// Check if a notification was already sent for a given date and type.
 pub fn notification_was_sent(
     conn: &Connection,

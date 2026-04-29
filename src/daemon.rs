@@ -178,19 +178,21 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
     let probed = if db_path.exists() {
         match crate::db::open_db(&db_path) {
             Ok(conn) => {
-                let parse_lines = |s: String| -> Vec<String> {
-                    s.lines().filter(|l| !l.is_empty()).map(String::from).collect()
-                };
-                let parse_u64 =
-                    |k: &str| crate::db::get_daemon_state(&conn, k).ok().flatten().and_then(|s| s.parse::<u64>().ok());
+                // Atomic snapshot read — all keys in one statement so doctor
+                // and status never observe a torn read where last_poll_at is
+                // fresh but failure metrics are from a prior commit.
+                // Codex round 8 [high].
+                let snap = crate::db::get_daemon_state_all(&conn).unwrap_or_default();
+                let parse_u64 = |k: &str| snap.get(k).and_then(|s| s.parse::<u64>().ok());
                 let parse_lines_key = |k: &str| -> Vec<String> {
-                    crate::db::get_daemon_state(&conn, k).ok().flatten().map(parse_lines).unwrap_or_default()
+                    snap.get(k)
+                        .map(|s| s.lines().filter(|l| !l.is_empty()).map(String::from).collect())
+                        .unwrap_or_default()
                 };
                 Probed {
-                    last_poll_at: crate::db::get_daemon_state(&conn, "last_poll_at")
-                        .ok()
-                        .flatten()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+                    last_poll_at: snap
+                        .get("last_poll_at")
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                         .map(|dt| dt.with_timezone(&chrono::Utc)),
                     repos_watched: parse_u64("repos_watched"),
                     repos_failed: parse_u64("last_poll_repos_failed"),
@@ -198,9 +200,7 @@ pub fn get_daemon_status(data_dir: &Path, config: &Config) -> anyhow::Result<Dae
                     discovery_failed: parse_u64("last_poll_discovery_failed"),
                     discovery_failed_sample: parse_lines_key("last_poll_discovery_failed_sample"),
                     events_today: crate::db::count_events_today(&conn).ok(),
-                    poll_mode: crate::db::get_daemon_state(&conn, "last_poll_mode")
-                        .ok()
-                        .flatten(),
+                    poll_mode: snap.get("last_poll_mode").cloned(),
                     effective_poll_interval_secs: parse_u64("effective_poll_interval_secs"),
                 }
             }
@@ -312,6 +312,14 @@ fn compute_health(
     if failed > 0 && base == HealthIndicator::Green {
         return HealthIndicator::Yellow;
     }
+    // No repos discovered + no discovery errors = unconfigured. Doctor renders
+    // this as an Optional warning ("No repos discovered — check watch_dirs").
+    // status must mirror that, not return Green. Codex round 8 [high]: prior
+    // status returned Green for an empty watch_dirs config because failed=0,
+    // contradicting doctor.
+    if repos_watched == 0 && base == HealthIndicator::Green {
+        return HealthIndicator::Yellow;
+    }
     base
 }
 
@@ -320,14 +328,17 @@ fn render_status_pretty(status: &DaemonStatus) {
     let (icon, label) = match status.health {
         HealthIndicator::Green => ("\u{2713}".green().bold(), "Running".green().bold()),
         HealthIndicator::Yellow => {
-            // Distinguish "stale poll", "missing metric", "partial failures"
-            // so users know which corrective action applies.
+            // Distinguish "stale poll", "missing metric", "partial failures",
+            // "no repos discovered" so users know which corrective action
+            // applies.
             let text = if !status.running {
                 "Stopped"
             } else if status.repos_failed_last_poll.is_none() {
                 "Running (metrics unknown — restart daemon to enable)"
             } else if status.repos_failed_last_poll.unwrap_or(0) > 0 {
                 "Running (poll failures)"
+            } else if status.repos_watched.unwrap_or(0) == 0 {
+                "Running (no repos discovered — check watch_dirs)"
             } else {
                 "Running (stale)"
             };
@@ -552,6 +563,16 @@ mod tests {
         assert_eq!(threshold, 1800);
         let h = compute_health(true, Some(twenty_five_min_ago), 5, Some(0), Some(0), threshold);
         assert_eq!(h, HealthIndicator::Green);
+    }
+
+    #[test]
+    fn compute_health_zero_repos_returns_yellow_not_green() {
+        // Codex round 8 [high]: status used to return Green for an empty
+        // watch_dirs config because failed=0 and last poll was recent. doctor
+        // renders the same input as an Optional warning ("No repos discovered").
+        // Mirror that — Yellow, not Green.
+        let h = compute_health(true, Some(chrono::Utc::now()), 0, Some(0), Some(0), 3600);
+        assert_eq!(h, HealthIndicator::Yellow);
     }
 
     #[test]

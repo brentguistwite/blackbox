@@ -584,20 +584,18 @@ fn discover_repos_with_errors_captures_unreadable_subdir() {
 
 #[cfg(unix)]
 #[test]
-fn discover_errors_inside_a_repo_are_filtered_out() {
-    // Codex round 6 [high]: scan_repos_walkdir reports every walkdir error
-    // including unreadable subtrees INSIDE an already-discovered repo. Those
-    // are not discovery failures — the repo polled fine. They must not flip
-    // the daemon to Required/Red. discover_repos_with_errors filters errors
-    // whose path is under any discovered repo before returning.
+fn discover_errors_inside_a_repo_surface_for_safety() {
+    // Codex round 8 [high]: an unreadable subtree inside a discovered repo
+    // could hide a nested .git that scan_repos_walkdir would otherwise find.
+    // Suppressing the error to keep "chmod 000 artifact dir" quiet creates a
+    // silent-loss path. Surface the error instead — false-positive is the
+    // safe failure mode; the user can chmod or add to SKIP_DIRS.
     use std::os::unix::fs::PermissionsExt;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path().join("myrepo");
     std::fs::create_dir(&repo).unwrap();
     init_repo(&repo);
 
-    // Build a restricted subtree INSIDE the repo (e.g. generated artifacts
-    // a user has chmod'd to 000).
     let restricted = repo.join("artifacts").join("private");
     std::fs::create_dir_all(&restricted).unwrap();
     std::fs::create_dir(restricted.join("inner")).unwrap();
@@ -605,19 +603,18 @@ fn discover_errors_inside_a_repo_are_filtered_out() {
 
     let result = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
 
-    // Restore perms before assertions so a panic doesn't leak.
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(result.repos.iter().any(|p| p == &repo), "repo should still be discovered");
-    let leaked: Vec<_> = result
+    let surfaced = result
         .traversal_errors
         .iter()
-        .filter(|(p, _)| p.starts_with(&repo))
-        .collect();
+        .any(|(p, _)| p.starts_with(&repo));
     assert!(
-        leaked.is_empty(),
-        "errors inside a discovered repo must not promote to discovery failures, got: {:?}",
-        leaked
+        surfaced,
+        "errors inside a discovered repo must surface so a hidden nested .git \
+         can't disappear silently, got: {:?}",
+        result.traversal_errors
     );
 }
 
