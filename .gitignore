@@ -2,3 +2,4 @@
 .ralph/
 .worktrees/
 .conductor/*
+.claude/

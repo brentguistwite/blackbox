@@ -51,6 +51,58 @@ fn test_stop_when_not_running() {
     assert!(result.is_ok());
 }
 
+/// Codex round 5 [medium] regression: status must derive stall thresholds
+/// from the daemon's persisted poll_interval, not the reader's config. If the
+/// user's config.toml is malformed when status runs, the main.rs Status arm
+/// falls back to Config::default() (poll_interval_secs = 1800). For a daemon
+/// running poll_interval_secs = 7200 in polling mode, the stale poll at
+/// `now - 25min` would land in Yellow under the default's 1800s threshold
+/// while the daemon's real 7200s threshold says Green.
+#[test]
+fn status_uses_persisted_poll_interval_over_reader_config() {
+    use blackbox::daemon::HealthIndicator;
+    let tmp = TempDir::new().unwrap();
+    let (_config_dir, data_dir) = setup_dirs(&tmp);
+
+    // Pretend daemon is running so compute_health doesn't short-circuit Red.
+    let pid_file = data_dir.join("blackbox.pid");
+    std::fs::write(&pid_file, std::process::id().to_string()).unwrap();
+
+    // Persist a snapshot as if the daemon is running poll_interval_secs=7200
+    // in polling mode. last_poll = 25 min ago — under polling threshold
+    // (3*7200 = 21600s, ~6hr) but well over Config::default()'s 1800s.
+    let db_path = data_dir.join("blackbox.db");
+    let conn = blackbox::db::open_db(&db_path).unwrap();
+    let snap = blackbox::poller::HealthSnapshot {
+        last_poll_at: chrono::Utc::now() - chrono::Duration::minutes(25),
+        poll_mode: "polling".into(),
+        repos_watched: 5,
+        effective_poll_interval_secs: 7200,
+        poll_metrics: Default::default(),
+        discovery_metrics: Default::default(),
+    };
+    blackbox::poller::write_health_snapshot(&conn, &snap).unwrap();
+    drop(conn);
+
+    // Reader-side config is the default (poll_interval_secs = 1800) — same
+    // shape as what main.rs falls back to when load_config errors.
+    let config = blackbox::config::Config::default();
+    let status = blackbox::daemon::get_daemon_status(&data_dir, &config).unwrap();
+
+    // 25min ago against the daemon's true 6hr threshold is Green. If status
+    // ignored the persisted interval and used config.poll_interval_secs=1800,
+    // 25min would breach the 3*1800=5400s threshold and land Red.
+    assert_eq!(
+        status.health,
+        HealthIndicator::Green,
+        "status must use persisted effective_poll_interval_secs=7200, not config default 1800; got {:?}",
+        status.health
+    );
+
+    // Cleanup PID
+    let _ = std::fs::remove_file(&pid_file);
+}
+
 /// Integration test using CLI binary — needs env vars for subprocess
 #[test]
 fn test_start_stop_integration() {

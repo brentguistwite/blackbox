@@ -1,6 +1,6 @@
 use blackbox::repo_scanner::{
-    auto_scan_repos_from, discover_repos, find_worktree_parent_dirs, is_valid_gitdir_file,
-    is_worktree, resolve_main_repo, scan_directory,
+    auto_scan_repos_from, discover_repos, discover_repos_with_errors, find_worktree_parent_dirs,
+    is_valid_gitdir_file, is_worktree, resolve_main_repo, scan_directory,
 };
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -533,4 +533,204 @@ fn test_find_worktree_parent_dirs_custom_name() {
     let dirs = find_worktree_parent_dirs(&repos, "trees");
     assert_eq!(dirs.len(), 1);
     assert_eq!(dirs[0], main_path.join("trees"));
+}
+
+// --- discover_repos_with_errors tests (Codex r4 [high]: subtree TCC denial) ---
+
+#[test]
+fn discover_repos_with_errors_returns_empty_errors_on_clean_tree() {
+    let tmp = TempDir::new().unwrap();
+    let repo_dir = tmp.path().join("myrepo");
+    std::fs::create_dir(&repo_dir).unwrap();
+    init_repo(&repo_dir);
+
+    let result = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
+    assert_eq!(result.repos.len(), 1);
+    assert!(result.traversal_errors.is_empty(), "no errors expected, got: {:?}", result.traversal_errors);
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_repos_with_errors_captures_unreadable_subdir() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+
+    // One readable repo + one unreadable subdir under the same watch root.
+    let good = tmp.path().join("good");
+    std::fs::create_dir(&good).unwrap();
+    init_repo(&good);
+
+    let denied = tmp.path().join("denied_subtree");
+    std::fs::create_dir(&denied).unwrap();
+    let inner = denied.join("would_be_repo");
+    std::fs::create_dir(&inner).unwrap();
+    // Strip read permission so WalkDir errors when descending.
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
+
+    // Restore perms so TempDir drop cleans up. Do this before assertions so
+    // a panic doesn't leak the perm-stripped dir.
+    std::fs::set_permissions(&denied, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Good repo still found.
+    assert!(result.repos.iter().any(|p| p == &good), "good repo should still be discovered");
+    // Subtree denial captured.
+    assert!(!result.traversal_errors.is_empty(),
+        "expected at least one traversal error from unreadable subdir");
+    let any_denied = result.traversal_errors.iter().any(|(p, _)| p.starts_with(&denied));
+    assert!(any_denied, "error should reference the denied subtree, got: {:?}", result.traversal_errors);
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_errors_inside_a_repo_surface_in_traversal_errors() {
+    // Codex round 10 [medium]: errors inside an otherwise-healthy repo can
+    // still hide nested repos under permission-denied subtrees, so they
+    // must surface as Required (traversal_errors), not advisory. False
+    // positive on a chmod-000 artifact dir is the safe failure mode —
+    // silent loss of a nested repo is not.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("myrepo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+
+    let restricted = repo.join("artifacts").join("private");
+    std::fs::create_dir_all(&restricted).unwrap();
+    std::fs::create_dir(restricted.join("inner")).unwrap();
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
+
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.repos.iter().any(|p| p == &repo), "repo should still be discovered");
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p.starts_with(&repo));
+    assert!(
+        surfaced,
+        "errors inside a discovered repo must surface as traversal_errors so a hidden \
+         nested .git can't disappear silently, got: {:?}",
+        result.traversal_errors
+    );
+}
+
+#[test]
+fn discover_malformed_worktree_dot_git_surfaces_as_error() {
+    // Codex round 12 [high]: a fast-path watch_dir whose .git file is
+    // present but malformed (truncated, bad first line) was being silently
+    // treated as "not a repo". full_scan would then prune the worktree's
+    // RepoState; after the pointer was fixed, poll_repo re-entered first-
+    // poll mode and lost commits made during the outage. Same shape as the
+    // unreadable-pointer bug, just for malformed contents. Now surfaces as
+    // a traversal_error normalized to the worktree root so prune's
+    // unreliable_roots check keeps state.
+    let tmp = TempDir::new().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir(&wt).unwrap();
+    // .git file with garbage contents — no `gitdir:` prefix.
+    std::fs::write(wt.join(".git"), "this is not a worktree pointer").unwrap();
+
+    let result = discover_repos_with_errors(&[wt.clone()], None);
+
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &wt);
+    assert!(
+        surfaced,
+        "malformed .git pointer at config-listed watch_dir must surface as traversal_error \
+         normalized to worktree root, got: {:?}",
+        result.traversal_errors
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_unreadable_worktree_dot_git_surfaces_as_error() {
+    // Codex round 10 [high]: a chmod-000 on a worktree's .git pointer was
+    // silently dropping the worktree from `repos` (read failure → invalid
+    // file → not a repo). full_scan would prune RepoState, and the next
+    // clean cycle would re-enter first-poll mode (HEAD + today's first 50
+    // commits), losing every commit during the outage. probe_gitdir_file
+    // distinguishes Unreadable from Invalid; Unreadable surfaces as a
+    // traversal_error so doctor flags Required and prune skips eviction.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir(&wt).unwrap();
+    let git = wt.join(".git");
+    std::fs::write(&git, "gitdir: /some/main/.git/worktrees/wt").unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[wt.clone()], None);
+
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    // Codex round 11 [high]: error path must be the WORKTREE ROOT, not the
+    // .git file. prune's unreliable_roots check is `repo.starts_with(root)`;
+    // pushing `wt/.git` would miss the `wt` repo and evict state anyway.
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &wt);
+    assert!(
+        surfaced,
+        "unreadable .git pointer error path must normalize to worktree root, got: {:?}",
+        result.traversal_errors
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_unreadable_worktrees_dir_under_repo_is_surfaced() {
+    // Codex round 7 [high]: when a watch_dir is itself a repo and worktrees
+    // live under <repo>/<worktree_dir_name>, an unreadable .worktrees/
+    // subtree was being filtered out by the "inside discovered repo"
+    // suppression. That left silent worktree tracking loss with no doctor
+    // signal. Worktree-parent dirs must be exempt from the filter.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().to_path_buf();
+    init_repo(&repo);
+
+    let wt_parent = repo.join(".worktrees");
+    std::fs::create_dir(&wt_parent).unwrap();
+    std::fs::set_permissions(&wt_parent, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[repo.clone()], Some(".worktrees"));
+
+    // Restore perms before assertions.
+    std::fs::set_permissions(&wt_parent, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.repos.iter().any(|p| p == &repo), "main repo still discovered");
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &wt_parent || p.starts_with(&wt_parent));
+    assert!(
+        surfaced,
+        "unreadable .worktrees/ under a repo must surface as discovery error, got: {:?}",
+        result.traversal_errors
+    );
+}
+
+#[test]
+fn discover_repos_returns_same_repos_as_with_errors() {
+    // Backwards-compat contract: discover_repos must return the same set
+    // as discover_repos_with_errors().repos. Catches accidental divergence.
+    let tmp = TempDir::new().unwrap();
+    let r1 = tmp.path().join("a");
+    let r2 = tmp.path().join("b");
+    std::fs::create_dir(&r1).unwrap();
+    std::fs::create_dir(&r2).unwrap();
+    init_repo(&r1);
+    init_repo(&r2);
+
+    let plain = discover_repos(&[tmp.path().to_path_buf()], None);
+    let with_errs = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
+    assert_eq!(plain, with_errs.repos);
 }
