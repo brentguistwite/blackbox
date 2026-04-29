@@ -941,9 +941,14 @@ fn daily_summary_no_activity_returns_none() {
 #[test]
 fn daily_summary_single_repo_three_commits() {
     let (conn, _tmp) = setup_db();
+    // Use second-scale offsets, not minute-scale — daily_summary_for_notification
+    // filters to local-today, so a test that runs near UTC midnight with
+    // 60-minute-back timestamps lands the oldest row in yesterday and the
+    // assertion fails. Seconds-back keeps everything in the same local day
+    // unless the test fires in the first second of midnight, which is fine.
     let now = Utc::now();
-    let t1 = (now - Duration::minutes(60)).to_rfc3339();
-    let t2 = (now - Duration::minutes(30)).to_rfc3339();
+    let t1 = (now - Duration::seconds(3)).to_rfc3339();
+    let t2 = (now - Duration::seconds(2)).to_rfc3339();
     let t3 = now.to_rfc3339();
 
     insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("first"), &t1).unwrap();
@@ -959,7 +964,9 @@ fn daily_summary_single_repo_three_commits() {
 fn daily_summary_two_repos() {
     let (conn, _tmp) = setup_db();
     let now = Utc::now();
-    let t1 = (now - Duration::minutes(30)).to_rfc3339();
+    // See daily_summary_single_repo_three_commits — second-scale offsets to
+    // keep both rows in local-today regardless of when CI runs.
+    let t1 = (now - Duration::seconds(2)).to_rfc3339();
     let t2 = now.to_rfc3339();
 
     insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("aaa"), Some("dev"), Some("msg"), &t1).unwrap();
