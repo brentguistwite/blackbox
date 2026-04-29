@@ -168,6 +168,30 @@ pub fn poll_one(
     }
 }
 
+/// Drop entries in `repo_states` whose key is not in `current`. Returns
+/// evicted paths so callers can clear matching entries from `failed_set`.
+///
+/// Pure (modulo `&mut`). Without this, `repo_states` accumulates dead entries
+/// after a config reload removes a watch_dir or a tracked repo is deleted from
+/// disk. The "all polls failing" Required check is gated by
+/// `failed_count == repos_watched`; an inflated denominator silently masks
+/// every-active-repo failure as a partial warning.
+pub fn prune_repo_states(
+    repo_states: &mut HashMap<PathBuf, RepoState>,
+    current: &[PathBuf],
+) -> Vec<PathBuf> {
+    let keep: std::collections::HashSet<&PathBuf> = current.iter().collect();
+    let evicted: Vec<PathBuf> = repo_states
+        .keys()
+        .filter(|p| !keep.contains(p))
+        .cloned()
+        .collect();
+    for p in &evicted {
+        repo_states.remove(p);
+    }
+    evicted
+}
+
 /// Remove stale worktree entries from repo_states.
 /// A worktree is stale if is_worktree() returns None (deleted .git file) or
 /// the resolved gitdir HEAD no longer exists.
@@ -231,6 +255,16 @@ fn full_scan(
     let discovery_metrics = DiscoveryMetrics { failures: discovery_failures };
     if let Err(e) = write_discovery_metrics(conn, &discovery_metrics) {
         log::warn!("Failed to write discovery metrics: {}", e);
+    }
+
+    // Prune BEFORE polling. poll_all_repos calls ensure_state for every entry
+    // in `repos`, which would re-insert pruned-but-still-discovered entries —
+    // safe — but if we pruned AFTER, evicted entries still in `repo_states`
+    // from prior cycles would hang around forever and inflate the
+    // `repos_watched` denominator that gates the "all polls failing" check.
+    let evicted = prune_repo_states(repo_states, &repos);
+    for path in &evicted {
+        failed_set.remove(path);
     }
 
     poll_all_repos(&repos, repo_states, conn, failed_set);
@@ -504,6 +538,67 @@ mod tests {
         let today = chrono::Local::now().date_naive().to_string();
         let sent = crate::db::notification_was_sent(&conn, &today, "daily_summary").unwrap();
         assert!(!sent);
+    }
+
+    fn rs() -> RepoState {
+        RepoState::default()
+    }
+
+    #[test]
+    fn prune_repo_states_evicts_missing_paths() {
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/a"), rs());
+        states.insert(PathBuf::from("/b"), rs());
+        states.insert(PathBuf::from("/c"), rs());
+        let current = [PathBuf::from("/a"), PathBuf::from("/c")];
+        let evicted = prune_repo_states(&mut states, &current);
+        assert_eq!(evicted, vec![PathBuf::from("/b")]);
+        assert_eq!(states.len(), 2);
+        assert!(states.contains_key(Path::new("/a")));
+        assert!(states.contains_key(Path::new("/c")));
+        assert!(!states.contains_key(Path::new("/b")));
+    }
+
+    #[test]
+    fn prune_repo_states_keeps_present_paths() {
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/a"), rs());
+        let current = [PathBuf::from("/a")];
+        let evicted = prune_repo_states(&mut states, &current);
+        assert!(evicted.is_empty());
+        assert_eq!(states.len(), 1);
+    }
+
+    #[test]
+    fn prune_repo_states_evicts_all_when_current_empty() {
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/a"), rs());
+        states.insert(PathBuf::from("/b"), rs());
+        let evicted = prune_repo_states(&mut states, &[]);
+        assert_eq!(evicted.len(), 2);
+        assert!(states.is_empty());
+    }
+
+    #[test]
+    fn prune_returns_evicted_paths_for_failed_set_sync() {
+        // The full_scan caller uses the returned Vec to drop matching entries
+        // from failed_set so a removed-from-config repo doesn't keep
+        // contributing to `last_poll_repos_failed`.
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(PathBuf::from("/gone"), rs());
+        states.insert(PathBuf::from("/here"), rs());
+        let mut failed_set: std::collections::HashSet<PathBuf> = Default::default();
+        failed_set.insert(PathBuf::from("/gone"));
+        failed_set.insert(PathBuf::from("/here"));
+
+        let evicted = prune_repo_states(&mut states, &[PathBuf::from("/here")]);
+        for p in &evicted {
+            failed_set.remove(p);
+        }
+
+        assert_eq!(failed_set.len(), 1);
+        assert!(failed_set.contains(Path::new("/here")));
+        assert!(!failed_set.contains(Path::new("/gone")));
     }
 
     #[test]
