@@ -358,17 +358,10 @@ fn full_scan(
         log::warn!("Cannot read watch_dir {}: {}", path.display(), err);
     }
 
-    let DiscoveredRepos { repos, traversal_errors, inside_repo_advisories } =
+    let DiscoveredRepos { repos, traversal_errors, .. } =
         repo_scanner::discover_repos_with_errors(&config.watch_dirs, config.worktree_dir_name.as_deref());
     for (path, err) in &traversal_errors {
         log::warn!("Discovery walk error at {}: {}", path.display(), err);
-    }
-    for (path, err) in &inside_repo_advisories {
-        // Advisory only — do NOT promote to DiscoveryMetrics (Required). A
-        // chmod-000 artifact dir inside a healthy repo is annoying but not
-        // discovery loss. Logged so users can find it without flipping
-        // daemon Red.
-        log::info!("Advisory walk error inside discovered repo {}: {}", path.display(), err);
     }
     discovery_failures.extend(traversal_errors);
 

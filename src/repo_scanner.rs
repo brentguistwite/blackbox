@@ -9,12 +9,40 @@ const WELL_KNOWN_DIRS: &[&str] = &[
     "Documents", "code", "projects", "src", "dev", "repos", "work", "github",
 ];
 
-/// Check if a .git file is a valid worktree pointer (first line starts with 'gitdir:')
+/// Result of probing a `.git` pointer file. Distinguishing unreadable from
+/// invalid lets discovery surface a transient TCC denial as a traversal
+/// error (Required) instead of silently dropping the worktree from `repos`
+/// — Codex round 10 [high]. Without this, a permission flap would prune
+/// repo_states, and the next clean poll re-enters first-poll mode (HEAD +
+/// today's first 50 commits only), losing every commit during the outage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitdirFileProbe {
+    Valid,
+    Invalid,
+    Unreadable,
+}
+
+/// Probe a `.git` pointer file. Distinguishes successful read with valid /
+/// invalid contents from an IO/permission failure.
+pub fn probe_gitdir_file(path: &Path) -> GitdirFileProbe {
+    match std::fs::read_to_string(path) {
+        Ok(c) => {
+            if c.lines().next().is_some_and(|l| l.starts_with("gitdir:")) {
+                GitdirFileProbe::Valid
+            } else {
+                GitdirFileProbe::Invalid
+            }
+        }
+        Err(_) => GitdirFileProbe::Unreadable,
+    }
+}
+
+/// Check if a .git file is a valid worktree pointer (first line starts with
+/// 'gitdir:'). Returns false for both invalid contents AND unreadable files;
+/// callers that need to distinguish those cases should use
+/// `probe_gitdir_file` directly.
 pub fn is_valid_gitdir_file(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|c| c.lines().next().map(|l| l.starts_with("gitdir:")))
-        .unwrap_or(false)
+    matches!(probe_gitdir_file(path), GitdirFileProbe::Valid)
 }
 
 /// Check if path is a git worktree (has .git file with gitdir: pointer).
@@ -136,39 +164,46 @@ pub fn discover_repos_with_errors(
             }
             continue;
         }
-        if git_path.is_file() && is_valid_gitdir_file(&git_path) {
-            repos.push(dir.clone());
-            continue;
+        if git_path.is_file() {
+            match probe_gitdir_file(&git_path) {
+                GitdirFileProbe::Valid => {
+                    repos.push(dir.clone());
+                    continue;
+                }
+                GitdirFileProbe::Unreadable => {
+                    // Codex round 10 [high]: a TCC denial / chmod 000 on a
+                    // worktree's .git pointer must NOT silently drop the
+                    // worktree. Surface as discovery failure so doctor /
+                    // status flag Required and prune treats `dir` as an
+                    // unreliable_root that keeps RepoState.
+                    errors.push((git_path.clone(), "unreadable .git pointer".into()));
+                    continue;
+                }
+                GitdirFileProbe::Invalid => {
+                    // Genuinely not a repo (some other .git file).
+                }
+            }
         }
         // Recursive WalkDir scan
         scan_repos_walkdir(dir, None, &mut repos, &mut errors);
     }
     repos.sort();
     repos.dedup();
+    let _ = worktree_parents;
 
-    // Split errors into blocking (Required) and advisory (informational).
-    // An error blocks discovery iff it isn't strictly inside an already-
-    // discovered repo's tree, OR it's under a configured worktree-parent
-    // (worktrees DO live there — Codex round 7 [high]). Errors deep inside
-    // a discovered repo (artifact / cache / restricted subtrees) are
-    // advisory: the repo polled fine, no nested repo was hidden in the
-    // load-bearing sense, and Required-flagging them creates Codex round 9
-    // [medium]'s false-alarm path that masks real breakage.
-    let mut traversal_errors: Vec<(PathBuf, String)> = Vec::new();
-    let mut inside_repo_advisories: Vec<(PathBuf, String)> = Vec::new();
-    for (path, msg) in errors {
-        let under_worktree_parent = worktree_parents
-            .iter()
-            .any(|wp| path == wp.as_path() || path.starts_with(wp));
-        let inside_repo = repos.iter().any(|r| path.starts_with(r));
-        if under_worktree_parent || !inside_repo {
-            traversal_errors.push((path, msg));
-        } else {
-            inside_repo_advisories.push((path, msg));
-        }
+    // Codex round 10 [medium]: do NOT downgrade walk errors to advisory just
+    // because they fall under a discovered repo's tree. scan_repos_walkdir
+    // descends recursively and discovers nested repos under any subtree;
+    // suppressing those errors lets a permission-denied subtree hide a
+    // nested repo with no Required signal. False positive is the right
+    // failure mode here — silent loss is not. Round 9's split was wrong;
+    // round 8's "surface everything" was correct. (Codex 6/7/8/9/10 have
+    // oscillated on this; we're locking in round 10's recommendation.)
+    DiscoveredRepos {
+        repos,
+        traversal_errors: errors,
+        inside_repo_advisories: Vec::new(),
     }
-
-    DiscoveredRepos { repos, traversal_errors, inside_repo_advisories }
 }
 
 /// Scan well-known dev directories + HOME children for git repos.
@@ -290,8 +325,26 @@ fn scan_repos_walkdir(
             }
         };
         if entry.file_name() == ".git" {
-            let is_repo = entry.file_type().is_dir()
-                || (entry.file_type().is_file() && is_valid_gitdir_file(entry.path()));
+            let is_repo = if entry.file_type().is_dir() {
+                true
+            } else if entry.file_type().is_file() {
+                match probe_gitdir_file(entry.path()) {
+                    GitdirFileProbe::Valid => true,
+                    GitdirFileProbe::Unreadable => {
+                        // Codex round 10 [high]: surface unreadable .git
+                        // pointer as discovery error so doctor / status flag
+                        // Required and prune skips state eviction.
+                        errors.push((
+                            entry.path().to_path_buf(),
+                            "unreadable .git pointer".into(),
+                        ));
+                        false
+                    }
+                    GitdirFileProbe::Invalid => false,
+                }
+            } else {
+                false
+            };
             if is_repo
                 && let Some(parent) = entry.path().parent()
             {

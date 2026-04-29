@@ -584,12 +584,12 @@ fn discover_repos_with_errors_captures_unreadable_subdir() {
 
 #[cfg(unix)]
 #[test]
-fn discover_errors_inside_a_repo_route_to_advisories() {
-    // Codex round 9 [medium]: errors inside an otherwise-healthy repo's tree
-    // (artifact / cache / private subtree) are kept as advisory diagnostics,
-    // NOT promoted to traversal_errors. Doctor escalates traversal_errors
-    // to Required; false-flagging chmod-000 artifact dirs as discovery
-    // failures was hiding real breakage behind noise.
+fn discover_errors_inside_a_repo_surface_in_traversal_errors() {
+    // Codex round 10 [medium]: errors inside an otherwise-healthy repo can
+    // still hide nested repos under permission-denied subtrees, so they
+    // must surface as Required (traversal_errors), not advisory. False
+    // positive on a chmod-000 artifact dir is the safe failure mode —
+    // silent loss of a nested repo is not.
     use std::os::unix::fs::PermissionsExt;
     let tmp = TempDir::new().unwrap();
     let repo = tmp.path().join("myrepo");
@@ -606,24 +606,48 @@ fn discover_errors_inside_a_repo_route_to_advisories() {
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     assert!(result.repos.iter().any(|p| p == &repo), "repo should still be discovered");
-    let blocking_under_repo: Vec<_> = result
+    let surfaced = result
         .traversal_errors
-        .iter()
-        .filter(|(p, _)| p.starts_with(&repo))
-        .collect();
-    assert!(
-        blocking_under_repo.is_empty(),
-        "errors inside a discovered repo must NOT be Required, got: {:?}",
-        blocking_under_repo
-    );
-    let advisory = result
-        .inside_repo_advisories
         .iter()
         .any(|(p, _)| p.starts_with(&repo));
     assert!(
-        advisory,
-        "errors inside a discovered repo must surface as advisory, got: {:?}",
-        result.inside_repo_advisories
+        surfaced,
+        "errors inside a discovered repo must surface as traversal_errors so a hidden \
+         nested .git can't disappear silently, got: {:?}",
+        result.traversal_errors
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn discover_unreadable_worktree_dot_git_surfaces_as_error() {
+    // Codex round 10 [high]: a chmod-000 on a worktree's .git pointer was
+    // silently dropping the worktree from `repos` (read failure → invalid
+    // file → not a repo). full_scan would prune RepoState, and the next
+    // clean cycle would re-enter first-poll mode (HEAD + today's first 50
+    // commits), losing every commit during the outage. probe_gitdir_file
+    // distinguishes Unreadable from Invalid; Unreadable surfaces as a
+    // traversal_error so doctor flags Required and prune skips eviction.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir(&wt).unwrap();
+    let git = wt.join(".git");
+    std::fs::write(&git, "gitdir: /some/main/.git/worktrees/wt").unwrap();
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[wt.clone()], None);
+
+    std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &git);
+    assert!(
+        surfaced,
+        "unreadable .git pointer must surface as traversal_error, got: {:?}",
+        result.traversal_errors
     );
 }
 
