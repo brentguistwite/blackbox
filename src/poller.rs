@@ -11,7 +11,7 @@ use crate::config::{self, Config};
 use crate::db;
 use crate::enrichment;
 use crate::git_ops::{self, RepoState};
-use crate::repo_scanner;
+use crate::repo_scanner::{self, DiscoveredRepos};
 use crate::watcher::RepoWatcher;
 
 /// Full-scan interval when watcher is active (30 min).
@@ -206,24 +206,33 @@ fn write_heartbeat(conn: &Connection, repo_count: usize) {
 }
 
 /// Full scan: re-discover repos, poll all, collect reviews, track sessions.
+/// Discovery errors at any depth (top-level read_dir + recursive WalkDir)
+/// are folded into a single DiscoveryMetrics write so doctor sees both
+/// "watch_dir unreadable" and "subtree under watch_dir unreadable" as
+/// Required failures.
 fn full_scan(
     config: &Config,
     repo_states: &mut HashMap<PathBuf, RepoState>,
     conn: &Connection,
     failed_set: &mut std::collections::HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    // Probe top-level watch_dirs for read access BEFORE discovery so a TCC
-    // denial there can't silently shrink the discovered repo set to 0.
-    let discovery_failures = probe_watch_dirs(&config.watch_dirs);
+    let mut discovery_failures = probe_watch_dirs(&config.watch_dirs);
     for (path, err) in &discovery_failures {
         log::warn!("Cannot read watch_dir {}: {}", path.display(), err);
     }
+
+    let DiscoveredRepos { repos, traversal_errors } =
+        repo_scanner::discover_repos_with_errors(&config.watch_dirs, config.worktree_dir_name.as_deref());
+    for (path, err) in &traversal_errors {
+        log::warn!("Discovery walk error at {}: {}", path.display(), err);
+    }
+    discovery_failures.extend(traversal_errors);
+
     let discovery_metrics = DiscoveryMetrics { failures: discovery_failures };
     if let Err(e) = write_discovery_metrics(conn, &discovery_metrics) {
         log::warn!("Failed to write discovery metrics: {}", e);
     }
 
-    let repos = repo_scanner::discover_repos(&config.watch_dirs, config.worktree_dir_name.as_deref());
     poll_all_repos(&repos, repo_states, conn, failed_set);
     if let Err(e) = write_poll_metrics(conn, &metrics_from_set(failed_set)) {
         log::warn!("Failed to write poll metrics: {}", e);
@@ -403,7 +412,15 @@ pub fn run_poll_loop(mut config: Config) -> anyhow::Result<()> {
                 }
                 // Bump heartbeat so doctor sees this as proof of liveness, not
                 // as a stalled idle-watcher between full scans.
-                write_heartbeat(&conn, repos.len());
+                //
+                // Use repo_states.len() (the authoritative in-memory set), not
+                // the stale `repos` vec that's only refreshed on full_scan.
+                // If a new_worktree was just added or a stale one removed,
+                // `repos` is wrong; using it would make compute_health compare
+                // a fresh failure count against a stale denominator and could
+                // fabricate "all polls failing" alarms during normal worktree
+                // creation.
+                write_heartbeat(&conn, repo_states.len());
             }
 
             // Periodic full scan for missed events + new repos

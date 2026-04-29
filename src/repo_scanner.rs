@@ -85,8 +85,31 @@ pub fn find_worktree_parent_dirs(repos: &[PathBuf], worktree_dir_name: &str) -> 
         .collect()
 }
 
+/// Outcome of a discovery pass: discovered repos plus any subtree errors.
+/// Traversal errors mean parts of the watch tree couldn't be enumerated —
+/// repos under those subtrees are absent from `repos` and tracking will
+/// silently miss them unless the daemon surfaces this. doctor reads
+/// these via DiscoveryMetrics.
+#[derive(Debug, Default, Clone)]
+pub struct DiscoveredRepos {
+    pub repos: Vec<PathBuf>,
+    pub traversal_errors: Vec<(PathBuf, String)>,
+}
+
 pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -> Vec<PathBuf> {
+    discover_repos_with_errors(watch_dirs, worktree_dir_name).repos
+}
+
+/// Same as `discover_repos` but also returns paths that errored during
+/// recursive walk (e.g. TCC-denied subdirectories). Use this from the
+/// daemon's full_scan so subtree denial doesn't silently shrink the
+/// discovered set with no health signal.
+pub fn discover_repos_with_errors(
+    watch_dirs: &[PathBuf],
+    worktree_dir_name: Option<&str>,
+) -> DiscoveredRepos {
     let mut repos = Vec::new();
+    let mut errors: Vec<(PathBuf, String)> = Vec::new();
     for dir in watch_dirs {
         // Fast path: dir is itself a repo root
         let git_path = dir.join(".git");
@@ -96,7 +119,7 @@ pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -
             if let Some(wt_name) = worktree_dir_name {
                 let wt_dir = dir.join(wt_name);
                 if wt_dir.is_dir() {
-                    scan_repos_walkdir(&wt_dir, Some(2), &mut repos);
+                    scan_repos_walkdir(&wt_dir, Some(2), &mut repos, &mut errors);
                 }
             }
             continue;
@@ -106,11 +129,11 @@ pub fn discover_repos(watch_dirs: &[PathBuf], worktree_dir_name: Option<&str>) -
             continue;
         }
         // Recursive WalkDir scan
-        scan_repos_walkdir(dir, None, &mut repos);
+        scan_repos_walkdir(dir, None, &mut repos, &mut errors);
     }
     repos.sort();
     repos.dedup();
-    repos
+    DiscoveredRepos { repos, traversal_errors: errors }
 }
 
 /// Scan well-known dev directories + HOME children for git repos.
@@ -189,13 +212,21 @@ fn discover_repos_limited(dir: &Path, max_depth: usize) -> Vec<PathBuf> {
     if git_path.is_file() && is_valid_gitdir_file(&git_path) {
         return vec![dir.to_path_buf()];
     }
-    // Recursive WalkDir scan
+    // Recursive WalkDir scan — errors discarded for non-daemon callers
+    // (auto_scan_repos, scan_directory) where surfacing them would change
+    // wizard UX. Daemon path uses discover_repos_with_errors instead.
     let mut repos = Vec::new();
-    scan_repos_walkdir(dir, Some(max_depth), &mut repos);
+    let mut _errors = Vec::new();
+    scan_repos_walkdir(dir, Some(max_depth), &mut repos, &mut _errors);
     repos
 }
 
-fn scan_repos_walkdir(dir: &Path, max_depth: Option<usize>, repos: &mut Vec<PathBuf>) {
+fn scan_repos_walkdir(
+    dir: &Path,
+    max_depth: Option<usize>,
+    repos: &mut Vec<PathBuf>,
+    errors: &mut Vec<(PathBuf, String)>,
+) {
     let mut walker = WalkDir::new(dir).follow_links(false);
     if let Some(depth) = max_depth {
         walker = walker.max_depth(depth);
@@ -209,7 +240,19 @@ fn scan_repos_walkdir(dir: &Path, max_depth: Option<usize>, repos: &mut Vec<Path
     {
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => continue,
+            Err(walk_err) => {
+                // walkdir's Error carries the path that errored (when
+                // available) and the underlying io::Error. Capture both
+                // so doctor can surface subtree TCC denial / permission
+                // changes that previously vanished into thin air.
+                let path = walk_err.path().map(|p| p.to_path_buf()).unwrap_or_else(|| dir.to_path_buf());
+                let msg = walk_err
+                    .io_error()
+                    .map(|e| e.to_string())
+                    .unwrap_or_else(|| walk_err.to_string());
+                errors.push((path, msg));
+                continue;
+            }
         };
         if entry.file_name() == ".git" {
             let is_repo = entry.file_type().is_dir()
