@@ -81,7 +81,7 @@ where
     let api_key = config
         .llm_api_key
         .clone()
-        .or_else(|| env_var.and_then(|name| env(name)))
+        .or_else(|| env_var.and_then(env))
         .ok_or_else(|| {
             let env_hint = env_var
                 .map(|n| format!("Set {n} env var, or a", ))

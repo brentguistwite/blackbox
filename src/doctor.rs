@@ -564,27 +564,27 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
     // Discovery failure = a configured watch_dir is unreadable. Means we never
     // even try to poll those repos, so per-repo failure metrics would silently
     // hide the problem. Required severity.
-    if let Some(discovery_failed) = input.discovery_failed_count {
-        if discovery_failed > 0 {
-            let sample = if input.discovery_failed_sample.is_empty() {
-                String::new()
-            } else {
-                format!(" Sample: {}", input.discovery_failed_sample.join(", "))
-            };
-            return CheckResult {
-                name: "Poll health".into(),
-                passed: false,
-                severity: Severity::Required,
-                detail: format!(
-                    "Cannot read {discovery_failed} configured watch dir(s) — repos there are not being discovered.{sample}"
-                ),
-                suggestion: Some(
-                    "Grant the daemon read access (macOS: System Settings → Privacy → Files & Folders) \
-                     or remove the entries from watch_dirs in config.toml. Restart daemon afterwards."
-                        .into(),
-                ),
-            };
-        }
+    if let Some(discovery_failed) = input.discovery_failed_count
+        && discovery_failed > 0
+    {
+        let sample = if input.discovery_failed_sample.is_empty() {
+            String::new()
+        } else {
+            format!(" Sample: {}", input.discovery_failed_sample.join(", "))
+        };
+        return CheckResult {
+            name: "Poll health".into(),
+            passed: false,
+            severity: Severity::Required,
+            detail: format!(
+                "Cannot read {discovery_failed} configured watch dir(s) — repos there are not being discovered.{sample}"
+            ),
+            suggestion: Some(
+                "Grant the daemon read access (macOS: System Settings → Privacy → Files & Folders) \
+                 or remove the entries from watch_dirs in config.toml. Restart daemon afterwards."
+                    .into(),
+            ),
+        };
     }
 
     // Daemon ran a poll but did not write the failure metric → it's running an
