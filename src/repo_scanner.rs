@@ -185,7 +185,22 @@ pub fn discover_repos_with_errors(
                     continue;
                 }
                 GitdirFileProbe::Invalid => {
-                    // Genuinely not a repo (some other .git file).
+                    // The user explicitly listed `dir` as a watch_dir and a
+                    // .git file IS present; the contents are just malformed
+                    // (truncated pointer, bad UTF-8, missing `gitdir:` prefix,
+                    // etc.). Codex round 12 [high]: silently treating this as
+                    // "not a repo" lets full_scan prune the worktree's prior
+                    // RepoState. After the pointer is fixed, poll_repo
+                    // re-enters first-poll mode (HEAD + today's first 50
+                    // commits) and loses every commit during the outage.
+                    // Surface as traversal_error → unreliable_root keeps
+                    // state. Fall through to recursive walk so any nested
+                    // real repos under `dir` are still discovered.
+                    errors.push((dir.clone(), format!(
+                        "malformed .git pointer: {}",
+                        git_path.display()
+                    )));
+                    // fall through to scan_repos_walkdir below
                 }
             }
         }

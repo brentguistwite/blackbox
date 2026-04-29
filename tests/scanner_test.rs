@@ -618,6 +618,36 @@ fn discover_errors_inside_a_repo_surface_in_traversal_errors() {
     );
 }
 
+#[test]
+fn discover_malformed_worktree_dot_git_surfaces_as_error() {
+    // Codex round 12 [high]: a fast-path watch_dir whose .git file is
+    // present but malformed (truncated, bad first line) was being silently
+    // treated as "not a repo". full_scan would then prune the worktree's
+    // RepoState; after the pointer was fixed, poll_repo re-entered first-
+    // poll mode and lost commits made during the outage. Same shape as the
+    // unreadable-pointer bug, just for malformed contents. Now surfaces as
+    // a traversal_error normalized to the worktree root so prune's
+    // unreliable_roots check keeps state.
+    let tmp = TempDir::new().unwrap();
+    let wt = tmp.path().join("wt");
+    std::fs::create_dir(&wt).unwrap();
+    // .git file with garbage contents — no `gitdir:` prefix.
+    std::fs::write(wt.join(".git"), "this is not a worktree pointer").unwrap();
+
+    let result = discover_repos_with_errors(&[wt.clone()], None);
+
+    let surfaced = result
+        .traversal_errors
+        .iter()
+        .any(|(p, _)| p == &wt);
+    assert!(
+        surfaced,
+        "malformed .git pointer at config-listed watch_dir must surface as traversal_error \
+         normalized to worktree root, got: {:?}",
+        result.traversal_errors
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn discover_unreadable_worktree_dot_git_surfaces_as_error() {
