@@ -34,6 +34,10 @@ fn ensure_state(repo_path: &Path, repo_states: &mut HashMap<PathBuf, RepoState>)
     });
 }
 
+/// Maximum number of failed paths to persist as a sample. Bounds the
+/// daemon_state row size; the failed *count* is always exact.
+const FAILED_SAMPLE_LIMIT: usize = 5;
+
 /// Outcome of a single poll cycle. Used to write health metrics so `doctor`
 /// can detect silent data loss (every repo failing while daemon stays alive).
 #[derive(Debug, Default, Clone)]
@@ -75,10 +79,13 @@ pub struct DiscoveryMetrics {
 
 /// Verify each configured watch_dir can be opened for directory read.
 /// Returns the subset of paths that errored, with the OS error message.
-/// Does not mutate the filesystem; safe to call from any context.
+/// Dedups the input so a config with the same dir listed twice doesn't
+/// double-count failures. Does not mutate the filesystem.
 pub fn probe_watch_dirs(watch_dirs: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    let mut seen: std::collections::HashSet<&PathBuf> = std::collections::HashSet::new();
     watch_dirs
         .iter()
+        .filter(|d| seen.insert(*d))
         .filter_map(|d| match std::fs::read_dir(d) {
             Ok(_) => None,
             Err(e) => Some((d.clone(), e.to_string())),
@@ -86,15 +93,14 @@ pub fn probe_watch_dirs(watch_dirs: &[PathBuf]) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// Persist discovery health to daemon_state. Always writes both keys so a
-/// recovery (errors → no errors) clears stale state — same contract as
-/// `write_poll_metrics`.
+/// Persist discovery health to daemon_state atomically. count and sample
+/// are written under a single transaction so a daemon crash mid-write can't
+/// leave doctor reading a count from one cycle and a sample from another.
 pub fn write_discovery_metrics(
     conn: &Connection,
     metrics: &DiscoveryMetrics,
 ) -> anyhow::Result<()> {
     let count = metrics.failures.len();
-    db::set_daemon_state(conn, "last_poll_discovery_failed", &count.to_string())?;
     let sample = metrics
         .failures
         .iter()
@@ -102,19 +108,17 @@ pub fn write_discovery_metrics(
         .map(|(p, _)| p.display().to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    db::set_daemon_state(conn, "last_poll_discovery_failed_sample", &sample)?;
+    let tx = conn.unchecked_transaction()?;
+    db::set_daemon_state(&tx, "last_poll_discovery_failed", &count.to_string())?;
+    db::set_daemon_state(&tx, "last_poll_discovery_failed_sample", &sample)?;
+    tx.commit()?;
     Ok(())
 }
 
-/// Maximum number of failed paths to persist as a sample. Bounds the
-/// daemon_state row size; the failed *count* is always exact.
-const FAILED_SAMPLE_LIMIT: usize = 5;
-
-/// Persist poll-cycle health metrics to daemon_state.
-/// Always writes both keys (count + sample) so a recovery clears stale failures.
+/// Persist poll-cycle health metrics atomically. See `write_discovery_metrics`
+/// for the transaction rationale.
 pub fn write_poll_metrics(conn: &Connection, metrics: &PollMetrics) -> anyhow::Result<()> {
     let count = metrics.failed_paths.len();
-    db::set_daemon_state(conn, "last_poll_repos_failed", &count.to_string())?;
     let sample = metrics
         .failed_paths
         .iter()
@@ -122,7 +126,10 @@ pub fn write_poll_metrics(conn: &Connection, metrics: &PollMetrics) -> anyhow::R
         .map(|p| p.display().to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    db::set_daemon_state(conn, "last_poll_failed_sample", &sample)?;
+    let tx = conn.unchecked_transaction()?;
+    db::set_daemon_state(&tx, "last_poll_repos_failed", &count.to_string())?;
+    db::set_daemon_state(&tx, "last_poll_failed_sample", &sample)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -180,14 +187,21 @@ pub fn remove_stale_worktrees(repo_states: &mut HashMap<PathBuf, RepoState>) -> 
     stale
 }
 
-/// Write heartbeat data to daemon_state after each full_scan.
+/// Write heartbeat data to daemon_state. Wrapped in a transaction so a
+/// reader can't observe last_poll_at updated without the matching
+/// repos_watched (or vice versa) — those two are read together by doctor /
+/// status to compute per-cycle health.
 fn write_heartbeat(conn: &Connection, repo_count: usize) {
     let now = chrono::Utc::now().to_rfc3339();
-    if let Err(e) = db::set_daemon_state(conn, "last_poll_at", &now) {
-        log::warn!("Failed to write last_poll_at: {}", e);
-    }
-    if let Err(e) = db::set_daemon_state(conn, "repos_watched", &repo_count.to_string()) {
-        log::warn!("Failed to write repos_watched: {}", e);
+    let result = (|| -> anyhow::Result<()> {
+        let tx = conn.unchecked_transaction()?;
+        db::set_daemon_state(&tx, "last_poll_at", &now)?;
+        db::set_daemon_state(&tx, "repos_watched", &repo_count.to_string())?;
+        tx.commit()?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        log::warn!("Failed to write heartbeat: {}", e);
     }
 }
 

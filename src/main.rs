@@ -311,7 +311,8 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Status { format } => {
             let data_dir = blackbox::config::data_dir()?;
-            blackbox::daemon::daemon_status(&data_dir, format)?;
+            let config = blackbox::config::load_config().unwrap_or_default();
+            blackbox::daemon::daemon_status(&data_dir, &config, format)?;
         }
         Commands::Reload => {
             let data_dir = blackbox::config::data_dir()?;

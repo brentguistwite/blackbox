@@ -503,12 +503,15 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
     let last = match input.last_poll_at {
         Some(t) => t,
         None => {
+            // Render as a yellow warning — passed:false + Optional. We have no
+            // signal yet; rendering as a green pass would silently mask a
+            // daemon that's stuck before its first heartbeat.
             return CheckResult {
                 name: "Poll health".into(),
-                passed: true,
+                passed: false,
                 severity: Severity::Optional,
                 detail: "No poll cycle completed yet — daemon may still be starting".into(),
-                suggestion: None,
+                suggestion: Some("Wait one poll cycle, then re-run `blackbox doctor`".into()),
             };
         }
     };
@@ -516,7 +519,7 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
     // Stalled? Daemon process may be alive but its poll loop is not advancing
     // (deadlock, hung syscall, etc.). Required because no data is being recorded.
     let elapsed_secs = (input.now - last).num_seconds().max(0) as u64;
-    if elapsed_secs > input.max_expected_gap_secs {
+    if elapsed_secs >= input.max_expected_gap_secs {
         let elapsed_min = elapsed_secs / 60;
         return CheckResult {
             name: "Poll health".into(),
@@ -609,6 +612,19 @@ pub fn evaluate_poll_health(input: &PollHealthInput) -> CheckResult {
             severity: Severity::Optional,
             detail: format!("{failed} of {total} repos failing to poll{sample}"),
             suggestion: Some("Check daemon log for per-repo errors.".into()),
+        };
+    }
+
+    // No repos discovered + no discovery errors = unconfigured. Don't claim
+    // "All 0 repos polled successfully" — that misleads users into thinking
+    // the daemon is tracking when it has nothing to track.
+    if total == 0 {
+        return CheckResult {
+            name: "Poll health".into(),
+            passed: false,
+            severity: Severity::Optional,
+            detail: "No repos discovered — check `watch_dirs` in config".into(),
+            suggestion: Some("Add directories to watch_dirs and reload daemon: `blackbox reload`".into()),
         };
     }
 
@@ -1031,7 +1047,11 @@ mod tests {
     }
 
     #[test]
-    fn poll_health_no_poll_yet_passes_optional() {
+    fn poll_health_no_poll_yet_renders_as_warning_not_green_pass() {
+        // Code-reviewer round 3: pre-first-poll must NOT render as a green
+        // checkmark. We have no data to certify the daemon is healthy, so it
+        // should be Optional+passed:false (yellow !) for consistency with the
+        // legacy-daemon and discovery-error branches.
         let input = PollHealthInput {
             last_poll_at: None,
             repos_watched: 0,
@@ -1041,11 +1061,52 @@ mod tests {
             now: ts("2026-04-28T15:00:00Z"),
         };
         let r = evaluate_poll_health(&input);
-        assert!(r.passed);
-        assert_eq!(r.severity, Severity::Optional);
+        assert!(!r.passed, "no-poll-yet must not render as green");
+        assert_eq!(r.severity, Severity::Optional, "must not gate exit code");
         let d = r.detail.to_lowercase();
         assert!(d.contains("no poll") || d.contains("not yet") || d.contains("starting"),
             "detail should signal pre-first-poll state, got: {}", r.detail);
+        assert!(r.suggestion.is_some(), "should suggest waiting + retry");
+    }
+
+    #[test]
+    fn poll_health_zero_repos_zero_failures_is_optional_warning() {
+        // General-agent round 3: empty watch_dirs would have shown "All 0
+        // repos polled successfully" as green. Fix renders it as a yellow
+        // warning so users notice their config is empty.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:55:00Z")),
+            repos_watched: 0,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            discovery_failed_count: Some(0),
+            discovery_failed_sample: vec![],
+            max_expected_gap_secs: 3600,
+            now: ts("2026-04-28T15:00:00Z"),
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed);
+        assert_eq!(r.severity, Severity::Optional);
+        assert!(r.detail.to_lowercase().contains("no repos") || r.detail.to_lowercase().contains("watch_dirs"));
+    }
+
+    #[test]
+    fn poll_health_stall_threshold_uses_gte_at_boundary() {
+        // impl-reviewer round 3: `> threshold` lets a daemon frozen exactly at
+        // max_expected_gap_secs slip through as green. Use `>=`.
+        let input = PollHealthInput {
+            last_poll_at: Some(ts("2026-04-28T14:00:00Z")),
+            repos_watched: 5,
+            failed_count: Some(0),
+            failed_sample: vec![],
+            discovery_failed_count: Some(0),
+            discovery_failed_sample: vec![],
+            max_expected_gap_secs: 3600, // exactly 60 min
+            now: ts("2026-04-28T15:00:00Z"), // exactly 60 min later
+        };
+        let r = evaluate_poll_health(&input);
+        assert!(!r.passed, "exact-threshold gap must trip stall, got: {}", r.detail);
+        assert!(r.detail.to_lowercase().contains("stalled"));
     }
 
     #[test]

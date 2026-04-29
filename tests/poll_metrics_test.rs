@@ -155,6 +155,33 @@ fn write_discovery_metrics_persists_count_and_sample() {
 }
 
 #[test]
+fn watcher_recovery_path_clears_failure_metric_via_write_poll_metrics() {
+    // Code-reviewer round 3: failure → success transition over the watcher
+    // path must end with last_poll_repos_failed == "0". Wiring test for the
+    // record_repo_outcome → metrics_from_set → write_poll_metrics chain.
+    let tmp = TempDir::new().unwrap();
+    let conn = db::open_db(&tmp.path().join("test.db")).unwrap();
+
+    let mut failed: HashSet<PathBuf> = HashSet::new();
+    let path = PathBuf::from("/repo/flaky");
+
+    // Cycle 1: watcher event reports failure.
+    record_repo_outcome(&mut failed, &path, true);
+    write_poll_metrics(&conn, &blackbox::poller::metrics_from_set(&failed)).unwrap();
+    let after_fail = db::get_daemon_state(&conn, "last_poll_repos_failed").unwrap().unwrap();
+    assert_eq!(after_fail, "1");
+
+    // Cycle 2: subsequent watcher event for the same repo succeeds. Metric
+    // must reset to 0 with empty sample so doctor stops alarming.
+    record_repo_outcome(&mut failed, &path, false);
+    write_poll_metrics(&conn, &blackbox::poller::metrics_from_set(&failed)).unwrap();
+    let after_recovery = db::get_daemon_state(&conn, "last_poll_repos_failed").unwrap().unwrap();
+    assert_eq!(after_recovery, "0");
+    let sample = db::get_daemon_state(&conn, "last_poll_failed_sample").unwrap().unwrap_or_default();
+    assert!(sample.trim().is_empty(), "sample should clear on recovery");
+}
+
+#[test]
 fn write_discovery_metrics_zero_clears_previous_state() {
     // Recovery: a previous run had failures, this run is clean → metric must
     // reset to 0 so doctor stops alarming.
