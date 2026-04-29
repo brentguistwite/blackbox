@@ -171,12 +171,17 @@ pub fn discover_repos_with_errors(
                     continue;
                 }
                 GitdirFileProbe::Unreadable => {
-                    // Codex round 10 [high]: a TCC denial / chmod 000 on a
-                    // worktree's .git pointer must NOT silently drop the
-                    // worktree. Surface as discovery failure so doctor /
-                    // status flag Required and prune treats `dir` as an
-                    // unreliable_root that keeps RepoState.
-                    errors.push((git_path.clone(), "unreadable .git pointer".into()));
+                    // Codex round 10/11 [high]: surface unreadable .git as a
+                    // discovery failure AND normalize the error path to the
+                    // worktree root (not the .git file itself). prune's
+                    // unreliable_roots check is `repo.starts_with(root)`;
+                    // if the root is `/wt/.git`, the repo path `/wt` does
+                    // NOT start with it, and prune evicts state anyway.
+                    // Pushing `dir` keeps that match working.
+                    errors.push((dir.clone(), format!(
+                        "unreadable .git pointer: {}",
+                        git_path.display()
+                    )));
                     continue;
                 }
                 GitdirFileProbe::Invalid => {
@@ -331,12 +336,19 @@ fn scan_repos_walkdir(
                 match probe_gitdir_file(entry.path()) {
                     GitdirFileProbe::Valid => true,
                     GitdirFileProbe::Unreadable => {
-                        // Codex round 10 [high]: surface unreadable .git
-                        // pointer as discovery error so doctor / status flag
-                        // Required and prune skips state eviction.
+                        // Codex round 10/11 [high]: normalize to the worktree
+                        // root (parent of .git) so prune's `repo.starts_with(
+                        // root)` check matches and state is kept across the
+                        // outage. Pushing the .git file path itself would
+                        // miss because `/wt` does not start with `/wt/.git`.
+                        let root = entry
+                            .path()
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| entry.path().to_path_buf());
                         errors.push((
-                            entry.path().to_path_buf(),
-                            "unreadable .git pointer".into(),
+                            root,
+                            format!("unreadable .git pointer: {}", entry.path().display()),
                         ));
                         false
                     }

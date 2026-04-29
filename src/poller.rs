@@ -754,6 +754,37 @@ mod tests {
     }
 
     #[test]
+    fn prune_keeps_worktree_state_when_dot_git_unreadable() {
+        // Codex round 11 [high]: the unreliable_root for an unreadable .git
+        // pointer must be the WORKTREE ROOT, not the .git file. Pin the
+        // contract: `repo_path.starts_with(unreliable_root)` must match when
+        // the root is the worktree root, so prune keeps state.
+        let wt = PathBuf::from("/Users/me/wt-feature");
+
+        // Sanity: wrong root (`.git` suffix) would have evicted state.
+        {
+            let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+            states.insert(wt.clone(), rs());
+            let wrong_root = wt.join(".git");
+            let evicted = prune_repo_states(&mut states, &[], &[wrong_root]);
+            assert!(
+                !evicted.is_empty(),
+                "wrong unreliable_root would evict state — confirms bug shape"
+            );
+        }
+
+        // Post-fix: worktree-root unreliable_root keeps state.
+        let mut states: HashMap<PathBuf, RepoState> = HashMap::new();
+        states.insert(wt.clone(), rs());
+        let evicted = prune_repo_states(&mut states, &[], &[wt.clone()]);
+        assert!(
+            evicted.is_empty(),
+            "normalized worktree-root unreliable_root must preserve state"
+        );
+        assert!(states.contains_key(&wt));
+    }
+
+    #[test]
     fn prune_unreliable_root_exact_match_kept() {
         // The watch_dir itself is also a valid repo path (some users add a
         // repo as a watch_dir directly). Exact-match against the unreliable

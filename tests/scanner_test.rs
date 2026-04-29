@@ -640,13 +640,16 @@ fn discover_unreadable_worktree_dot_git_surfaces_as_error() {
 
     std::fs::set_permissions(&git, std::fs::Permissions::from_mode(0o644)).unwrap();
 
+    // Codex round 11 [high]: error path must be the WORKTREE ROOT, not the
+    // .git file. prune's unreliable_roots check is `repo.starts_with(root)`;
+    // pushing `wt/.git` would miss the `wt` repo and evict state anyway.
     let surfaced = result
         .traversal_errors
         .iter()
-        .any(|(p, _)| p == &git);
+        .any(|(p, _)| p == &wt);
     assert!(
         surfaced,
-        "unreadable .git pointer must surface as traversal_error, got: {:?}",
+        "unreadable .git pointer error path must normalize to worktree root, got: {:?}",
         result.traversal_errors
     );
 }
