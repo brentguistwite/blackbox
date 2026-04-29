@@ -582,6 +582,45 @@ fn discover_repos_with_errors_captures_unreadable_subdir() {
     assert!(any_denied, "error should reference the denied subtree, got: {:?}", result.traversal_errors);
 }
 
+#[cfg(unix)]
+#[test]
+fn discover_errors_inside_a_repo_are_filtered_out() {
+    // Codex round 6 [high]: scan_repos_walkdir reports every walkdir error
+    // including unreadable subtrees INSIDE an already-discovered repo. Those
+    // are not discovery failures — the repo polled fine. They must not flip
+    // the daemon to Required/Red. discover_repos_with_errors filters errors
+    // whose path is under any discovered repo before returning.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new().unwrap();
+    let repo = tmp.path().join("myrepo");
+    std::fs::create_dir(&repo).unwrap();
+    init_repo(&repo);
+
+    // Build a restricted subtree INSIDE the repo (e.g. generated artifacts
+    // a user has chmod'd to 000).
+    let restricted = repo.join("artifacts").join("private");
+    std::fs::create_dir_all(&restricted).unwrap();
+    std::fs::create_dir(restricted.join("inner")).unwrap();
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let result = discover_repos_with_errors(&[tmp.path().to_path_buf()], None);
+
+    // Restore perms before assertions so a panic doesn't leak.
+    std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(result.repos.iter().any(|p| p == &repo), "repo should still be discovered");
+    let leaked: Vec<_> = result
+        .traversal_errors
+        .iter()
+        .filter(|(p, _)| p.starts_with(&repo))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "errors inside a discovered repo must not promote to discovery failures, got: {:?}",
+        leaked
+    );
+}
+
 #[test]
 fn discover_repos_returns_same_repos_as_with_errors() {
     // Backwards-compat contract: discover_repos must return the same set

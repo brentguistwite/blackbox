@@ -133,6 +133,15 @@ pub fn discover_repos_with_errors(
     }
     repos.sort();
     repos.dedup();
+
+    // Filter out traversal errors that occurred INSIDE already-discovered
+    // repos. A restricted subtree, generated artifact dir, or transient ENOENT
+    // race within a healthy repo would otherwise promote to a Required
+    // discovery failure even though `poll_repo` for that repo still works.
+    // Codex round 6 [high]: only surface errors that block discovery of
+    // additional repo roots.
+    errors.retain(|(err_path, _)| !repos.iter().any(|repo| err_path.starts_with(repo)));
+
     DiscoveredRepos { repos, traversal_errors: errors }
 }
 

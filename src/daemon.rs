@@ -279,17 +279,17 @@ fn compute_health(
         None => HealthIndicator::Yellow,
         Some(t) => {
             let age_secs = chrono::Utc::now().signed_duration_since(t).num_seconds().max(0) as u64;
-            // Use the same gap budget as doctor's evaluate_poll_health so a
-            // healthy idle watcher daemon (last full_scan up to FULL_SCAN_SECS
-            // ago) doesn't show Yellow/Red here while showing Green there.
-            // Yellow window: half the max gap; beyond that is Red.
-            let yellow_window = max_expected_gap_secs / 2;
-            if age_secs <= yellow_window {
-                HealthIndicator::Green
-            } else if age_secs < max_expected_gap_secs {
-                HealthIndicator::Yellow
-            } else {
+            // Match evaluate_poll_health exactly: under threshold = healthy,
+            // at-or-over = stalled. Codex round 6 [medium]: a half-threshold
+            // yellow window made status report "Running (stale)" at 40min
+            // while doctor reported pass at the same instant. Same daemon,
+            // contradicting health colors. Drop the window — freshness can
+            // be a separate advisory if we want one later, but the primary
+            // color must agree with doctor.
+            if age_secs >= max_expected_gap_secs {
                 HealthIndicator::Red
+            } else {
+                HealthIndicator::Green
             }
         }
     };
@@ -545,13 +545,28 @@ mod tests {
     #[test]
     fn compute_health_polling_mode_uses_poll_interval() {
         // Polling mode honors the user's interval. last_poll 25min ago,
-        // interval=600 → threshold 1800s. age 1500s < 1800s → not Red. age in
-        // yellow window (>900) → Yellow.
+        // interval=600 → threshold 1800s. age 1500s < 1800s → Green (matches
+        // doctor's evaluate_poll_health, which has no yellow window).
         let twenty_five_min_ago = chrono::Utc::now() - chrono::Duration::minutes(25);
         let threshold = crate::doctor::stall_threshold_for_mode(Some("polling"), 600);
         assert_eq!(threshold, 1800);
         let h = compute_health(true, Some(twenty_five_min_ago), 5, Some(0), Some(0), threshold);
-        assert_eq!(h, HealthIndicator::Yellow);
+        assert_eq!(h, HealthIndicator::Green);
+    }
+
+    #[test]
+    fn compute_health_below_threshold_matches_doctor_pass() {
+        // Codex round 6 [medium]: 40min/60min was Yellow in status while
+        // doctor reported pass for the same input. Lock in: any age strictly
+        // under threshold is Green, no half-window.
+        let forty_min_ago = chrono::Utc::now() - chrono::Duration::minutes(40);
+        let h = compute_health(true, Some(forty_min_ago), 5, Some(0), Some(0), 3600);
+        assert_eq!(
+            h,
+            HealthIndicator::Green,
+            "40min/60min must be Green to match doctor; got {:?}",
+            h
+        );
     }
 
     #[test]
