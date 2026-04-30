@@ -57,14 +57,18 @@ jobs:
         run: |
           last_tag=$(git tag --sort=-creatordate 'v*' | head -n1)
           if [[ -z "$last_tag" ]]; then
+            echo "No previous v* tag found; release-plz will run without --registry-manifest-path"
             echo "has_registry_manifest=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           worktree_dir=$(mktemp -d)
           git worktree add --detach "$worktree_dir" "$last_tag"
+          echo "Using previous release tag: $last_tag"
+          echo "Using previous release manifest: $worktree_dir/Cargo.toml"
 
           echo "has_registry_manifest=true" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
           echo "worktree_dir=$worktree_dir" >> "$GITHUB_OUTPUT"
           echo "manifest_path=$worktree_dir/Cargo.toml" >> "$GITHUB_OUTPUT"
 
@@ -79,6 +83,8 @@ jobs:
               --registry-manifest-path
               "${{ steps.previous-release.outputs.manifest_path }}"
             )
+            echo "release-pr baseline tag: ${{ steps.previous-release.outputs.last_tag }}"
+            echo "release-pr baseline manifest: ${{ steps.previous-release.outputs.manifest_path }}"
           else
             REGISTRY_MANIFEST_PATH=()
           fi
