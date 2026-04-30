@@ -55,6 +55,8 @@ jobs:
 
       - name: Configure git user from GitHub token
         uses: release-plz/git-config@59144859caf016f8b817a2ac9b051578729173c4
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Prepare previous release manifest
         id: previous-release
