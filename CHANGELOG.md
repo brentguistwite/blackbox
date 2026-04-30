@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/brentguistwite/blackbox/compare/v0.1.1...v0.1.2) - 2026-04-30
+
+### Added
+
+- *(doctor)* poll-health check + status surfaces failed repos
+- *(doctor)* tiered severity + LLM/notifications/AI-tool checks
+
+### Fixed
+
+- *(ci)* use default token for git-config
+- *(ci)* pass token to git-config step
+- *(ci)* restore semver checks and tag lookup
+- *(ci)* baseline release-plz from last tag
+- *(scanner)* surface malformed .git pointer as discovery error
+- *(scanner)* normalize unreadable .git error path to worktree root
+- address Codex round 10 findings
+- address Codex round 9 findings
+- address Codex round 8 findings
+- *(scanner)* exempt worktree-parent dirs from in-repo error filter
+- *(scanner,daemon)* address Codex round 6 findings
+- *(poller,doctor,daemon)* address Codex round 5 findings
+- *(poller)* atomic health snapshot — heartbeat + metrics in one transaction
+- *(doctor)* mode-aware stall threshold ignores poll_interval_secs in watcher mode
+- *(poller)* prune repo_states + failed_set after each full_scan
+- address final Codex round 4 — subtree discovery + worktree count drift
+- graceful config-load warning in status + boundary contract test
+- *(doctor)* address multi-agent review round 3
+- *(doctor)* address Codex round 2 — watcher heartbeat + discovery errors
+- *(doctor)* address Codex adversarial review on poll-health PR
+- *(tests)* count optional-fail (!) lines in doctor check_count test
+- *(doctor)* address Codex adversarial review findings
+- *(tests)* use XDG env vars in commit_quality CLI tests
+
+### Other
+
+- *(ci)* log release-plz baseline
+- fix 5 lib clippy warnings
+- *(scanner)* retire DiscoveredRepos::inside_repo_advisories field
+- shrink daily_summary timestamp offsets to stay in local-today
+- add cargo build/test/clippy workflow on PRs
+- release-plz skip GitHub release creation
+- release v0.1.1
+
 ## [0.1.1](https://github.com/brentguistwite/blackbox/releases/tag/v0.1.1) - 2026-04-24
 
 ### Added
