@@ -34,7 +34,118 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@f23382d582832e41d5eb4fff2bddb06bc5adf8d3 # v2.68.21
+        with:
+          tool: cargo-semver-checks@0.46
+
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@1800853f2578f8c34492ec76154caef8e163fbca # v1.17.7
+        env:
+          BINSTALL_VERSION: 1.17.6
+
+      - name: Install release-plz
+        shell: bash
+        run: |
+          cargo-binstall \
+            release-plz@0.3.157 \
+            --force \
+            --strategies=crate-meta-data,compile \
+            --no-confirm
+
+      - name: Configure git user from GitHub token
+        uses: release-plz/git-config@59144859caf016f8b817a2ac9b051578729173c4
+
+      - name: Prepare previous release manifest
+        id: previous-release
+        shell: bash
+        run: |
+          last_tag=$(git tag -l --sort=-creatordate 'v*' | head -n1)
+          if [[ -z "$last_tag" ]]; then
+            echo "No previous v* tag found; release-plz will run without --registry-manifest-path"
+            echo "has_registry_manifest=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          worktree_dir=$(mktemp -d)
+          git worktree add --detach "$worktree_dir" "$last_tag"
+          echo "Using previous release tag: $last_tag"
+          echo "Using previous release manifest: $worktree_dir/Cargo.toml"
+
+          echo "has_registry_manifest=true" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+          echo "worktree_dir=$worktree_dir" >> "$GITHUB_OUTPUT"
+          echo "manifest_path=$worktree_dir/Cargo.toml" >> "$GITHUB_OUTPUT"
+
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@v0.5
+        id: release-plz
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ steps.previous-release.outputs.has_registry_manifest }}" == "true" ]]; then
+            REGISTRY_MANIFEST_PATH=(
+              --registry-manifest-path
+              "${{ steps.previous-release.outputs.manifest_path }}"
+            )
+            echo "release-pr baseline tag: ${{ steps.previous-release.outputs.last_tag }}"
+            echo "release-pr baseline manifest: ${{ steps.previous-release.outputs.manifest_path }}"
+          else
+            REGISTRY_MANIFEST_PATH=()
+          fi
+
+          echo "Using forge 'github'"
+          echo "-- Running release-plz release-pr --"
+          release_pr_stderr=$(mktemp)
+          if ! release_pr_output=$(release-plz release-pr \
+            --git-token "${GITHUB_TOKEN}" \
+            --repo-url "https://github.com/${GITHUB_REPOSITORY}" \
+            --forge github \
+            "${REGISTRY_MANIFEST_PATH[@]}" \
+            -o json 2>"$release_pr_stderr"); then
+            release_pr_error=$(cat "$release_pr_stderr")
+            if [[ "$release_pr_error" == *"422"* ]]; then
+              echo "::warning::release-plz release-pr failed with HTTP 422; continuing with no PRs created."
+              release_pr_output='{"prs":[]}'
+            else
+              echo "$release_pr_error" >&2
+              rm -f "$release_pr_stderr"
+              exit 1
+            fi
+          fi
+          rm -f "$release_pr_stderr"
+          echo "release_pr_output: $release_pr_output"
+          prs=$(echo "$release_pr_output" | jq -c .prs)
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+          prs_length=$(echo "$prs" | jq 'length')
+          if [[ "$prs_length" != "0" ]]; then
+            prs_created=true
+            first_pr=$(echo "$prs" | jq -c '.[0]')
+          else
+            prs_created=false
+            first_pr="{}"
+          fi
+          echo "pr=$first_pr" >> "$GITHUB_OUTPUT"
+          echo "prs_created=$prs_created" >> "$GITHUB_OUTPUT"
+
+          echo "-- Running release-plz release --"
+          release_output=$(release-plz release \
+            --git-token "${GITHUB_TOKEN}" \
+            --forge github \
+            -o json)
+          echo "release_output: $release_output"
+          releases=$(echo "$release_output" | jq -c .releases)
+          echo "releases=$releases" >> "$GITHUB_OUTPUT"
+          releases_length=$(echo "$releases" | jq 'length')
+          if [[ "$releases_length" != "0" ]]; then
+            releases_created=true
+          else
+            releases_created=false
+          fi
+          echo "releases_created=$releases_created" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup previous release manifest
+        if: ${{ always() && steps.previous-release.outputs.has_registry_manifest == 'true' }}
+        shell: bash
+        run: |
+          git worktree remove --force "${{ steps.previous-release.outputs.worktree_dir }}"
