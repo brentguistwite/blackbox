@@ -117,16 +117,49 @@ struct CodexSessionPayload {
     timestamp: Option<String>,
 }
 
-/// Map a session's cwd to a watched repo path. Returns the repo path if cwd is
-/// within a watched repo, or the cwd itself as a fallback.
-fn map_to_repo(session_cwd: &str, watched_repos: &[PathBuf]) -> String {
+/// Returns the system temp dir, cached for the lifetime of the process.
+///
+/// `std::env::temp_dir()` reads `$TMPDIR` on each call. We cache with
+/// `OnceLock` so `is_ephemeral_path` doesn't re-read the env on every session.
+fn sys_temp_dir() -> &'static std::path::Path {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<PathBuf> = OnceLock::new();
+    CACHE.get_or_init(std::env::temp_dir).as_path()
+}
+
+/// Returns true if `path` is a system temp/ephemeral dir that should not be
+/// tracked as a real working location.
+///
+/// Static prefixes cover common macOS paths (`/var/folders` and its
+/// `/private/var/folders` canonical form — macOS symlink duality, `/tmp`).
+/// The `sys_temp_dir()` fallback catches non-standard `$TMPDIR` values in CI
+/// environments and Linux setups where `$TMPDIR` points outside those prefixes.
+pub(crate) fn is_ephemeral_path(path: &Path) -> bool {
+    const TEMP_PREFIXES: &[&str] = &[
+        "/tmp",
+        "/private/tmp",
+        "/var/folders",
+        "/private/var/folders",
+    ];
+    if TEMP_PREFIXES.iter().any(|prefix| path.starts_with(prefix)) {
+        return true;
+    }
+    path.starts_with(sys_temp_dir())
+}
+
+/// Map a session's cwd to a watched repo path. Returns `None` for ephemeral
+/// temp dirs. Returns the matched watched repo or the cwd itself for real dirs.
+fn map_to_repo(session_cwd: &str, watched_repos: &[PathBuf]) -> Option<String> {
     let cwd = Path::new(session_cwd);
+    if is_ephemeral_path(cwd) {
+        return None;
+    }
     for repo in watched_repos {
         if cwd.starts_with(repo) || cwd == repo.as_path() {
-            return repo.to_string_lossy().to_string();
+            return Some(repo.to_string_lossy().to_string());
         }
     }
-    session_cwd.to_string()
+    Some(session_cwd.to_string())
 }
 
 /// Derive session ID from a codex JSONL file path.
@@ -292,7 +325,7 @@ impl AiToolDetector for CodexDetector {
                 .and_then(|p| p.timestamp.clone())
                 .unwrap_or(meta.timestamp);
 
-            let repo_path = map_to_repo(&cwd, watched_repos);
+            let Some(repo_path) = map_to_repo(&cwd, watched_repos) else { continue };
 
             match db::insert_ai_session(conn, "codex", &repo_path, &session_id, &created_at) {
                 Ok(true) => log::debug!("Recorded codex session: {}", session_id),
@@ -445,7 +478,7 @@ impl AiToolDetector for CopilotDetector {
                 _ => continue,
             };
 
-            let repo_path = map_to_repo(&cwd, watched_repos);
+            let Some(repo_path) = map_to_repo(&cwd, watched_repos) else { continue };
             let started_at = mtime_rfc3339(&workspace_path)
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
 
@@ -577,7 +610,7 @@ impl AiToolDetector for CursorDetector {
             };
 
             let session_id = format!("cursor-{hash}");
-            let repo_path = map_to_repo(&folder, watched_repos);
+            let Some(repo_path) = map_to_repo(&folder, watched_repos) else { continue };
             let started_at = mtime_rfc3339(&workspace_path)
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
 
@@ -680,7 +713,7 @@ impl WindsurfDetector {
             };
 
             let session_id = format!("windsurf-{hash}");
-            let repo_path = map_to_repo(&folder, watched_repos);
+            let Some(repo_path) = map_to_repo(&folder, watched_repos) else { continue };
             let started_at = mtime_rfc3339(&workspace_path)
                 .unwrap_or_else(|| Utc::now().to_rfc3339());
 
@@ -787,5 +820,30 @@ pub fn poll_all_ai_sessions(conn: &Connection, watched_repos: &[PathBuf]) {
     ];
     for detector in &detectors {
         detector.poll(conn, watched_repos);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_ephemeral_path;
+    use std::path::Path;
+
+    #[test]
+    fn ephemeral_rejects_tmp() {
+        assert!(is_ephemeral_path(Path::new("/tmp/test-repo")));
+        assert!(is_ephemeral_path(Path::new("/private/tmp/test-repo")));
+    }
+
+    #[test]
+    fn ephemeral_rejects_var_folders() {
+        assert!(is_ephemeral_path(Path::new("/var/folders/sw/abc/T/MyTest/001")));
+        assert!(is_ephemeral_path(Path::new("/private/var/folders/sw/abc/T/MyTest/001")));
+    }
+
+    #[test]
+    fn ephemeral_allows_real_dirs() {
+        assert!(!is_ephemeral_path(Path::new("/home/user/projects/myapp")));
+        assert!(!is_ephemeral_path(Path::new("/Users/dev/repos/blackbox")));
+        assert!(!is_ephemeral_path(Path::new("/opt/repos/project")));
     }
 }

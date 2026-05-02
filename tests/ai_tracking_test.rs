@@ -84,7 +84,7 @@ fn test_claude_detector_valid_session_inserts_row() {
     let session_json = serde_json::json!({
         "pid": 99999,
         "sessionId": "test-session-abc",
-        "cwd": "/tmp/test-repo",
+        "cwd": "/home/testuser/test-repo",
         "startedAt": 1711929600000_u64
     });
     std::fs::write(
@@ -95,7 +95,7 @@ fn test_claude_detector_valid_session_inserts_row() {
 
     blackbox::claude_tracking::poll_claude_sessions_with_paths(
         &conn,
-        &[PathBuf::from("/tmp/test-repo")],
+        &[PathBuf::from("/home/testuser/test-repo")],
         Some(&sessions_dir),
         Some(&projects_dir),
     );
@@ -109,7 +109,7 @@ fn test_claude_detector_valid_session_inserts_row() {
         )
         .unwrap();
     assert_eq!(tool, "claude-code");
-    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(repo, "/home/testuser/test-repo");
     assert_eq!(sid, "test-session-abc");
 }
 
@@ -139,7 +139,7 @@ fn test_codex_detector_valid_session_inserts_row() {
     let meta_line = serde_json::json!({
         "timestamp": "2024-03-15T10:00:00Z",
         "type": "session_meta",
-        "payload": {"cwd": "/tmp/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
+        "payload": {"cwd": "/home/testuser/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
     }).to_string();
     let ev1 = serde_json::json!({"timestamp":"2024-03-15T10:03:00Z","type":"event_msg","payload":{"type":"task_started"}}).to_string();
     let ev2 = serde_json::json!({"timestamp":"2024-03-15T10:04:00Z","type":"response_item","payload":{}}).to_string();
@@ -153,7 +153,7 @@ fn test_codex_detector_valid_session_inserts_row() {
     );
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir.clone());
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let (tool, repo, sid, turns): (String, String, String, i64) = conn
         .query_row(
@@ -164,7 +164,7 @@ fn test_codex_detector_valid_session_inserts_row() {
         .unwrap();
 
     assert_eq!(tool, "codex");
-    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(repo, "/home/testuser/test-repo");
     assert!(sid.contains("2024-03-15") && sid.contains("rollout-abc"), "session_id={sid}");
     assert_eq!(turns, 4); // 1 meta + 3 event lines
 }
@@ -178,7 +178,7 @@ fn test_codex_detector_no_duplicate_on_second_poll() {
     let meta_line = serde_json::json!({
         "timestamp": "2024-03-15T10:00:00Z",
         "type": "session_meta",
-        "payload": {"cwd": "/tmp/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
+        "payload": {"cwd": "/home/testuser/test-repo", "timestamp": "2024-03-15T10:00:00Z"}
     }).to_string();
     let ev = serde_json::json!({"timestamp":"2024-03-15T10:05:00Z","type":"event_msg","payload":{"type":"task_started"}}).to_string();
 
@@ -269,7 +269,7 @@ fn test_copilot_detector_valid_session_inserts_row() {
     create_copilot_session(
         &state_dir,
         uuid,
-        "cwd: /tmp/test-repo\n",
+        "cwd: /home/testuser/test-repo\n",
         Some(&[
             r#"{"type":"input"}"#,
             r#"{"type":"output"}"#,
@@ -280,7 +280,7 @@ fn test_copilot_detector_valid_session_inserts_row() {
     );
 
     let detector = CopilotDetector::with_session_state_dir(state_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let (tool, repo, sid, turns): (String, String, String, i64) = conn
         .query_row(
@@ -291,7 +291,7 @@ fn test_copilot_detector_valid_session_inserts_row() {
         .unwrap();
 
     assert_eq!(tool, "copilot-cli");
-    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(repo, "/home/testuser/test-repo");
     assert_eq!(sid, uuid);
     assert_eq!(turns, 5);
 }
@@ -329,12 +329,12 @@ fn test_copilot_detector_no_events_jsonl_turns_none() {
     create_copilot_session(
         &state_dir,
         uuid,
-        "cwd: /tmp/test-repo\n",
+        "cwd: /home/testuser/test-repo\n",
         None, // no events.jsonl
     );
 
     let detector = CopilotDetector::with_session_state_dir(state_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     // Row should exist but turns should be NULL
     let (tool, turns_null): (String, bool) = conn
@@ -392,11 +392,11 @@ fn test_cursor_detector_valid_local_folder_inserts_row() {
     create_cursor_workspace(
         &ws_dir,
         "abc123hash",
-        r#"{"folder": "/tmp/test-repo"}"#,
+        r#"{"folder": "/home/testuser/test-repo"}"#,
     );
 
     let detector = CursorDetector::with_workspace_dir(ws_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let (tool, repo, sid): (String, String, String) = conn
         .query_row(
@@ -407,7 +407,7 @@ fn test_cursor_detector_valid_local_folder_inserts_row() {
         .unwrap();
 
     assert_eq!(tool, "cursor");
-    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(repo, "/home/testuser/test-repo");
     assert_eq!(sid, "cursor-abc123hash");
 }
 
@@ -476,11 +476,11 @@ fn test_cursor_detector_turns_are_none() {
     create_cursor_workspace(
         &ws_dir,
         "turns-hash",
-        r#"{"folder": "/tmp/test-repo"}"#,
+        r#"{"folder": "/home/testuser/test-repo"}"#,
     );
 
     let detector = CursorDetector::with_workspace_dir(ws_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let turns_null: bool = conn
         .query_row(
@@ -513,10 +513,10 @@ fn test_windsurf_detector_workspace_mode_inserts_row() {
     let ws_dir = ws_tmp.path().to_path_buf();
 
     // Same structure as Cursor: hash/workspace.json with folder field
-    create_cursor_workspace(&ws_dir, "ws-hash-1", r#"{"folder": "/tmp/test-repo"}"#);
+    create_cursor_workspace(&ws_dir, "ws-hash-1", r#"{"folder": "/home/testuser/test-repo"}"#);
 
     let detector = WindsurfDetector::with_workspace_dir(ws_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let (tool, repo, sid): (String, String, String) = conn
         .query_row(
@@ -527,7 +527,7 @@ fn test_windsurf_detector_workspace_mode_inserts_row() {
         .unwrap();
 
     assert_eq!(tool, "windsurf");
-    assert_eq!(repo, "/tmp/test-repo");
+    assert_eq!(repo, "/home/testuser/test-repo");
     assert_eq!(sid, "windsurf-ws-hash-1");
 }
 
@@ -573,10 +573,10 @@ fn test_windsurf_detector_turns_are_none() {
     let ws_tmp = TempDir::new().unwrap();
     let ws_dir = ws_tmp.path().to_path_buf();
 
-    create_cursor_workspace(&ws_dir, "turns-ws", r#"{"folder": "/tmp/test-repo"}"#);
+    create_cursor_workspace(&ws_dir, "turns-ws", r#"{"folder": "/home/testuser/test-repo"}"#);
 
     let detector = WindsurfDetector::with_workspace_dir(ws_dir);
-    detector.poll(&conn, &[PathBuf::from("/tmp/test-repo")]);
+    detector.poll(&conn, &[PathBuf::from("/home/testuser/test-repo")]);
 
     let turns_null: bool = conn
         .query_row(
@@ -643,4 +643,40 @@ fn test_is_any_process_running_nonexistent_returns_false() {
 fn test_processes_matching_empty_pattern_does_not_panic() {
     // Empty pattern may match processes or not — just must not panic
     let _pids = processes_matching("");
+}
+
+// --- Ephemeral path filtering ---
+
+#[test]
+fn test_claude_detector_rejects_ephemeral_cwd() {
+    let (tmp, conn) = setup_db();
+
+    let sessions_dir = tmp.path().join("sessions");
+    std::fs::create_dir_all(&sessions_dir).unwrap();
+    let projects_dir = tmp.path().join("projects");
+    std::fs::create_dir_all(&projects_dir).unwrap();
+
+    // Session with cwd in macOS temp dir — should be silently skipped.
+    let session_json = serde_json::json!({
+        "pid": 99999,
+        "sessionId": "ephemeral-session",
+        "cwd": "/private/var/folders/sw/abc123/T/TestSomething/001",
+        "startedAt": 1711929600000_u64
+    });
+    std::fs::write(
+        sessions_dir.join("ephemeral-session.json"),
+        serde_json::to_string(&session_json).unwrap(),
+    ).unwrap();
+
+    blackbox::claude_tracking::poll_claude_sessions_with_paths(
+        &conn,
+        &[],
+        Some(&sessions_dir),
+        Some(&projects_dir),
+    );
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ai_sessions", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "ephemeral cwd session should not be inserted into DB");
 }

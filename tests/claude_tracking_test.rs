@@ -18,7 +18,7 @@ fn test_encode_project_path() {
 
 #[test]
 fn test_encode_project_path_simple() {
-    assert_eq!(claude_tracking::encode_project_path("/tmp/repo"), "-tmp-repo");
+    assert_eq!(claude_tracking::encode_project_path("/home/testuser/repo"), "-home-testuser-repo");
 }
 
 #[test]
@@ -40,8 +40,7 @@ fn test_poll_sessions_discovers_active_session() {
 
     // Use current PID so it appears "running"
     let pid = std::process::id();
-    let repo_path = tmp.path().join("myrepo");
-    std::fs::create_dir_all(&repo_path).unwrap();
+    let repo_path = std::path::PathBuf::from("/home/testuser/myrepo");
 
     let session_json = format!(
         r#"{{"pid":{},"sessionId":"abc-123","cwd":"{}","startedAt":1773674448026}}"#,
@@ -88,7 +87,7 @@ fn test_poll_sessions_dedup() {
 
     let pid = std::process::id();
     let session_json = format!(
-        r#"{{"pid":{},"sessionId":"dedup-test","cwd":"/tmp/repo","startedAt":1773674448026}}"#,
+        r#"{{"pid":{},"sessionId":"dedup-test","cwd":"/home/testuser/repo","startedAt":1773674448026}}"#,
         pid
     );
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
@@ -121,7 +120,7 @@ fn test_poll_sessions_marks_ended_when_pid_dead() {
     // First: create a session file with current PID
     let pid = std::process::id();
     let session_json = format!(
-        r#"{{"pid":{},"sessionId":"end-test","cwd":"/tmp/repo","startedAt":1773674448026}}"#,
+        r#"{{"pid":{},"sessionId":"end-test","cwd":"/home/testuser/repo","startedAt":1773674448026}}"#,
         pid
     );
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
@@ -131,7 +130,7 @@ fn test_poll_sessions_marks_ended_when_pid_dead() {
 
     // Now remove the session file (simulating session ended) and replace with dead PID
     std::fs::remove_file(sessions_dir.join(format!("{}.json", pid))).unwrap();
-    let dead_json = r#"{"pid":999999,"sessionId":"end-test","cwd":"/tmp/repo","startedAt":1773674448026}"#;
+    let dead_json = r#"{"pid":999999,"sessionId":"end-test","cwd":"/home/testuser/repo","startedAt":1773674448026}"#;
     std::fs::write(sessions_dir.join("999999.json"), dead_json).unwrap();
 
     claude_tracking::poll_claude_sessions_with_paths(&conn, &watched, Some(&sessions_dir), Some(&projects_dir));
@@ -155,7 +154,7 @@ fn test_poll_sessions_counts_turns() {
     let sessions_dir = tmp.path().join("sessions");
     std::fs::create_dir_all(&sessions_dir).unwrap();
 
-    let cwd = "/tmp/myrepo";
+    let cwd = "/home/testuser/myrepo";
     let encoded = claude_tracking::encode_project_path(cwd);
     let projects_dir = tmp.path().join("projects");
     let project_subdir = projects_dir.join(&encoded);
@@ -262,7 +261,7 @@ fn test_poll_sessions_malformed_json_skipped() {
     // Write valid JSON alongside
     let pid = std::process::id();
     let valid_json = format!(
-        r#"{{"pid":{},"sessionId":"valid-one","cwd":"/tmp/repo","startedAt":1773674448026}}"#,
+        r#"{{"pid":{},"sessionId":"valid-one","cwd":"/home/testuser/repo","startedAt":1773674448026}}"#,
         pid
     );
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &valid_json).unwrap();
@@ -286,7 +285,7 @@ fn test_poll_updates_last_active_at_from_jsonl_mtime() {
     std::fs::create_dir_all(&sessions_dir).unwrap();
 
     let pid = std::process::id();
-    let repo_path = "/tmp/myrepo";
+    let repo_path = "/home/testuser/myrepo";
     let session_json = format!(
         r#"{{"pid":{},"sessionId":"active-test","cwd":"{}","startedAt":1773674448026}}"#,
         pid, repo_path
@@ -326,7 +325,7 @@ fn test_poll_without_jsonl_leaves_last_active_null() {
 
     let pid = std::process::id();
     let session_json = format!(
-        r#"{{"pid":{},"sessionId":"no-log-test","cwd":"/tmp/nope","startedAt":1773674448026}}"#,
+        r#"{{"pid":{},"sessionId":"no-log-test","cwd":"/home/testuser/nope","startedAt":1773674448026}}"#,
         pid
     );
     std::fs::write(sessions_dir.join(format!("{}.json", pid)), &session_json).unwrap();
