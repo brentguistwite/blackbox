@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use serde::Deserialize;
 
+use crate::ai_tracking::is_ephemeral_path;
 use crate::db;
 
 #[derive(Debug, Deserialize)]
@@ -132,17 +133,20 @@ fn find_session_log(projects_dir: &Path, session_cwd: &str, session_id: &str) ->
     }
 }
 
-/// Map a session's cwd to a watched repo path. Returns the repo path if cwd is
-/// within a watched repo, or the cwd itself as a fallback.
-fn map_to_repo(session_cwd: &str, watched_repos: &[PathBuf]) -> String {
+/// Map a session's cwd to a watched repo path. Returns `None` for ephemeral
+/// temp dirs (test-spawned repos, OS caches). Returns the matched watched repo
+/// path if cwd is inside one, or the cwd itself for real non-watched dirs.
+fn map_to_repo(session_cwd: &str, watched_repos: &[PathBuf]) -> Option<String> {
     let cwd = Path::new(session_cwd);
+    if is_ephemeral_path(cwd) {
+        return None;
+    }
     for repo in watched_repos {
         if cwd.starts_with(repo) || cwd == repo.as_path() {
-            return repo.to_string_lossy().to_string();
+            return Some(repo.to_string_lossy().to_string());
         }
     }
-    // Fallback: use the cwd directly
-    session_cwd.to_string()
+    Some(session_cwd.to_string())
 }
 
 /// Main entry point: poll Claude Code sessions and record to DB.
@@ -185,7 +189,7 @@ pub fn poll_claude_sessions_with_paths(
     for session in &session_files {
         active_pids.insert(session.session_id.clone(), session.pid);
 
-        let repo_path = map_to_repo(&session.cwd, watched_repos);
+        let Some(repo_path) = map_to_repo(&session.cwd, watched_repos) else { continue };
         let started_at = millis_to_rfc3339(session.started_at);
 
         match db::insert_ai_session(conn, "claude-code", &repo_path, &session.session_id, &started_at) {

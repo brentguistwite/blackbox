@@ -47,7 +47,7 @@ fn codex_valid_session_inserts_db_row() {
     let day_dir = sessions_dir.join("2024").join("03").join("15");
     std::fs::create_dir_all(&day_dir).unwrap();
 
-    let meta = session_meta_line("/tmp/myrepo", "2024-03-15T10:00:00Z");
+    let meta = session_meta_line("/home/testuser/myrepo", "2024-03-15T10:00:00Z");
     let jsonl = format!("{}\n{}\n{}\n", meta, event_line("2024-03-15T10:03:00Z"), event_line("2024-03-15T10:05:00Z"));
     std::fs::write(day_dir.join("rollout-abc123.jsonl"), &jsonl).unwrap();
 
@@ -89,7 +89,7 @@ fn codex_dedup_on_second_poll() {
     let day_dir = sessions_dir.join("2024").join("01").join("01");
     std::fs::create_dir_all(&day_dir).unwrap();
 
-    let meta = session_meta_line("/tmp/repo", "2024-01-01T00:00:00Z");
+    let meta = session_meta_line("/home/testuser/repo", "2024-01-01T00:00:00Z");
     std::fs::write(day_dir.join("rollout-dup.jsonl"), format!("{}\n", meta)).unwrap();
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir);
@@ -115,7 +115,7 @@ fn codex_malformed_first_line_skipped() {
     std::fs::write(day_dir.join("rollout-bad.jsonl"), "not valid json\n").unwrap();
 
     // Valid file alongside
-    let meta = session_meta_line("/tmp/repo", "2024-06-01T00:00:00Z");
+    let meta = session_meta_line("/home/testuser/repo", "2024-06-01T00:00:00Z");
     std::fs::write(day_dir.join("rollout-good.jsonl"), format!("{}\n", meta)).unwrap();
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir);
@@ -137,19 +137,15 @@ fn codex_maps_cwd_to_watched_repo() {
     let tmp = TempDir::new().unwrap();
     let conn = setup_db(&tmp);
 
-    let repo_root = tmp.path().join("project");
-    std::fs::create_dir_all(&repo_root).unwrap();
-    let session_cwd = repo_root.join("src").join("lib");
-    std::fs::create_dir_all(&session_cwd).unwrap();
+    // Use non-ephemeral fake paths; map_to_repo only does string prefix matching
+    let repo_root = std::path::PathBuf::from("/home/testuser/project");
+    let session_cwd = "/home/testuser/project/src/lib";
 
     let sessions_dir = tmp.path().join("sessions");
     let day_dir = sessions_dir.join("2024").join("07").join("20");
     std::fs::create_dir_all(&day_dir).unwrap();
 
-    let meta = session_meta_line(
-        &session_cwd.to_string_lossy(),
-        "2024-07-20T00:00:00Z",
-    );
+    let meta = session_meta_line(session_cwd, "2024-07-20T00:00:00Z");
     std::fs::write(day_dir.join("rollout-map.jsonl"), format!("{}\n", meta)).unwrap();
 
     let detector = CodexDetector::with_sessions_dir(sessions_dir);
@@ -170,7 +166,7 @@ fn codex_last_active_from_last_event_timestamp() {
     let day_dir = sessions_dir.join("2024").join("08").join("10");
     std::fs::create_dir_all(&day_dir).unwrap();
 
-    let meta = session_meta_line("/tmp/repo", "2024-08-10T09:00:00Z");
+    let meta = session_meta_line("/home/testuser/repo", "2024-08-10T09:00:00Z");
     let last_event = event_line("2024-08-10T09:45:00Z");
     let jsonl = format!("{}\n{}\n{}\n", meta, event_line("2024-08-10T09:30:00Z"), last_event);
     std::fs::write(day_dir.join("rollout-active.jsonl"), &jsonl).unwrap();

@@ -1279,3 +1279,51 @@ fn session_intervals_clips_eliminate_out_of_window_segments() {
     let ivs = session_intervals(&s, &turns, from, to, Duration::minutes(30));
     assert!(ivs.is_empty());
 }
+
+// --- sub-minute session filter ---
+
+#[test]
+fn sub_minute_ended_session_excluded_from_query_activity() {
+    let (conn, _tmp) = setup_db();
+
+    let now = Utc::now();
+    let from = now - Duration::hours(1);
+    let to = now + Duration::hours(1);
+
+    // Session that started and ended within 30 seconds — should be filtered out.
+    let started = (now - Duration::seconds(60)).to_rfc3339();
+    let ended = (now - Duration::seconds(30)).to_rfc3339();
+    insert_ai_session(&conn, "claude-code", "/repo/alpha", "short-session", &started).unwrap();
+    update_session_ended(&conn, "short-session", &ended, None).unwrap();
+
+    // Also insert a commit so /repo/alpha appears in results.
+    let commit_ts = (now - Duration::minutes(30)).to_rfc3339();
+    insert_activity(&conn, "/repo/alpha", "commit", Some("main"), None, Some("abc"), Some("dev"), Some("msg"), &commit_ts).unwrap();
+
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let alpha = repos.iter().find(|r| r.repo_path == "/repo/alpha").unwrap();
+    assert!(
+        alpha.ai_sessions.is_empty(),
+        "sub-minute ended session should be excluded from query results"
+    );
+}
+
+#[test]
+fn sub_minute_filter_does_not_affect_active_sessions() {
+    let (conn, _tmp) = setup_db();
+
+    let now = Utc::now();
+    let from = now - Duration::hours(1);
+    let to = now + Duration::hours(1);
+
+    // Active session (no ended_at) with very recent start — should appear.
+    let started = (now - Duration::seconds(30)).to_rfc3339();
+    insert_ai_session(&conn, "claude-code", "/repo/beta", "active-short", &started).unwrap();
+
+    let repos = query_activity(&conn, from, to, 120, 30).unwrap();
+    let beta = repos.iter().find(|r| r.repo_path == "/repo/beta");
+    assert!(
+        beta.is_some() && !beta.unwrap().ai_sessions.is_empty(),
+        "active session with no ended_at should not be filtered regardless of duration"
+    );
+}

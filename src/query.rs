@@ -1046,6 +1046,14 @@ fn query_ai_sessions(
         let duration = segments
             .iter()
             .fold(chrono::Duration::zero(), |acc, iv| acc + (iv.end - iv.start));
+        // Skip ended sessions whose computed duration is under a minute. This
+        // covers two cases: (a) noise — aborted sessions, test-spawned processes;
+        // (b) window-clip artifacts — sessions that crossed the query window
+        // boundary and have no visible activity within it. Both produce "0m"
+        // which is meaningless to display.
+        if info.ended_at.is_some() && duration < chrono::Duration::minutes(1) {
+            continue;
+        }
         map.entry(repo_path).or_default().push(AiSessionInfo { duration, segments, ..info });
     }
 
