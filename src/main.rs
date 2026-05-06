@@ -474,7 +474,13 @@ fn main() -> anyhow::Result<()> {
                 let (f, t) = blackbox::query::week_range();
                 (f, t, "This Week".to_string())
             } else {
-                let days = lookback.unwrap_or(config.standup_lookback_days);
+                let work_days = config.work_days();
+                let days = blackbox::query::resolve_standup_lookback(
+                    lookback,
+                    config.standup_lookback_days,
+                    chrono::Local::now().date_naive(),
+                    &work_days,
+                );
                 let (f, t) = blackbox::query::standup_range(days);
                 let label = if days == 0 {
                     "Today".to_string()
