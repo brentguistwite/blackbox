@@ -445,6 +445,27 @@ pub fn standup_range(lookback_days: u32) -> (DateTime<Utc>, DateTime<Utc>) {
     (start_utc, now)
 }
 
+pub fn previous_workday_lookback(today: NaiveDate, workdays: &[Weekday]) -> u32 {
+    for days_back in 1..=7 {
+        let candidate = today - Duration::days(days_back);
+        if workdays.contains(&candidate.weekday()) {
+            return days_back as u32;
+        }
+    }
+    1
+}
+
+pub fn resolve_standup_lookback(
+    cli_lookback: Option<u32>,
+    config_lookback: Option<u32>,
+    today: NaiveDate,
+    workdays: &[Weekday],
+) -> u32 {
+    cli_lookback
+        .or(config_lookback)
+        .unwrap_or_else(|| previous_workday_lookback(today, workdays))
+}
+
 /// Returns (monday_midnight_local_as_utc, now_utc)
 pub fn week_range() -> (DateTime<Utc>, DateTime<Utc>) {
     let now = Utc::now();

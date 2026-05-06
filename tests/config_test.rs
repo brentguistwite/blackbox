@@ -589,16 +589,16 @@ fn test_show_hints_roundtrip() {
 #[test]
 fn test_default_config_standup_lookback_days() {
     let cfg = Config::default();
-    assert_eq!(cfg.standup_lookback_days, 0);
+    assert_eq!(cfg.standup_lookback_days, None);
 }
 
 #[test]
-fn test_parse_missing_standup_lookback_days_defaults_zero() {
+fn test_parse_missing_standup_lookback_days_defaults_none() {
     let toml_str = r#"
         watch_dirs = ["/tmp/code"]
     "#;
     let cfg: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.standup_lookback_days, 0);
+    assert_eq!(cfg.standup_lookback_days, None);
 }
 
 #[test]
@@ -608,16 +608,53 @@ fn test_parse_standup_lookback_days_custom() {
         standup_lookback_days = 1
     "#;
     let cfg: Config = toml::from_str(toml_str).unwrap();
-    assert_eq!(cfg.standup_lookback_days, 1);
+    assert_eq!(cfg.standup_lookback_days, Some(1));
 }
 
 #[test]
 fn test_standup_lookback_days_roundtrip() {
     let cfg = Config {
-        standup_lookback_days: 3,
+        standup_lookback_days: Some(3),
         ..Config::default()
     };
     let serialized = toml::to_string_pretty(&cfg).unwrap();
     let deserialized: Config = toml::from_str(&serialized).unwrap();
-    assert_eq!(deserialized.standup_lookback_days, 3);
+    assert_eq!(deserialized.standup_lookback_days, Some(3));
+}
+
+// --- work_days ---
+
+#[test]
+fn test_default_config_work_days_resolve_to_mon_fri() {
+    let cfg = Config::default();
+    assert_eq!(
+        cfg.work_days(),
+        vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri]
+    );
+}
+
+#[test]
+fn test_parse_custom_work_days() {
+    let toml_str = r#"
+        watch_dirs = []
+        work_days = ["sun", "mon", "tue", "wed", "thu"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        cfg.work_days(),
+        vec![Weekday::Sun, Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu]
+    );
+}
+
+#[test]
+fn test_invalid_work_days_fall_back_to_mon_fri() {
+    let toml_str = r#"
+        watch_dirs = []
+        work_days = ["nope"]
+    "#;
+    let cfg: Config = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        cfg.work_days(),
+        vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri]
+    );
 }

@@ -2,12 +2,13 @@ use blackbox::db::{insert_activity, insert_ai_session, insert_review, open_db, u
 use blackbox::query::{
     daily_summary_for_notification, estimate_time_v2, filter_noise_switches,
     global_estimated_time, median_commit_gap, merge_intervals, query_activity,
-    query_branch_switches, query_presence, resolve_perf_review_range,
+    previous_workday_lookback, query_branch_switches, query_presence, resolve_perf_review_range,
+    resolve_standup_lookback,
     segments_from_timestamps,
     standup_range, today_range, week_range, month_range, quarter_range,
     ActivityEvent, BranchSwitchEvent, RepoSummary, TimeInterval,
 };
-use chrono::{Datelike, Duration, Timelike, TimeZone, Utc};
+use chrono::{Datelike, Duration, NaiveDate, Timelike, TimeZone, Utc, Weekday};
 use tempfile::NamedTempFile;
 
 fn setup_db() -> (rusqlite::Connection, tempfile::NamedTempFile) {
@@ -1151,6 +1152,37 @@ fn test_standup_range_three_starts_three_days_ago() {
         .unwrap()
         .with_timezone(&chrono::Utc);
     assert_eq!(start, expected);
+}
+
+#[test]
+fn test_previous_workday_lookback_mon_fri_on_monday_returns_three() {
+    let monday = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let workdays = [Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri];
+    assert_eq!(previous_workday_lookback(monday, &workdays), 3);
+}
+
+#[test]
+fn test_previous_workday_lookback_mon_fri_on_tuesday_returns_one() {
+    let tuesday = NaiveDate::from_ymd_opt(2026, 5, 5).unwrap();
+    let workdays = [Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri];
+    assert_eq!(previous_workday_lookback(tuesday, &workdays), 1);
+}
+
+#[test]
+fn test_previous_workday_lookback_custom_tue_to_sat_on_monday_returns_two() {
+    let monday = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let workdays = [Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri, Weekday::Sat];
+    assert_eq!(previous_workday_lookback(monday, &workdays), 2);
+}
+
+#[test]
+fn test_resolve_standup_lookback_prefers_cli_then_config_then_workday_default() {
+    let monday = NaiveDate::from_ymd_opt(2026, 5, 4).unwrap();
+    let workdays = [Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri];
+
+    assert_eq!(resolve_standup_lookback(Some(7), Some(2), monday, &workdays), 7);
+    assert_eq!(resolve_standup_lookback(None, Some(0), monday, &workdays), 0);
+    assert_eq!(resolve_standup_lookback(None, None, monday, &workdays), 3);
 }
 
 // --- segments_from_timestamps ---

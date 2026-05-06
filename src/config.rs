@@ -31,6 +31,9 @@ fn default_notification_time() -> String {
 fn default_show_hints() -> bool {
     true
 }
+fn default_work_days_weekdays() -> Vec<Weekday> {
+    vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri]
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -71,7 +74,9 @@ pub struct Config {
     #[serde(default = "default_show_hints")]
     pub show_hints: bool,
     #[serde(default)]
-    pub standup_lookback_days: u32,
+    pub standup_lookback_days: Option<u32>,
+    #[serde(default)]
+    pub work_days: Option<Vec<String>>,
 }
 
 impl Default for Config {
@@ -95,7 +100,8 @@ impl Default for Config {
             insights_window: None,
             week_start_day: None,
             show_hints: default_show_hints(),
-            standup_lookback_days: 0,
+            standup_lookback_days: None,
+            work_days: None,
         }
     }
 }
@@ -117,6 +123,36 @@ impl Config {
                 Weekday::Mon
             }
         }
+    }
+
+    pub fn work_days(&self) -> Vec<Weekday> {
+        let Some(days) = self.work_days.as_ref() else {
+            return default_work_days_weekdays();
+        };
+
+        let parsed: Vec<Weekday> = days
+            .iter()
+            .filter_map(|day| match day.to_ascii_lowercase().as_str() {
+                "mon" | "monday" => Some(Weekday::Mon),
+                "tue" | "tues" | "tuesday" => Some(Weekday::Tue),
+                "wed" | "wednesday" => Some(Weekday::Wed),
+                "thu" | "thur" | "thurs" | "thursday" => Some(Weekday::Thu),
+                "fri" | "friday" => Some(Weekday::Fri),
+                "sat" | "saturday" => Some(Weekday::Sat),
+                "sun" | "sunday" => Some(Weekday::Sun),
+                other => {
+                    eprintln!("Warning: invalid work day '{other}', ignoring");
+                    None
+                }
+            })
+            .collect();
+
+        if parsed.is_empty() {
+            eprintln!("Warning: no valid work_days configured, falling back to mon-fri");
+            return default_work_days_weekdays();
+        }
+
+        parsed
     }
 
     pub fn expand_paths(&mut self) {
